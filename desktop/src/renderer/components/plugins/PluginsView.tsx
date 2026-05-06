@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, MouseEvent } from 'react'
-import { Box, ChevronLeft, Ellipsis, ExternalLink, Link, MessageCircle, Server, Settings, Trash2, Wrench } from 'lucide-react'
+import { Box, ChevronLeft, Code2, Ellipsis, ExternalLink, Link, MessageCircle, Server, Settings, Trash2, Wrench } from 'lucide-react'
 import { useT } from '../../contexts/LocaleContext'
 import type { MessageKey } from '../../../shared/locales'
 import { usePluginStore, type PluginDiagnosticEntry, type PluginEntry } from '../../stores/pluginStore'
@@ -65,6 +65,7 @@ export function PluginsView(): JSX.Element {
   const [savedSkillName, setSavedSkillName] = useState<string | null>(null)
   const [installTarget, setInstallTarget] = useState<PluginEntry | null>(null)
   const [installingId, setInstallingId] = useState<string | null>(null)
+  const [enablingLspId, setEnablingLspId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<ContextMenuPosition | null>(null)
 
   useEffect(() => {
@@ -182,10 +183,26 @@ export function PluginsView(): JSX.Element {
           onToggle={async (enabled) => {
             try {
               await togglePluginEnabled(selectedPlugin.id, enabled)
+              await selectPlugin(selectedPlugin.id)
               await fetchSkills()
               setSavedPluginId(selectedPlugin.id)
             } catch {
               addToast(t('plugins.updateFailed'), 'error')
+            }
+          }}
+          enablingLsp={enablingLspId === selectedPlugin.id}
+          onEnableLsp={async () => {
+            try {
+              setEnablingLspId(selectedPlugin.id)
+              await window.api.appServer.sendRequest('workspace/config/update', { toolsLspEnabled: true })
+              await fetchPlugins()
+              await selectPlugin(selectedPlugin.id)
+              setSavedPluginId(selectedPlugin.id)
+              addToast(t('plugins.lsp.enableSuccess'), 'success')
+            } catch {
+              addToast(t('plugins.lsp.enableFailed'), 'error')
+            } finally {
+              setEnablingLspId(null)
             }
           }}
           onTryInChat={() => tryPluginInChat(selectedPlugin)}
@@ -558,6 +575,8 @@ function PluginDetailView({
   onInstall,
   onRemove,
   onToggle,
+  enablingLsp,
+  onEnableLsp,
   onTryInChat
 }: {
   plugin: PluginEntry
@@ -568,10 +587,15 @@ function PluginDetailView({
   onInstall: () => void
   onRemove: () => void
   onToggle: (enabled: boolean) => void
+  enablingLsp: boolean
+  onEnableLsp: () => void
   onTryInChat: () => void
 }): JSX.Element {
   const t = useT()
   const info = plugin.interface
+  const shouldOfferLspEnable = plugin.installed
+    && plugin.enabled
+    && (plugin.lspServers ?? []).some((server) => server.enabled && !server.active && !server.shadowedBy)
   const contents = [
     ...plugin.skills.map((skill) => ({
       key: `skill:${skill.name}`,
@@ -593,6 +617,13 @@ function PluginDetailView({
       kind: t('plugins.content.mcpServer'),
       title: server.runtimeName,
       description: describePluginMcpServer(server, t)
+    })),
+    ...(plugin.lspServers ?? []).map((server) => ({
+      key: `lsp:${server.runtimeName}`,
+      type: 'lsp' as const,
+      kind: t('plugins.content.lspServer'),
+      title: server.runtimeName,
+      description: describePluginLspServer(server, t)
     }))
   ]
   return (
@@ -656,6 +687,8 @@ function PluginDetailView({
                     <Box size={16} aria-hidden />
                   ) : item.type === 'mcp' ? (
                     <Server size={16} aria-hidden />
+                  ) : item.type === 'lsp' ? (
+                    <Code2 size={16} aria-hidden />
                   ) : (
                     <Wrench size={16} aria-hidden />
                   )}
@@ -668,6 +701,15 @@ function PluginDetailView({
             ))}
           </div>
         </section>
+        {shouldOfferLspEnable && (
+          <div style={lspEnablePanel} role="status">
+            <span style={rowDesc}>{t('plugins.lsp.enablePrompt')}</span>
+            <button type="button" style={secondaryDetailButton} disabled={enablingLsp} onClick={onEnableLsp}>
+              <Code2 size={14} aria-hidden />
+              {enablingLsp ? t('plugins.lsp.enabling') : t('plugins.lsp.enable')}
+            </button>
+          </div>
+        )}
         <section style={detailSection}>
           <h2 style={detailSectionTitle}>{t('plugins.detail.info')}</h2>
           <div style={infoTable}>
@@ -886,6 +928,18 @@ function describePluginMcpServer(
   return `${transport} · ${state}`
 }
 
+function describePluginLspServer(
+  server: NonNullable<PluginEntry['lspServers']>[number],
+  t: (key: MessageKey, vars?: Record<string, string>) => string
+): string {
+  let state = server.active ? t('plugins.content.lsp.active') : t('plugins.content.lsp.inactive')
+  if (!server.enabled) state = t('plugins.content.lsp.disabled')
+  if (server.shadowedBy === 'workspace') state = t('plugins.content.lsp.shadowedWorkspace')
+  if (server.shadowedBy === 'plugin') state = t('plugins.content.lsp.shadowedPlugin')
+  const extensions = server.extensions.length > 0 ? ` · ${server.extensions.join(', ')}` : ''
+  return `${server.transport.toUpperCase()} · ${state}${extensions}`
+}
+
 function filterVisibleDiagnostics(diagnostics: PluginDiagnosticEntry[]): PluginDiagnosticEntry[] {
   return diagnostics.filter((diagnostic) => {
     const severity = diagnostic.severity.toLowerCase()
@@ -970,6 +1024,7 @@ const contentList: CSSProperties = { border: '1px solid var(--border-default)', 
 const contentItem: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0' }
 const contentIcon: CSSProperties = { width: 38, height: 38, borderRadius: 19, border: '1px solid var(--border-default)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }
 const contentKind: CSSProperties = { fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 5 }
+const lspEnablePanel: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, border: '1px solid var(--border-default)', borderRadius: 8, background: 'var(--bg-secondary)', padding: '12px 14px', marginTop: 16 }
 const infoTable: CSSProperties = { border: '1px solid var(--border-default)', borderRadius: 8, overflow: 'hidden' }
 const infoRow: CSSProperties = { display: 'grid', gridTemplateColumns: '180px 1fr', minHeight: 54, borderBottom: '1px solid var(--border-default)' }
 const infoLabel: CSSProperties = { color: 'var(--text-secondary)', fontSize: 13, padding: '18px 16px' }

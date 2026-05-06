@@ -39,6 +39,16 @@ export interface PluginMcpServerInfo {
   shadowedBy?: 'workspace' | 'plugin' | null
 }
 
+export interface PluginLspServerInfo {
+  name: string
+  runtimeName: string
+  transport: 'stdio' | 'socket'
+  enabled: boolean
+  active: boolean
+  extensions: string[]
+  shadowedBy?: 'workspace' | 'plugin' | null
+}
+
 export interface PluginEntry {
   id: string
   displayName: string
@@ -54,6 +64,7 @@ export interface PluginEntry {
   functions: PluginFunctionInfo[]
   skills: PluginSkillInfo[]
   mcpServers: PluginMcpServerInfo[]
+  lspServers: PluginLspServerInfo[]
   diagnostics?: Array<{ severity: string; code: string; message: string; pluginId?: string; path?: string }>
 }
 
@@ -198,7 +209,11 @@ function normalizePlugin(plugin: PluginEntry): PluginEntry {
     ...plugin,
     functions: plugin.functions ?? [],
     skills: plugin.skills ?? [],
-    mcpServers: plugin.mcpServers ?? []
+    mcpServers: plugin.mcpServers ?? [],
+    lspServers: (plugin.lspServers ?? []).map((server) => ({
+      ...server,
+      extensions: server.extensions ?? []
+    }))
   }
 }
 

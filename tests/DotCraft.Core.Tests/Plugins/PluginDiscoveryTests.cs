@@ -1,4 +1,5 @@
 using DotCraft.Configuration;
+using DotCraft.Lsp;
 using DotCraft.Plugins;
 
 namespace DotCraft.Core.Tests.Plugins;
@@ -72,6 +73,34 @@ public sealed class PluginDiscoveryTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
         Assert.NotNull(result.Manifest);
         Assert.Equal(Path.Combine(pluginRoot, ".mcp.json"), result.Manifest!.McpServersPath);
+    }
+
+    [Fact]
+    public void ManifestParser_AcceptsLspOnlyManifest()
+    {
+        var root = NewTempDir();
+        var pluginRoot = Path.Combine(root, "demo");
+        WriteLspOnlyPlugin(pluginRoot, id: "demo-plugin");
+
+        var result = PluginManifestParser.Load(pluginRoot);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        Assert.NotNull(result.Manifest);
+        Assert.Equal(Path.Combine(pluginRoot, ".lsp.json"), result.Manifest!.LspServersPath);
+    }
+
+    [Fact]
+    public void ManifestParser_AcceptsExplicitLspServersPath()
+    {
+        var root = NewTempDir();
+        var pluginRoot = Path.Combine(root, "demo");
+        WriteLspOnlyPlugin(pluginRoot, id: "demo-plugin", explicitPath: true);
+
+        var result = PluginManifestParser.Load(pluginRoot);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        Assert.NotNull(result.Manifest);
+        Assert.Equal(Path.Combine(pluginRoot, "lsp", "servers.json"), result.Manifest!.LspServersPath);
     }
 
     [Fact]
@@ -183,6 +212,287 @@ public sealed class PluginDiscoveryTests
     }
 
     [Fact]
+    public void PluginLspServerLoader_LoadsEnabledPluginServersWithOrigin()
+    {
+        var root = NewTempDir();
+        var workspace = Path.Combine(root, "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var pluginRoot = Path.Combine(botPath, "plugins", "demo");
+        WriteLspOnlyPlugin(pluginRoot, id: "demo-plugin");
+        var config = new AppConfig();
+
+        var servers = PluginLspServerLoader.LoadEnabledPluginServers(
+            config,
+            workspace,
+            botPath,
+            out var diagnostics);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        var server = Assert.Single(servers);
+        Assert.Equal("demo-plugin:csharp", server.Name);
+        Assert.Equal("stdio", server.Transport);
+        Assert.Equal("csharp-ls", server.Command);
+        Assert.Equal(["--stdio"], server.Arguments);
+        Assert.Equal("csharp", server.ExtensionToLanguage[".cs"]);
+        Assert.True(server.ReadOnly);
+        Assert.Equal("plugin", server.Origin.Kind);
+        Assert.Equal("demo-plugin", server.Origin.PluginId);
+        Assert.Equal("csharp", server.Origin.DeclaredName);
+        Assert.Equal(pluginRoot, server.EnvironmentVariables["DOTCRAFT_PLUGIN_ROOT"]);
+    }
+
+    [Fact]
+    public void PluginLspServerLoader_ExpandsPluginVariables()
+    {
+        var root = NewTempDir();
+        var workspace = Path.Combine(root, "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var pluginRoot = Path.Combine(botPath, "plugins", "demo");
+        WriteLspOnlyPlugin(
+            pluginRoot,
+            id: "demo-plugin",
+            lspJson:
+            """
+{
+  "lspServers": {
+    "csharp": {
+      "transport": "stdio",
+      "command": "${DOTCRAFT_PLUGIN_ROOT}/server/bin/csharp-ls",
+      "args": ["--cache", "${DOTCRAFT_PLUGIN_DATA}/cache"],
+      "env": {
+        "PLUGIN_HOME": "${DOTCRAFT_PLUGIN_ROOT}",
+        "PLUGIN_CACHE": "${DOTCRAFT_PLUGIN_DATA}/cache"
+      },
+      "extensionToLanguage": {
+        ".cs": "csharp"
+      }
+    }
+  }
+}
+""");
+        var config = new AppConfig();
+
+        var servers = PluginLspServerLoader.LoadEnabledPluginServers(
+            config,
+            workspace,
+            botPath,
+            out var diagnostics);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        var server = Assert.Single(servers);
+        Assert.Equal(Path.Combine(pluginRoot, "server", "bin", "csharp-ls"), server.Command);
+        Assert.Equal(Path.Combine(server.EnvironmentVariables["DOTCRAFT_PLUGIN_DATA"], "cache"), server.Arguments[1]);
+        Assert.Equal(pluginRoot, server.EnvironmentVariables["PLUGIN_HOME"]);
+        Assert.Equal(
+            Path.Combine(server.EnvironmentVariables["DOTCRAFT_PLUGIN_DATA"], "cache"),
+            server.EnvironmentVariables["PLUGIN_CACHE"]);
+    }
+
+    [Fact]
+    public void PluginLspServerLoader_ResolvesPluginRelativeCommand()
+    {
+        var root = NewTempDir();
+        var workspace = Path.Combine(root, "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var pluginRoot = Path.Combine(botPath, "plugins", "demo");
+        WriteLspOnlyPlugin(
+            pluginRoot,
+            id: "demo-plugin",
+            lspJson:
+            """
+{
+  "lspServers": {
+    "csharp": {
+      "transport": "stdio",
+      "command": "./server/bin/csharp-ls",
+      "extensionToLanguage": {
+        ".cs": "csharp"
+      }
+    }
+  }
+}
+""");
+        var config = new AppConfig();
+
+        var servers = PluginLspServerLoader.LoadEnabledPluginServers(
+            config,
+            workspace,
+            botPath,
+            out var diagnostics);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        var server = Assert.Single(servers);
+        Assert.Equal(Path.Combine(pluginRoot, "server", "bin", "csharp-ls"), server.Command);
+    }
+
+    [Fact]
+    public void PluginLspServerLoader_RejectsEscapingPluginRelativeCommand()
+    {
+        var root = NewTempDir();
+        var workspace = Path.Combine(root, "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var pluginRoot = Path.Combine(botPath, "plugins", "demo");
+        WriteLspOnlyPlugin(
+            pluginRoot,
+            id: "demo-plugin",
+            lspJson:
+            """
+{
+  "lspServers": {
+    "csharp": {
+      "transport": "stdio",
+      "command": "./../outside/csharp-ls",
+      "extensionToLanguage": {
+        ".cs": "csharp"
+      }
+    }
+  }
+}
+""");
+        var config = new AppConfig();
+
+        var servers = PluginLspServerLoader.LoadEnabledPluginServers(
+            config,
+            workspace,
+            botPath,
+            out var diagnostics);
+
+        Assert.Empty(servers);
+        Assert.Contains(diagnostics, d => d.Code == "InvalidPluginLspServer");
+    }
+
+    [Fact]
+    public void PluginLspServerLoader_ProbesWindowsExecutableSuffixForPluginRelativeCommand()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = NewTempDir();
+        var workspace = Path.Combine(root, "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var pluginRoot = Path.Combine(botPath, "plugins", "demo");
+        Directory.CreateDirectory(Path.Combine(pluginRoot, "server", "bin"));
+        File.WriteAllText(Path.Combine(pluginRoot, "server", "bin", "csharp-ls.exe"), "");
+        WriteLspOnlyPlugin(
+            pluginRoot,
+            id: "demo-plugin",
+            lspJson:
+            """
+{
+  "lspServers": {
+    "csharp": {
+      "transport": "stdio",
+      "command": "./server/bin/csharp-ls",
+      "extensionToLanguage": {
+        ".cs": "csharp"
+      }
+    }
+  }
+}
+""");
+        var config = new AppConfig();
+
+        var servers = PluginLspServerLoader.LoadEnabledPluginServers(
+            config,
+            workspace,
+            botPath,
+            out var diagnostics);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        var server = Assert.Single(servers);
+        Assert.Equal(Path.Combine(pluginRoot, "server", "bin", "csharp-ls.exe"), server.Command);
+    }
+
+    [Theory]
+    [InlineData("csharp-lsp")]
+    [InlineData("cpp-lsp")]
+    public void SampleLspPlugins_AreSkillAndLspPlugins(string sampleName)
+    {
+        var root = FindRepositoryRoot();
+        var pluginRoot = Path.Combine(root, "samples", "plugins", sampleName);
+
+        var result = PluginManifestParser.Load(pluginRoot);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        Assert.NotNull(result.Manifest);
+        Assert.Equal(Path.Combine(pluginRoot, ".lsp.json"), result.Manifest!.LspServersPath);
+        Assert.Equal(
+            Path.TrimEndingDirectorySeparator(Path.Combine(pluginRoot, "skills")),
+            Path.TrimEndingDirectorySeparator(result.Manifest.SkillsPath!));
+    }
+
+    [Theory]
+    [InlineData("csharp-lsp", "server", "csharp-ls", "csharp-ls")]
+    [InlineData("cpp-lsp", "server", "clangd", "bin", "clangd")]
+    public void SampleLspPlugins_LoadWithoutBundledServerBinary(string sampleName, params string[] commandSegments)
+    {
+        var root = FindRepositoryRoot();
+        var pluginRoot = Path.Combine(root, "samples", "plugins", sampleName);
+        var workspace = Path.Combine(NewTempDir(), "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var config = new AppConfig();
+        config.Plugins.PluginRoots.Add(pluginRoot);
+
+        var servers = PluginLspServerLoader.LoadEnabledPluginServers(
+            config,
+            workspace,
+            botPath,
+            out var diagnostics);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        var server = Assert.Single(servers);
+        Assert.Equal(Path.Combine(new[] { pluginRoot }.Concat(commandSegments).ToArray()), server.Command);
+    }
+
+    [Fact]
+    public void PluginLspServerResolver_WorkspaceServerShadowsPluginRuntimeName()
+    {
+        var diagnostics = new List<PluginDiagnostic>();
+        var pluginServer = new LspServerConfig
+        {
+            Name = "demo-plugin:csharp",
+            Command = "csharp-ls",
+            ExtensionToLanguage = new Dictionary<string, string> { [".cs"] = "csharp" },
+            Origin = LspServerOrigin.Plugin("demo-plugin", "Demo", "csharp")
+        };
+        var workspaceServer = new LspServerConfig
+        {
+            Name = "demo-plugin:csharp",
+            Command = "custom-csharp-ls",
+            ExtensionToLanguage = new Dictionary<string, string> { [".cs"] = "csharp" }
+        };
+
+        var effective = PluginLspServerResolver.BuildEffectiveServers([workspaceServer], [pluginServer]);
+        var summaries = PluginLspServerResolver.BuildPluginLspServerSummaries(
+            [
+                new DiscoveredPlugin(
+                    new PluginManifest
+                    {
+                        SchemaVersion = 1,
+                        Id = "demo-plugin",
+                        DisplayName = "Demo",
+                        RootPath = NewTempDir(),
+                        ManifestPath = Path.Combine(NewTempDir(), ".craft-plugin", "plugin.json")
+                    },
+                    PluginDiscoverySourceKind.Workspace,
+                    NewTempDir(),
+                    Enabled: true)
+            ],
+            [workspaceServer],
+            diagnostics,
+            pluginServersByPluginId: new Dictionary<string, IReadOnlyList<LspServerConfig>>
+            {
+                ["demo-plugin"] = [pluginServer]
+            });
+
+        var server = Assert.Single(effective);
+        Assert.Equal("custom-csharp-ls", server.Command);
+        var summary = Assert.Single(summaries["demo-plugin"]);
+        Assert.False(summary.Active);
+        Assert.Equal("workspace", summary.ShadowedBy);
+    }
+
+    [Fact]
     public void ManifestParser_RejectsManifestWithoutSupportedCapabilities()
     {
         var root = NewTempDir();
@@ -219,6 +529,25 @@ public sealed class PluginDiscoveryTests
   "skills": "../skills"
 """,
             includeSkillsField: false);
+
+        var result = PluginManifestParser.Load(Path.Combine(root, "demo"));
+
+        Assert.Null(result.Manifest);
+        Assert.Contains(result.Diagnostics, d => d.Code == "InvalidPluginManifestPath");
+    }
+
+    [Fact]
+    public void ManifestParser_RejectsEscapingLspServersPath()
+    {
+        var root = NewTempDir();
+        WriteLspOnlyPlugin(
+            Path.Combine(root, "demo"),
+            id: "demo-plugin",
+            extra: """
+,
+  "lspServers": "../.lsp.json"
+""",
+            includeLspServersField: false);
 
         var result = PluginManifestParser.Load(Path.Combine(root, "demo"));
 
@@ -429,6 +758,67 @@ public sealed class PluginDiscoveryTests
   }
 }
 """);
+    }
+
+    private static void WriteLspOnlyPlugin(
+        string pluginRoot,
+        string id,
+        string displayName = "Demo",
+        string extra = "",
+        bool includeLspServersField = false,
+        bool explicitPath = false,
+        string? lspJson = null)
+    {
+        Directory.CreateDirectory(Path.Combine(pluginRoot, ".craft-plugin"));
+        var lspServers = includeLspServersField || explicitPath
+            ? explicitPath
+                ? ",\n  \"lspServers\": \"./lsp/servers.json\""
+                : ",\n  \"lspServers\": \"./.lsp.json\""
+            : string.Empty;
+        File.WriteAllText(
+            Path.Combine(pluginRoot, ".craft-plugin", "plugin.json"),
+            $$"""
+{
+  "schemaVersion": 1,
+  "id": "{{id}}",
+  "version": "1.0.0",
+  "displayName": "{{displayName}}",
+  "description": "Demo plugin.",
+  "capabilities": ["lsp"]{{lspServers}}{{extra}}
+}
+""");
+        var lspPath = explicitPath ? Path.Combine(pluginRoot, "lsp", "servers.json") : Path.Combine(pluginRoot, ".lsp.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(lspPath)!);
+        File.WriteAllText(
+            lspPath,
+            lspJson ??
+            """
+{
+  "lspServers": {
+    "csharp": {
+      "transport": "stdio",
+      "command": "csharp-ls",
+      "args": ["--stdio"],
+      "extensionToLanguage": {
+        ".cs": "csharp"
+      }
+    }
+  }
+}
+""");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (!string.IsNullOrWhiteSpace(dir))
+        {
+            if (File.Exists(Path.Combine(dir, "dotcraft.sln")))
+                return dir;
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+
+        throw new InvalidOperationException("Could not find repository root.");
     }
 
     private static void WriteInterfaceOnlyPlugin(

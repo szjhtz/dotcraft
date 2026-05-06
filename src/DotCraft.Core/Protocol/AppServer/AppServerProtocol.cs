@@ -1468,6 +1468,8 @@ public sealed class PluginInfoWire
 
     public List<PluginMcpServerInfoWire> McpServers { get; set; } = [];
 
+    public List<PluginLspServerInfoWire> LspServers { get; set; } = [];
+
     public List<PluginDiagnosticWire> Diagnostics { get; set; } = [];
 }
 
@@ -1482,6 +1484,24 @@ public sealed class PluginMcpServerInfoWire
     public bool Enabled { get; set; }
 
     public bool Active { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ShadowedBy { get; set; }
+}
+
+public sealed class PluginLspServerInfoWire
+{
+    public string Name { get; set; } = string.Empty;
+
+    public string RuntimeName { get; set; } = string.Empty;
+
+    public string Transport { get; set; } = "stdio";
+
+    public bool Enabled { get; set; }
+
+    public bool Active { get; set; }
+
+    public List<string> Extensions { get; set; } = [];
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ShadowedBy { get; set; }
@@ -2082,6 +2102,12 @@ public sealed class WorkspaceConfigUpdateParams
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DefaultApprovalPolicy { get; set; }
+
+    /// <summary>
+    /// Workspace-level toggle for the built-in LSP tool. Null leaves the value unchanged.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? ToolsLspEnabled { get; set; }
 }
 
 /// <summary>
@@ -2137,6 +2163,12 @@ public sealed class WorkspaceConfigUpdateResult
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? DefaultApprovalPolicy { get; set; }
+
+    /// <summary>
+    /// Persisted workspace LSP tool toggle after normalization.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? ToolsLspEnabled { get; set; }
 }
 
 /// <summary>

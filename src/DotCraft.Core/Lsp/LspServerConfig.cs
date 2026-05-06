@@ -4,6 +4,43 @@ using DotCraft.Configuration;
 
 namespace DotCraft.Lsp;
 
+public sealed class LspServerOrigin
+{
+    public string Kind { get; set; } = "workspace";
+
+    public string? PluginId { get; set; }
+
+    public string? PluginDisplayName { get; set; }
+
+    public string? DeclaredName { get; set; }
+
+    [JsonIgnore]
+    public bool IsPlugin => string.Equals(Kind, "plugin", StringComparison.OrdinalIgnoreCase);
+
+    [JsonIgnore]
+    public bool IsWorkspace => !IsPlugin;
+
+    public static LspServerOrigin Workspace() => new() { Kind = "workspace" };
+
+    public static LspServerOrigin Plugin(string pluginId, string? pluginDisplayName, string declaredName) =>
+        new()
+        {
+            Kind = "plugin",
+            PluginId = pluginId,
+            PluginDisplayName = pluginDisplayName,
+            DeclaredName = declaredName
+        };
+
+    public LspServerOrigin Clone() =>
+        new()
+        {
+            Kind = string.IsNullOrWhiteSpace(Kind) ? "workspace" : Kind,
+            PluginId = PluginId,
+            PluginDisplayName = PluginDisplayName,
+            DeclaredName = DeclaredName
+        };
+}
+
 [ConfigSection("LspServers", DisplayName = "LSP Servers", Order = 96, RootKey = "LspServers")]
 public sealed class LspServerConfig
 {
@@ -54,6 +91,18 @@ public sealed class LspServerConfig
     [ConfigField(Min = 0, Hint = "Maximum restart attempts when server crashes")]
     public int? MaxRestarts { get; set; }
 
+    [JsonIgnore]
+    public LspServerOrigin Origin { get; set; } = LspServerOrigin.Workspace();
+
+    [JsonIgnore]
+    public bool ReadOnly => Origin.IsPlugin;
+
+    [JsonIgnore]
+    public string NormalizedTransport =>
+        Transport.Equals("socket", StringComparison.OrdinalIgnoreCase)
+            ? "socket"
+            : "stdio";
+
     public LspServerConfig Clone() =>
         new()
         {
@@ -68,7 +117,8 @@ public sealed class LspServerConfig
             Settings = Settings,
             WorkspaceFolder = WorkspaceFolder,
             StartupTimeoutMs = StartupTimeoutMs,
-            MaxRestarts = MaxRestarts
+            MaxRestarts = MaxRestarts,
+            Origin = Origin.Clone()
         };
 }
 

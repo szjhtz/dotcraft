@@ -278,6 +278,7 @@ public sealed class AppServerHost(
             wireDynamicToolProxy: _runtime.WireDynamicToolProxy,
             channelStatusProvider: _runtime.ChannelStatusProvider,
             mcpClientManager: _runtime.McpClientManager,
+            lspServerManager: _runtime.LspServerManager,
             broadcastMcpStatusChanged: BroadcastMcpStatusChanged,
             protocolExtensions: ProtocolExtensions,
             onExternalChannelUpserted: _runtime.ApplyExternalChannelUpsertAsync,

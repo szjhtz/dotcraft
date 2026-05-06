@@ -31,6 +31,8 @@ public sealed record PluginManifest
 
     public string? McpServersPath { get; init; }
 
+    public string? LspServersPath { get; init; }
+
     public required string RootPath { get; init; }
 
     public required string ManifestPath { get; init; }
@@ -171,6 +173,12 @@ public static partial class PluginManifestParser
             raw.Id,
             manifestPath,
             diagnostics);
+        var lspServersPath = ResolveOptionalLspServersPath(
+            pluginRoot,
+            raw.LspServers,
+            raw.Id,
+            manifestPath,
+            diagnostics);
         var interfaceMetadata = ParseInterface(
             pluginRoot,
             raw.Interface,
@@ -178,11 +186,11 @@ public static partial class PluginManifestParser
             manifestPath,
             diagnostics);
         AddUnsupportedNativeToolsDiagnostics(raw, manifestPath, diagnostics);
-        if (skillsPath == null && mcpServersPath == null && interfaceMetadata == null)
+        if (skillsPath == null && mcpServersPath == null && lspServersPath == null && interfaceMetadata == null)
         {
             diagnostics.Add(PluginDiagnostic.Error(
                 "MissingPluginCapabilities",
-                "Plugin manifest must declare skills, mcpServers, or interface metadata.",
+                "Plugin manifest must declare skills, mcpServers, lspServers, or interface metadata.",
                 raw.Id,
                 path: manifestPath));
         }
@@ -206,6 +214,7 @@ public static partial class PluginManifestParser
             Interface = interfaceMetadata,
             SkillsPath = skillsPath,
             McpServersPath = mcpServersPath,
+            LspServersPath = lspServersPath,
             RootPath = Path.GetFullPath(pluginRoot),
             ManifestPath = Path.GetFullPath(manifestPath)
         };
@@ -276,6 +285,20 @@ public static partial class PluginManifestParser
             return ResolveOptionalManifestPath(pluginRoot, relativePath, "mcpServers", pluginId, manifestPath, diagnostics);
 
         var defaultPath = Path.Combine(pluginRoot, ".mcp.json");
+        return File.Exists(defaultPath) ? Path.GetFullPath(defaultPath) : null;
+    }
+
+    private static string? ResolveOptionalLspServersPath(
+        string pluginRoot,
+        string? relativePath,
+        string? pluginId,
+        string manifestPath,
+        List<PluginDiagnostic> diagnostics)
+    {
+        if (!string.IsNullOrWhiteSpace(relativePath))
+            return ResolveOptionalManifestPath(pluginRoot, relativePath, "lspServers", pluginId, manifestPath, diagnostics);
+
+        var defaultPath = Path.Combine(pluginRoot, ".lsp.json");
         return File.Exists(defaultPath) ? Path.GetFullPath(defaultPath) : null;
     }
 
@@ -447,6 +470,8 @@ public static partial class PluginManifestParser
         public string? Skills { get; set; }
 
         public string? McpServers { get; set; }
+
+        public string? LspServers { get; set; }
 
         [JsonPropertyName("interface")]
         public RawPluginInterface? Interface { get; set; }

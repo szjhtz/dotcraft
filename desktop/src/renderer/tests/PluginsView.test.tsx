@@ -31,7 +31,8 @@ const browserUsePlugin: PluginEntry = {
   },
   functions: [{ name: 'NodeReplJs', namespace: 'node_repl', description: 'Evaluate JavaScript.' }],
   skills: [{ name: 'browser-use', description: 'Browser Use', enabled: false }],
-  mcpServers: []
+  mcpServers: [],
+  lspServers: []
 }
 
 const localPlugin: PluginEntry = {
@@ -56,7 +57,8 @@ const localPlugin: PluginEntry = {
   },
   functions: [{ name: 'EchoText', namespace: 'demo', description: 'Echo text.' }],
   skills: [{ name: 'external-process-echo', description: 'Echo plugin skill', enabled: true }],
-  mcpServers: []
+  mcpServers: [],
+  lspServers: []
 }
 
 const mcpOnlyPlugin: PluginEntry = {
@@ -86,6 +88,39 @@ const mcpOnlyPlugin: PluginEntry = {
       transport: 'stdio',
       enabled: true,
       active: true
+    }
+  ],
+  lspServers: []
+}
+
+const lspOnlyPlugin: PluginEntry = {
+  id: 'csharp-lsp',
+  displayName: 'C# LSP',
+  description: 'C# language server.',
+  version: '0.1.0',
+  enabled: true,
+  installed: true,
+  installable: false,
+  removable: true,
+  source: 'workspace',
+  rootPath: 'F:\\dotcraft\\.craft\\plugins\\csharp-lsp',
+  interface: {
+    displayName: 'C# LSP',
+    shortDescription: 'C# language server.',
+    developerName: 'Example Labs',
+    category: 'Coding'
+  },
+  functions: [],
+  skills: [],
+  mcpServers: [],
+  lspServers: [
+    {
+      name: 'csharp',
+      runtimeName: 'csharp-lsp:csharp',
+      transport: 'stdio',
+      enabled: true,
+      active: false,
+      extensions: ['.cs']
     }
   ]
 }
@@ -350,6 +385,50 @@ describe('PluginsView local plugin visibility', () => {
     expect(await screen.findByText('review-tools-mcp:review')).toBeInTheDocument()
     expect(screen.getByText('MCP server')).toBeInTheDocument()
     expect(screen.getByText('STDIO · Active')).toBeInTheDocument()
+  })
+
+  it('shows plugin-bundled LSP content on plugin details', async () => {
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'plugin/list') return { plugins: [lspOnlyPlugin], diagnostics: [] }
+      if (method === 'plugin/view') return { plugin: lspOnlyPlugin }
+      return {}
+    })
+
+    renderPluginsView()
+
+    fireEvent.click(await screen.findByText('C# LSP'))
+
+    expect(await screen.findByText('csharp-lsp:csharp')).toBeInTheDocument()
+    expect(screen.getByText('LSP server')).toBeInTheDocument()
+    expect(screen.getByText('STDIO · Inactive · .cs')).toBeInTheDocument()
+  })
+
+  it('enables LSP explicitly from plugin details', async () => {
+    let lspEnabled = false
+    const activeLspPlugin = {
+      ...lspOnlyPlugin,
+      lspServers: lspOnlyPlugin.lspServers.map((server) => ({ ...server, active: true }))
+    }
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      const plugin = lspEnabled ? activeLspPlugin : lspOnlyPlugin
+      if (method === 'plugin/list') return { plugins: [plugin], diagnostics: [] }
+      if (method === 'plugin/view') return { plugin }
+      if (method === 'workspace/config/update') {
+        lspEnabled = true
+        return { toolsLspEnabled: true }
+      }
+      return {}
+    })
+
+    renderPluginsView()
+
+    fireEvent.click(await screen.findByText('C# LSP'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable LSP' }))
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('workspace/config/update', { toolsLspEnabled: true })
+    })
+    expect(await screen.findByText('STDIO · Active · .cs')).toBeInTheDocument()
   })
 
   it('does not generate a skill mention for MCP-only plugin try in chat', async () => {

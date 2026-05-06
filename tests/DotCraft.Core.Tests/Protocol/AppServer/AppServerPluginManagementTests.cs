@@ -1,4 +1,5 @@
 using DotCraft.Configuration;
+using DotCraft.Lsp;
 using DotCraft.Mcp;
 using DotCraft.Plugins;
 using DotCraft.Protocol.AppServer;
@@ -149,6 +150,61 @@ public sealed class AppServerPluginManagementTests : IDisposable
     }
 
     [Fact]
+    public async Task PluginList_ReturnsWorkspaceLspPlugin()
+    {
+        WriteLspPlugin(Path.Combine(_workspaceCraftPath, "plugins", "csharp-lsp"));
+        var config = new AppConfig();
+        config.Tools.Lsp.Enabled = true;
+        using var harness = CreateHarness(config);
+        await harness.InitializeAsync();
+
+        var msg = harness.BuildRequest(AppServerMethods.PluginList, new { includeDisabled = true });
+        await harness.ExecuteRequestAsync(msg);
+
+        using var response = await harness.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(response);
+        var plugins = response.RootElement.GetProperty("result").GetProperty("plugins").EnumerateArray().ToArray();
+        var plugin = Assert.Single(plugins, item => item.GetProperty("id").GetString() == "csharp-lsp");
+        var lspServer = Assert.Single(plugin.GetProperty("lspServers").EnumerateArray());
+        Assert.Equal("csharp", lspServer.GetProperty("name").GetString());
+        Assert.Equal("csharp-lsp:csharp", lspServer.GetProperty("runtimeName").GetString());
+        Assert.Equal("stdio", lspServer.GetProperty("transport").GetString());
+        Assert.True(lspServer.GetProperty("enabled").GetBoolean());
+        Assert.True(lspServer.GetProperty("active").GetBoolean());
+        Assert.Contains(
+            lspServer.GetProperty("extensions").EnumerateArray(),
+            item => item.GetString() == ".cs");
+    }
+
+    [Fact]
+    public async Task PluginList_WhenWorkspaceLspShadowsPlugin_MarksPluginLspShadowed()
+    {
+        WriteLspPlugin(Path.Combine(_workspaceCraftPath, "plugins", "csharp-lsp"));
+        var config = new AppConfig();
+        config.Tools.Lsp.Enabled = true;
+        config.LspServers.Add(new LspServerConfig
+        {
+            Name = "csharp-lsp:csharp",
+            Enabled = true,
+            Command = "custom-csharp-ls",
+            ExtensionToLanguage = new Dictionary<string, string> { [".cs"] = "csharp" }
+        });
+        using var harness = CreateHarness(config);
+        await harness.InitializeAsync();
+
+        var msg = harness.BuildRequest(AppServerMethods.PluginList, new { includeDisabled = true });
+        await harness.ExecuteRequestAsync(msg);
+
+        using var response = await harness.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(response);
+        var plugins = response.RootElement.GetProperty("result").GetProperty("plugins").EnumerateArray().ToArray();
+        var plugin = Assert.Single(plugins, item => item.GetProperty("id").GetString() == "csharp-lsp");
+        var lspServer = Assert.Single(plugin.GetProperty("lspServers").EnumerateArray());
+        Assert.False(lspServer.GetProperty("active").GetBoolean());
+        Assert.Equal("workspace", lspServer.GetProperty("shadowedBy").GetString());
+    }
+
+    [Fact]
     public async Task McpList_ReturnsPluginOriginReadOnlyMetadata()
     {
         var manager = new McpClientManager();
@@ -244,6 +300,57 @@ public sealed class AppServerPluginManagementTests : IDisposable
         Assert.True(plugin.GetProperty("removable").GetBoolean());
         Assert.True(File.Exists(Path.Combine(_workspaceCraftPath, "plugins", "browser-use", ".builtin")));
         Assert.Contains(loader.ListSkills(filterUnavailable: false), skill => skill.Name == "browser-use");
+    }
+
+    [Fact]
+    public async Task PluginInstall_EmitsLspConfigRegion()
+    {
+        var changes = new List<AppConfigChangedEventArgs>();
+        using var harness = CreateHarness();
+        harness.Monitor.Changed += OnChanged;
+        await harness.InitializeAsync();
+
+        var msg = harness.BuildRequest(AppServerMethods.PluginInstall, new { id = "browser-use" });
+        await harness.ExecuteRequestAsync(msg);
+
+        using var response = await harness.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(response);
+        var change = Assert.Single(changes);
+        Assert.Contains(ConfigChangeRegions.Plugins, change.Regions);
+        Assert.Contains(ConfigChangeRegions.Skills, change.Regions);
+        Assert.Contains(ConfigChangeRegions.Mcp, change.Regions);
+        Assert.Contains(ConfigChangeRegions.Lsp, change.Regions);
+
+        harness.Monitor.Changed -= OnChanged;
+        void OnChanged(object? sender, AppConfigChangedEventArgs args) => changes.Add(args);
+    }
+
+    [Fact]
+    public async Task WorkspaceConfigUpdate_TogglesToolsLspEnabledAndEmitsLspRegion()
+    {
+        var config = new AppConfig();
+        config.Tools.Lsp.Enabled = false;
+        var changes = new List<AppConfigChangedEventArgs>();
+        using var harness = CreateHarness(config);
+        harness.Monitor.Changed += OnChanged;
+        await harness.InitializeAsync();
+
+        var msg = harness.BuildRequest(AppServerMethods.WorkspaceConfigUpdate, new { toolsLspEnabled = true });
+        await harness.ExecuteRequestAsync(msg);
+
+        using var response = await harness.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(response);
+        Assert.True(response.RootElement.GetProperty("result").GetProperty("toolsLspEnabled").GetBoolean());
+        Assert.True(config.Tools.Lsp.Enabled);
+        var change = Assert.Single(changes);
+        Assert.Contains(ConfigChangeRegions.Lsp, change.Regions);
+        var configJson = await File.ReadAllTextAsync(Path.Combine(_workspaceCraftPath, "config.json"));
+        Assert.Contains("\"Tools\"", configJson, StringComparison.Ordinal);
+        Assert.Contains("\"Lsp\"", configJson, StringComparison.Ordinal);
+        Assert.Contains("\"Enabled\": true", configJson, StringComparison.Ordinal);
+
+        harness.Monitor.Changed -= OnChanged;
+        void OnChanged(object? sender, AppConfigChangedEventArgs args) => changes.Add(args);
     }
 
     [Fact]
@@ -467,6 +574,40 @@ public sealed class AppServerPluginManagementTests : IDisposable
     "defaultPrompt": "Review this change.",
     "brandColor": "#2563EB"
   }
+}
+""");
+    }
+
+    private static void WriteLspPlugin(string pluginRoot)
+    {
+        Directory.CreateDirectory(Path.Combine(pluginRoot, ".craft-plugin"));
+        File.WriteAllText(
+            Path.Combine(pluginRoot, ".lsp.json"),
+            """
+{
+  "lspServers": {
+    "csharp": {
+      "transport": "stdio",
+      "command": "csharp-ls",
+      "args": ["--stdio"],
+      "extensionToLanguage": {
+        ".cs": "csharp"
+      }
+    }
+  }
+}
+""");
+        File.WriteAllText(
+            Path.Combine(pluginRoot, ".craft-plugin", "plugin.json"),
+            """
+{
+  "schemaVersion": 1,
+  "id": "csharp-lsp",
+  "version": "0.1.0",
+  "displayName": "C# LSP",
+  "description": "C# language server plugin.",
+  "capabilities": ["lsp"],
+  "lspServers": "./.lsp.json"
 }
 """);
     }

@@ -11,6 +11,7 @@ using DotCraft.Cron;
 using DotCraft.Heartbeat;
 using DotCraft.Logging;
 using DotCraft.Localization;
+using DotCraft.Lsp;
 using DotCraft.Mcp;
 using DotCraft.Plugins;
 using DotCraft.Skills;
@@ -50,6 +51,7 @@ public sealed class AppServerRequestHandler(
     CommandRegistry? commandRegistry = null,
     IChannelStatusProvider? channelStatusProvider = null,
     McpClientManager? mcpClientManager = null,
+    LspServerManager? lspServerManager = null,
     IEnumerable<IAppServerProtocolExtension>? protocolExtensions = null,
     Func<ExternalChannelEntry, CancellationToken, Task>? onExternalChannelUpserted = null,
     Func<string, CancellationToken, Task>? onExternalChannelRemoved = null,
@@ -1686,6 +1688,14 @@ public sealed class AppServerRequestHandler(
             .ToList();
     }
 
+    private List<LspServerConfig> GetWorkspaceLspServersSnapshot()
+    {
+        return (appConfigMonitor?.Current.LspServers ?? [])
+            .Where(server => !server.ReadOnly)
+            .Select(CloneAsWorkspaceLspServer)
+            .ToList();
+    }
+
     private async Task ReconnectEffectiveMcpRuntimeAsync(
         IReadOnlyList<McpServerConfig> workspaceServers,
         CancellationToken ct)
@@ -1709,6 +1719,15 @@ public sealed class AppServerRequestHandler(
         await mcpClientManager.ConnectAsync(effective, ct);
     }
 
+    private async Task ReconnectEffectiveLspRuntimeAsync(CancellationToken ct)
+    {
+        if (lspServerManager == null)
+            return;
+
+        ct.ThrowIfCancellationRequested();
+        await lspServerManager.InitializeAsync(ct);
+    }
+
     private string ResolveHostWorkspacePath() =>
         _hostWorkspacePath
         ?? (workspaceCraftPath == null ? Directory.GetCurrentDirectory() : Directory.GetParent(workspaceCraftPath)?.FullName)
@@ -1718,6 +1737,13 @@ public sealed class AppServerRequestHandler(
     {
         var clone = server.Clone();
         clone.Origin = McpServerOrigin.Workspace();
+        return clone;
+    }
+
+    private static LspServerConfig CloneAsWorkspaceLspServer(LspServerConfig server)
+    {
+        var clone = server.Clone();
+        clone.Origin = LspServerOrigin.Workspace();
         return clone;
     }
 
@@ -2196,6 +2222,28 @@ public sealed class AppServerRequestHandler(
         };
     }
 
+    private void RefreshCurrentLspConfig(bool? toolsLspEnabled)
+    {
+        if (appConfigMonitor == null)
+            return;
+
+        if (toolsLspEnabled.HasValue)
+        {
+            appConfigMonitor.Current.Tools.Lsp.Enabled = toolsLspEnabled.Value;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(workspaceCraftPath))
+        {
+            var configPath = Path.Combine(workspaceCraftPath, "config.json");
+            var mergedConfig = AppConfig.LoadWithGlobalFallback(configPath);
+            appConfigMonitor.Current.Tools.Lsp = mergedConfig.Tools.Lsp;
+            return;
+        }
+
+        appConfigMonitor.Current.Tools.Lsp.Enabled = false;
+    }
+
     private static void SaveWorkspaceExternalChannels(string workspaceCraftPath, IReadOnlyCollection<ExternalChannelEntry> channels)
     {
         var configPath = Path.Combine(workspaceCraftPath, "config.json");
@@ -2250,13 +2298,12 @@ public sealed class AppServerRequestHandler(
         return node;
     }
 
-    private Task<object?> HandleWorkspaceConfigUpdateAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    private async Task<object?> HandleWorkspaceConfigUpdateAsync(AppServerIncomingMessage msg, CancellationToken ct)
     {
-        _ = ct;
         if (string.IsNullOrWhiteSpace(workspaceCraftPath))
             throw AppServerErrors.MethodNotFound(AppServerMethods.WorkspaceConfigUpdate);
         if (!msg.Params.HasValue || msg.Params.Value.ValueKind != JsonValueKind.Object)
-            throw AppServerErrors.InvalidParams("At least one of 'model', 'apiKey', 'endPoint', 'welcomeSuggestionsEnabled', 'skillsSelfLearningEnabled', 'memoryAutoConsolidateEnabled', or 'defaultApprovalPolicy' is required.");
+            throw AppServerErrors.InvalidParams("At least one of 'model', 'apiKey', 'endPoint', 'welcomeSuggestionsEnabled', 'skillsSelfLearningEnabled', 'memoryAutoConsolidateEnabled', 'defaultApprovalPolicy', or 'toolsLspEnabled' is required.");
 
         var hasModel = TryGetCaseInsensitiveProperty(msg.Params.Value, "model", out var modelEl);
         var hasApiKey = TryGetCaseInsensitiveProperty(msg.Params.Value, "apiKey", out var apiKeyEl);
@@ -2277,16 +2324,21 @@ public sealed class AppServerRequestHandler(
             msg.Params.Value,
             "defaultApprovalPolicy",
             out var defaultApprovalPolicyEl);
+        var hasToolsLspEnabled = TryGetCaseInsensitiveProperty(
+            msg.Params.Value,
+            "toolsLspEnabled",
+            out var toolsLspEnabledEl);
         if (!hasModel
             && !hasApiKey
             && !hasEndPoint
             && !hasWelcomeSuggestionsEnabled
             && !hasSkillsSelfLearningEnabled
             && !hasMemoryAutoConsolidateEnabled
-            && !hasDefaultApprovalPolicy)
+            && !hasDefaultApprovalPolicy
+            && !hasToolsLspEnabled)
         {
             throw AppServerErrors.InvalidParams(
-                "At least one of 'model', 'apiKey', 'endPoint', 'welcomeSuggestionsEnabled', 'skillsSelfLearningEnabled', 'memoryAutoConsolidateEnabled', or 'defaultApprovalPolicy' is required.");
+                "At least one of 'model', 'apiKey', 'endPoint', 'welcomeSuggestionsEnabled', 'skillsSelfLearningEnabled', 'memoryAutoConsolidateEnabled', 'defaultApprovalPolicy', or 'toolsLspEnabled' is required.");
         }
 
         var model = hasModel ? ParseNullableString(modelEl, "model") : null;
@@ -2304,6 +2356,9 @@ public sealed class AppServerRequestHandler(
         var defaultApprovalPolicy = hasDefaultApprovalPolicy
             ? ParseNullableString(defaultApprovalPolicyEl, "defaultApprovalPolicy")
             : null;
+        var toolsLspEnabled = hasToolsLspEnabled
+            ? ParseNullableBoolean(toolsLspEnabledEl, "toolsLspEnabled")
+            : null;
 
         var saveResult = SaveWorkspaceCoreConfig(
             workspaceCraftPath,
@@ -2314,13 +2369,15 @@ public sealed class AppServerRequestHandler(
             skillsSelfLearningEnabled,
             memoryAutoConsolidateEnabled,
             hasDefaultApprovalPolicy ? NormalizeDefaultApprovalPolicy(defaultApprovalPolicy) : null,
+            toolsLspEnabled,
             hasModel,
             hasApiKey,
             hasEndPoint,
             hasWelcomeSuggestionsEnabled,
             hasSkillsSelfLearningEnabled,
             hasMemoryAutoConsolidateEnabled,
-            hasDefaultApprovalPolicy);
+            hasDefaultApprovalPolicy,
+            hasToolsLspEnabled);
 
         var changedRegions = new List<string>();
         if (saveResult.ModelChanged)
@@ -2348,6 +2405,12 @@ public sealed class AppServerRequestHandler(
             changedRegions.Add(ConfigChangeRegions.WorkspaceDefaultApprovalPolicy);
             RefreshCurrentPermissionsConfig(saveResult.DefaultApprovalPolicy);
         }
+        if (saveResult.ToolsLspEnabledChanged)
+        {
+            changedRegions.Add(ConfigChangeRegions.Lsp);
+            RefreshCurrentLspConfig(saveResult.ToolsLspEnabled);
+            await ReconnectEffectiveLspRuntimeAsync(ct);
+        }
         if (changedRegions.Count > 0)
         {
             appConfigMonitor?.NotifyChanged(
@@ -2355,7 +2418,7 @@ public sealed class AppServerRequestHandler(
                 changedRegions);
         }
 
-        return Task.FromResult<object?>(new WorkspaceConfigUpdateResult
+        return new WorkspaceConfigUpdateResult
         {
             Model = saveResult.Model,
             ApiKey = saveResult.ApiKey,
@@ -2363,8 +2426,9 @@ public sealed class AppServerRequestHandler(
             WelcomeSuggestionsEnabled = saveResult.WelcomeSuggestionsEnabled,
             SkillsSelfLearningEnabled = saveResult.SkillsSelfLearningEnabled,
             MemoryAutoConsolidateEnabled = saveResult.MemoryAutoConsolidateEnabled,
-            DefaultApprovalPolicy = saveResult.DefaultApprovalPolicy
-        });
+            DefaultApprovalPolicy = saveResult.DefaultApprovalPolicy,
+            ToolsLspEnabled = saveResult.ToolsLspEnabled
+        };
     }
 
     private Task<object?> HandleWorkspaceConfigSchemaAsync(AppServerIncomingMessage msg, CancellationToken ct)
@@ -2626,9 +2690,10 @@ public sealed class AppServerRequestHandler(
         var discovery = RefreshPluginRuntime();
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
+        var lspSummaries = BuildPluginLspSummaryIndex(discovery, diagnostics);
         var plugins = discovery.Plugins
             .Where(plugin => p.IncludeDisabled != false || plugin.Enabled)
-            .Select(plugin => MapPluginToWire(plugin, diagnostics, mcpSummaries))
+            .Select(plugin => MapPluginToWire(plugin, diagnostics, mcpSummaries, lspSummaries))
             .OrderBy(plugin => plugin.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -2652,6 +2717,7 @@ public sealed class AppServerRequestHandler(
         var discovery = RefreshPluginRuntime();
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
+        var lspSummaries = BuildPluginLspSummaryIndex(discovery, diagnostics);
         var plugin = discovery.Plugins.FirstOrDefault(
             candidate => PluginIds.EqualsCanonical(candidate.Manifest.Id, p.Id));
         if (plugin == null)
@@ -2659,7 +2725,7 @@ public sealed class AppServerRequestHandler(
 
         return Task.FromResult<object?>(new PluginViewResult
         {
-            Plugin = MapPluginToWire(plugin, diagnostics, mcpSummaries)
+            Plugin = MapPluginToWire(plugin, diagnostics, mcpSummaries, lspSummaries)
         });
     }
 
@@ -2693,19 +2759,21 @@ public sealed class AppServerRequestHandler(
 
         var discovery = RefreshPluginRuntime();
         await ReconnectEffectiveMcpRuntimeAsync(await GetWorkspaceMcpServersAsync(ct), ct);
+        await ReconnectEffectiveLspRuntimeAsync(ct);
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.PluginSetEnabled,
-            [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp]);
+            [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp, ConfigChangeRegions.Lsp]);
 
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
+        var lspSummaries = BuildPluginLspSummaryIndex(discovery, diagnostics);
         var plugin = discovery.Plugins.FirstOrDefault(candidate => PluginIds.EqualsCanonical(candidate.Manifest.Id, pluginId));
         if (plugin == null)
             throw AppServerErrors.InvalidParams($"Plugin '{pluginId}' was not found.");
 
         return new PluginSetEnabledResult
         {
-            Plugin = MapPluginToWire(plugin, diagnostics, mcpSummaries)
+            Plugin = MapPluginToWire(plugin, diagnostics, mcpSummaries, lspSummaries)
         };
     }
 
@@ -2723,11 +2791,12 @@ public sealed class AppServerRequestHandler(
         var before = RefreshPluginRuntime();
         var beforeDiagnostics = before.Diagnostics.ToList();
         var beforeMcpSummaries = BuildPluginMcpSummaryIndex(before, beforeDiagnostics);
+        var beforeLspSummaries = BuildPluginLspSummaryIndex(before, beforeDiagnostics);
         var beforePlugin = before.Plugins.FirstOrDefault(candidate => PluginIds.EqualsCanonical(candidate.Manifest.Id, pluginId));
         if (beforePlugin == null)
             throw AppServerErrors.InvalidParams($"Plugin '{pluginId}' was not found.");
         if (beforePlugin.Installed)
-            return new PluginInstallResult { Plugin = MapPluginToWire(beforePlugin, beforeDiagnostics, beforeMcpSummaries) };
+            return new PluginInstallResult { Plugin = MapPluginToWire(beforePlugin, beforeDiagnostics, beforeMcpSummaries, beforeLspSummaries) };
         if (!beforePlugin.Installable)
             throw AppServerErrors.InvalidParams($"Plugin '{pluginId}' is not installable.");
 
@@ -2745,19 +2814,21 @@ public sealed class AppServerRequestHandler(
 
         var discovery = RefreshPluginRuntime();
         await ReconnectEffectiveMcpRuntimeAsync(await GetWorkspaceMcpServersAsync(ct), ct);
+        await ReconnectEffectiveLspRuntimeAsync(ct);
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.PluginInstall,
-            [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp]);
+            [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp, ConfigChangeRegions.Lsp]);
 
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
+        var lspSummaries = BuildPluginLspSummaryIndex(discovery, diagnostics);
         var plugin = discovery.Plugins.FirstOrDefault(candidate => PluginIds.EqualsCanonical(candidate.Manifest.Id, pluginId));
         if (plugin == null || !plugin.Installed)
             throw AppServerErrors.InvalidParams($"Plugin '{pluginId}' could not be installed.");
 
         return new PluginInstallResult
         {
-            Plugin = MapPluginToWire(plugin, diagnostics, mcpSummaries)
+            Plugin = MapPluginToWire(plugin, diagnostics, mcpSummaries, lspSummaries)
         };
     }
 
@@ -2774,11 +2845,12 @@ public sealed class AppServerRequestHandler(
         var before = RefreshPluginRuntime();
         var beforeDiagnostics = before.Diagnostics.ToList();
         var beforeMcpSummaries = BuildPluginMcpSummaryIndex(before, beforeDiagnostics);
+        var beforeLspSummaries = BuildPluginLspSummaryIndex(before, beforeDiagnostics);
         var beforePlugin = before.Plugins.FirstOrDefault(candidate => PluginIds.EqualsCanonical(candidate.Manifest.Id, pluginId));
         if (beforePlugin == null)
             throw AppServerErrors.InvalidParams($"Plugin '{pluginId}' was not found.");
         if (!beforePlugin.Installed)
-            return new PluginRemoveResult { Plugin = MapPluginToWire(beforePlugin, beforeDiagnostics, beforeMcpSummaries) };
+            return new PluginRemoveResult { Plugin = MapPluginToWire(beforePlugin, beforeDiagnostics, beforeMcpSummaries, beforeLspSummaries) };
         if (!beforePlugin.Removable)
             throw AppServerErrors.InvalidParams($"Plugin '{pluginId}' cannot be removed by DotCraft.");
 
@@ -2799,16 +2871,18 @@ public sealed class AppServerRequestHandler(
 
         var discovery = RefreshPluginRuntime();
         await ReconnectEffectiveMcpRuntimeAsync(await GetWorkspaceMcpServersAsync(ct), ct);
+        await ReconnectEffectiveLspRuntimeAsync(ct);
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.PluginRemove,
-            [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp]);
+            [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp, ConfigChangeRegions.Lsp]);
 
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
+        var lspSummaries = BuildPluginLspSummaryIndex(discovery, diagnostics);
         var plugin = discovery.Plugins.FirstOrDefault(candidate => PluginIds.EqualsCanonical(candidate.Manifest.Id, pluginId));
         return new PluginRemoveResult
         {
-            Plugin = plugin == null ? null : MapPluginToWire(plugin, diagnostics, mcpSummaries)
+            Plugin = plugin == null ? null : MapPluginToWire(plugin, diagnostics, mcpSummaries, lspSummaries)
         };
     }
 
@@ -2937,10 +3011,20 @@ public sealed class AppServerRequestHandler(
             GetWorkspaceMcpServersSnapshot(),
             diagnostics);
 
+    private IReadOnlyDictionary<string, IReadOnlyList<PluginLspServerSummary>> BuildPluginLspSummaryIndex(
+        PluginDiscoveryResult discovery,
+        List<PluginDiagnostic> diagnostics) =>
+        PluginLspServerResolver.BuildPluginLspServerSummaries(
+            discovery.Plugins,
+            GetWorkspaceLspServersSnapshot(),
+            diagnostics,
+            lspToolEnabled: appConfigMonitor?.Current.Tools.Lsp.Enabled ?? false);
+
     private PluginInfoWire MapPluginToWire(
         DiscoveredPlugin plugin,
         IReadOnlyList<PluginDiagnostic> diagnostics,
-        IReadOnlyDictionary<string, IReadOnlyList<PluginMcpServerSummary>> mcpSummaries)
+        IReadOnlyDictionary<string, IReadOnlyList<PluginMcpServerSummary>> mcpSummaries,
+        IReadOnlyDictionary<string, IReadOnlyList<PluginLspServerSummary>> lspSummaries)
     {
         var manifest = plugin.Manifest;
         return new PluginInfoWire
@@ -2961,6 +3045,9 @@ public sealed class AppServerRequestHandler(
             McpServers = mcpSummaries.TryGetValue(manifest.Id, out var servers)
                 ? servers.Select(MapPluginMcpServerToWire).ToList()
                 : [],
+            LspServers = lspSummaries.TryGetValue(manifest.Id, out var lspServers)
+                ? lspServers.Select(MapPluginLspServerToWire).ToList()
+                : [],
             Diagnostics = diagnostics
                 .Where(d => string.Equals(d.PluginId, manifest.Id, StringComparison.OrdinalIgnoreCase))
                 .Select(MapPluginDiagnosticToWire)
@@ -2976,6 +3063,18 @@ public sealed class AppServerRequestHandler(
             Transport = server.Transport,
             Enabled = server.Enabled,
             Active = server.Active,
+            ShadowedBy = server.ShadowedBy
+        };
+
+    private static PluginLspServerInfoWire MapPluginLspServerToWire(PluginLspServerSummary server) =>
+        new()
+        {
+            Name = server.Name,
+            RuntimeName = server.RuntimeName,
+            Transport = server.Transport,
+            Enabled = server.Enabled,
+            Active = server.Active,
+            Extensions = [.. server.Extensions],
             ShadowedBy = server.ShadowedBy
         };
 
@@ -3565,13 +3664,15 @@ public sealed class AppServerRequestHandler(
         bool? skillsSelfLearningEnabled,
         bool? memoryAutoConsolidateEnabled,
         string? defaultApprovalPolicy,
+        bool? toolsLspEnabled,
         bool updateModel,
         bool updateApiKey,
         bool updateEndPoint,
         bool updateWelcomeSuggestionsEnabled,
         bool updateSkillsSelfLearningEnabled,
         bool updateMemoryAutoConsolidateEnabled,
-        bool updateDefaultApprovalPolicy)
+        bool updateDefaultApprovalPolicy,
+        bool updateToolsLspEnabled)
     {
         var configPath = Path.Combine(workspaceCraftPath, "config.json");
         Directory.CreateDirectory(workspaceCraftPath);
@@ -3591,6 +3692,11 @@ public sealed class AppServerRequestHandler(
         var memoryAutoConsolidateEnabledKey = memorySection == null ? null : FindCaseInsensitiveKey(memorySection, "AutoConsolidateEnabled");
         var permissionsSection = GetOrCreateConfigSection(root, "Permissions", createIfMissing: updateDefaultApprovalPolicy);
         var defaultApprovalPolicyKey = permissionsSection == null ? null : FindCaseInsensitiveKey(permissionsSection, "DefaultApprovalPolicy");
+        var toolsSection = GetOrCreateConfigSection(root, "Tools", createIfMissing: updateToolsLspEnabled);
+        var lspSection = toolsSection == null
+            ? null
+            : GetOrCreateConfigSection(toolsSection, "Lsp", createIfMissing: updateToolsLspEnabled);
+        var toolsLspEnabledKey = lspSection == null ? null : FindCaseInsensitiveKey(lspSection, "Enabled");
 
         var existingModel = NormalizeWorkspaceModel(ReadConfigStringValue(root, modelKey));
         var existingApiKey = NormalizeOptionalString(ReadConfigStringValue(root, apiKeyKey));
@@ -3599,6 +3705,7 @@ public sealed class AppServerRequestHandler(
         var existingSkillsSelfLearningEnabled = ReadConfigBooleanValue(selfLearningSection, selfLearningEnabledKey);
         var existingMemoryAutoConsolidateEnabled = ReadConfigBooleanValue(memorySection, memoryAutoConsolidateEnabledKey);
         var existingDefaultApprovalPolicy = NormalizeDefaultApprovalPolicy(ReadConfigStringValue(permissionsSection, defaultApprovalPolicyKey));
+        var existingToolsLspEnabled = ReadConfigBooleanValue(lspSection, toolsLspEnabledKey);
 
         var modelChanged = updateModel && !string.Equals(existingModel, model, StringComparison.Ordinal);
         var apiKeyChanged = updateApiKey && !string.Equals(existingApiKey, apiKey, StringComparison.Ordinal);
@@ -3611,6 +3718,8 @@ public sealed class AppServerRequestHandler(
             && existingMemoryAutoConsolidateEnabled != memoryAutoConsolidateEnabled;
         var defaultApprovalPolicyChanged = updateDefaultApprovalPolicy
             && !string.Equals(existingDefaultApprovalPolicy, defaultApprovalPolicy, StringComparison.Ordinal);
+        var toolsLspEnabledChanged = updateToolsLspEnabled
+            && existingToolsLspEnabled != toolsLspEnabled;
 
         if (updateModel)
             UpsertOrRemoveConfigValue(root, modelKey, "Model", model);
@@ -3648,6 +3757,15 @@ public sealed class AppServerRequestHandler(
             UpsertOrRemoveConfigValue(permissions, defaultApprovalPolicyExistingKey, "DefaultApprovalPolicy", defaultApprovalPolicy);
             RemoveConfigSectionIfEmpty(root, "Permissions");
         }
+        if (updateToolsLspEnabled)
+        {
+            var tools = GetOrCreateConfigSection(root, "Tools", createIfMissing: true)!;
+            var lsp = GetOrCreateConfigSection(tools, "Lsp", createIfMissing: true)!;
+            var enabledExistingKey = FindCaseInsensitiveKey(lsp, "Enabled");
+            UpsertOrRemoveConfigValue(lsp, enabledExistingKey, "Enabled", toolsLspEnabled);
+            RemoveConfigSectionIfEmpty(tools, "Lsp");
+            RemoveConfigSectionIfEmpty(root, "Tools");
+        }
 
         if (modelChanged
             || apiKeyChanged
@@ -3655,7 +3773,8 @@ public sealed class AppServerRequestHandler(
             || welcomeSuggestionsChanged
             || skillsSelfLearningChanged
             || memoryAutoConsolidateChanged
-            || defaultApprovalPolicyChanged)
+            || defaultApprovalPolicyChanged
+            || toolsLspEnabledChanged)
         {
             var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(configPath, $"{json}{Environment.NewLine}", new UTF8Encoding(false));
@@ -3678,13 +3797,17 @@ public sealed class AppServerRequestHandler(
             DefaultApprovalPolicy = updateDefaultApprovalPolicy
                 ? defaultApprovalPolicy
                 : existingDefaultApprovalPolicy,
+            ToolsLspEnabled = updateToolsLspEnabled
+                ? toolsLspEnabled
+                : existingToolsLspEnabled,
             ModelChanged = modelChanged,
             ApiKeyChanged = apiKeyChanged,
             EndPointChanged = endPointChanged,
             WelcomeSuggestionsChanged = welcomeSuggestionsChanged,
             SkillsSelfLearningChanged = skillsSelfLearningChanged,
             MemoryAutoConsolidateChanged = memoryAutoConsolidateChanged,
-            DefaultApprovalPolicyChanged = defaultApprovalPolicyChanged
+            DefaultApprovalPolicyChanged = defaultApprovalPolicyChanged,
+            ToolsLspEnabledChanged = toolsLspEnabledChanged
         };
     }
 
@@ -3839,6 +3962,8 @@ public sealed class AppServerRequestHandler(
 
         public string? DefaultApprovalPolicy { get; init; }
 
+        public bool? ToolsLspEnabled { get; init; }
+
         public bool ModelChanged { get; init; }
 
         public bool ApiKeyChanged { get; init; }
@@ -3852,6 +3977,8 @@ public sealed class AppServerRequestHandler(
         public bool MemoryAutoConsolidateChanged { get; init; }
 
         public bool DefaultApprovalPolicyChanged { get; init; }
+
+        public bool ToolsLspEnabledChanged { get; init; }
     }
 
     private static bool TryGetCaseInsensitiveProperty(JsonElement obj, string expectedName, out JsonElement value)

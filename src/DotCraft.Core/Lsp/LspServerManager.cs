@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DotCraft.Configuration;
 using DotCraft.Hosting;
+using DotCraft.Plugins;
 using Microsoft.Extensions.Logging;
 
 namespace DotCraft.Lsp;
@@ -30,7 +31,15 @@ public class LspServerManager(
                 return;
             }
 
-            foreach (var serverConfig in config.LspServers.Where(s => s.Enabled))
+            var serverConfigs = PluginLspServerResolver.LoadEffectiveServers(
+                config,
+                paths.WorkspacePath,
+                paths.CraftPath,
+                out var pluginDiagnostics);
+            if (pluginDiagnostics.Count > 0)
+                PluginDiagnosticsStore.Shared.Append(pluginDiagnostics);
+
+            foreach (var serverConfig in serverConfigs.Where(s => s.Enabled))
             {
                 if (string.IsNullOrWhiteSpace(serverConfig.Name))
                 {
