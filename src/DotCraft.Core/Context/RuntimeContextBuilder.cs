@@ -46,34 +46,11 @@ public static class RuntimeContextBuilder
         AddLine(lines, "Sender Name", initiator.UserName);
         AddLine(lines, "Sender Role", initiator.UserRole);
         AddLine(lines, "Group/Chat ID", initiator.GroupId);
-
-        var channel = initiator.ChannelName.Trim().ToLowerInvariant();
-        switch (channel)
-        {
-            case "qq":
-                AddLine(lines, "Sender QQ", initiator.UserId);
-                AddLine(lines, "QQ Group ID", GetPrefixedContextId(initiator.ChannelContext, "group:") ?? initiator.GroupId);
-                break;
-            case "wecom":
-                AddLine(lines, "WeCom User ID", initiator.UserId);
-                AddLine(lines, "WeCom Chat ID", initiator.GroupId ?? GetPrefixedContextId(initiator.ChannelContext, "chat:"));
-                break;
-        }
     }
 
     private static void AddLine(List<string> lines, string label, string? value)
     {
         if (!string.IsNullOrWhiteSpace(value))
             lines.Add($"{label}: {value}");
-    }
-
-    private static string? GetPrefixedContextId(string? channelContext, string prefix)
-    {
-        if (string.IsNullOrWhiteSpace(channelContext))
-            return null;
-
-        return channelContext.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? channelContext[prefix.Length..]
-            : null;
     }
 }

@@ -344,9 +344,7 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         Assert.Contains("[Runtime Context]", modelInput);
         Assert.Contains("Channel: qq", modelInput);
         Assert.Contains("Channel Context: group:123456", modelInput);
-        Assert.Contains("Sender QQ: 10001", modelInput);
         Assert.Contains("Sender Name: Alice", modelInput);
-        Assert.Contains("QQ Group ID: 123456", modelInput);
 
         var persistedThread = await svc.GetThreadAsync(thread.Id);
         var turn = Assert.Single(persistedThread.Turns);

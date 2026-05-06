@@ -604,7 +604,7 @@ export function SettingsView({
   const [proxyAuthRecoveryAttempt, setProxyAuthRecoveryAttempt] = useState(0)
   const [proxyAuthRecoverySettled, setProxyAuthRecoverySettled] = useState(false)
   const [restartingProxy, setRestartingProxy] = useState(false)
-  const [theme, setTheme] = useState<ThemeMode>('dark')
+  const [theme, setTheme] = useState<ThemeMode>('light')
   const [locale, setLocale] = useState<AppLocale>(normalizeLocale(undefined))
   const [version, setVersion] = useState('')
   const [saving, setSaving] = useState(false)
