@@ -46,6 +46,7 @@ public sealed class WelcomeSuggestionService(
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan RefreshDebounce = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MinRefreshInterval = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan PersistedWriteTimeout = TimeSpan.FromSeconds(5);
     private const int PersistedCacheSchemaVersion = 1;
     private static readonly Regex FileExtensionPattern = new(@"\.[A-Za-z0-9]{1,6}\b", RegexOptions.Compiled);
     private static readonly Regex PathPattern = new(@"[A-Za-z0-9_.\-]+[\\/][A-Za-z0-9_.\-]+", RegexOptions.Compiled);
@@ -185,6 +186,11 @@ public sealed class WelcomeSuggestionService(
         var evidence = await BuildEvidenceAsync(workspacePath, RefreshMaxItems, cancellationToken).ConfigureAwait(false);
         if (!evidence.HasSufficientContext)
             return;
+        if (await HasCurrentSnapshotAsync(workspacePath, evidence.Fingerprint, cancellationToken).ConfigureAwait(false))
+        {
+            _lastRefreshCompletedAt = DateTimeOffset.UtcNow;
+            return;
+        }
 
         var identity = new SessionIdentity
         {
@@ -205,8 +211,30 @@ public sealed class WelcomeSuggestionService(
         _cache[workspacePath] = new WelcomeSuggestionCacheEntry(
             result,
             DateTimeOffset.UtcNow.Add(CacheTtl));
-        await SavePersistedAsync(workspacePath, result, cancellationToken).ConfigureAwait(false);
+        await SavePersistedBestEffortAsync(workspacePath, result).ConfigureAwait(false);
         _lastRefreshCompletedAt = DateTimeOffset.UtcNow;
+    }
+
+    private async Task<bool> HasCurrentSnapshotAsync(
+        string workspacePath,
+        string fingerprint,
+        CancellationToken cancellationToken)
+    {
+        if (_cache.TryGetValue(workspacePath, out var cached)
+            && cached.ExpiresAt > DateTimeOffset.UtcNow
+            && IsDynamicSnapshotForFingerprint(cached.Result, fingerprint))
+        {
+            return true;
+        }
+
+        var persisted = await LoadPersistedAsync(workspacePath, cancellationToken).ConfigureAwait(false);
+        if (!IsDynamicSnapshotForFingerprint(persisted, fingerprint))
+            return false;
+
+        _cache[workspacePath] = new WelcomeSuggestionCacheEntry(
+            persisted!,
+            DateTimeOffset.UtcNow.Add(CacheTtl));
+        return true;
     }
 
     private async Task<bool> IsInternalThreadAsync(string threadId, CancellationToken cancellationToken)
@@ -257,6 +285,25 @@ public sealed class WelcomeSuggestionService(
         File.Move(tempPath, persistedPath, overwrite: true);
     }
 
+    private async Task SavePersistedBestEffortAsync(
+        string workspacePath,
+        WelcomeSuggestionsResult result)
+    {
+        try
+        {
+            using var writeCts = new CancellationTokenSource(PersistedWriteTimeout);
+            await SavePersistedAsync(workspacePath, result, writeCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            logger?.LogDebug("Timed out while writing persisted welcome suggestions cache.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to write persisted welcome suggestions cache; keeping previous snapshot if present.");
+        }
+    }
+
     private async Task<WelcomeSuggestionsResult?> LoadPersistedAsync(
         string workspacePath,
         CancellationToken cancellationToken)
@@ -289,6 +336,12 @@ public sealed class WelcomeSuggestionService(
             return null;
         }
     }
+
+    private static bool IsDynamicSnapshotForFingerprint(WelcomeSuggestionsResult? result, string fingerprint) =>
+        result != null
+        && string.Equals(result.Source, "dynamic", StringComparison.OrdinalIgnoreCase)
+        && result.Items.Count > 0
+        && string.Equals(result.Fingerprint, fingerprint, StringComparison.Ordinal);
 
     private async Task<WelcomeSuggestionsResult> GenerateDynamicSuggestionsAsync(
         SessionIdentity identity,

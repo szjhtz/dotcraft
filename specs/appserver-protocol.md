@@ -1129,7 +1129,8 @@ The result is advisory and read-only. The server may derive these suggestions fr
 - When `source = "none"`, `items` may be an empty list. Client-owned default suggestions remain out of band and are not serialized by this method.
 - The server may inspect workspace-local history and memory through internal read-only mechanisms before generating suggestions, but those inspection steps are implementation-defined and not part of the wire contract.
 - Servers may cache results for a short period and return the same `fingerprint` across repeated calls while the underlying workspace evidence has not materially changed.
-- Servers SHOULD serve this method from a persisted cache and SHOULD NOT trigger synchronous model generation from this request path. Cache refresh should run asynchronously when workspace evidence changes (for example, after turn completions).
+- Servers SHOULD serve this method from a persisted workspace cache and SHOULD NOT trigger synchronous model generation from this request path. The persisted cache is a cross-process restart snapshot of the most recent successful dynamic result; it should not be deleted on normal client shutdown, and failed, canceled, or insufficient-context refresh attempts should leave the previous snapshot available.
+- Cache refresh should run asynchronously when workspace evidence changes (for example, after turn completions). If the current evidence fingerprint already matches the persisted snapshot, the server may skip regeneration.
 
 **Errors** (non-exhaustive): missing `identity.workspacePath`; unsupported capability; invalid `maxItems`; workspace not available.
 

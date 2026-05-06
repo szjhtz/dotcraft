@@ -345,6 +345,24 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SuggestAsync_WithPersistedCache_FromNewServiceInstance_ReturnsDynamicWithoutCallingModel()
+    {
+        await WritePersistedCacheAsync("persisted-snapshot");
+
+        var service = CreateService();
+        var result = await service.SuggestAsync(new WelcomeSuggestionsParams
+        {
+            Identity = CreateIdentity(),
+            MaxItems = 4
+        });
+
+        Assert.Equal("dynamic", result.Source);
+        Assert.Equal("persisted-snapshot", result.Fingerprint);
+        Assert.Equal(4, result.Items.Count);
+        Assert.Empty(_sessionService.LastSubmittedContent);
+    }
+
+    [Fact]
     public async Task SuggestAsync_WhenModelReturnsGenericSuggestions_ReturnsNone()
     {
         await CreateThreadWithMessagesAsync(
@@ -423,6 +441,111 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         Assert.Equal("none", result.Source);
         Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public async Task ScheduleRefresh_WhenDisposedBeforeDebounce_KeepsPersistedSnapshot()
+    {
+        await WritePersistedCacheAsync("preserved-before-dispose");
+        var before = await File.ReadAllTextAsync(GetPersistedCachePath());
+        await CreateThreadWithMessagesAsync(
+            "Review how welcome suggestions reuse workspace history and memory in Desktop.",
+            "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+
+        var service = CreateService();
+        service.ScheduleRefresh(_workspacePath);
+        await service.DisposeAsync();
+
+        var after = await File.ReadAllTextAsync(GetPersistedCachePath());
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task ScheduleRefresh_WithMatchingPersistedFingerprint_SkipsModelGeneration()
+    {
+        await CreateThreadWithMessagesAsync(
+            "Review how welcome suggestions reuse workspace history and memory in Desktop.",
+            "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+
+        var submitCount = 0;
+        _sessionService.SubmitInputHandler = (_, _, _) =>
+        {
+            Interlocked.Increment(ref submitCount);
+            return
+            [
+                new SessionEvent
+                {
+                    EventId = "evt_initial_refresh",
+                    EventType = SessionEventType.ItemCompleted,
+                    ThreadId = "thread_initial_refresh",
+                    TurnId = "turn_initial_refresh",
+                    ItemId = "item_initial_refresh",
+                    Timestamp = DateTimeOffset.UtcNow,
+                    Payload = new SessionItem
+                    {
+                        Id = "item_initial_refresh",
+                        TurnId = "turn_initial_refresh",
+                        Type = ItemType.ToolCall,
+                        Status = ItemStatus.Completed,
+                        CreatedAt = DateTimeOffset.UtcNow,
+                        CompletedAt = DateTimeOffset.UtcNow,
+                        Payload = new ToolCallPayload
+                        {
+                            ToolName = WelcomeSuggestionMethods.ToolName,
+                            CallId = "call_initial_refresh",
+                            Arguments = new JsonObject
+                            {
+                                ["items"] = BuildConcreteItems()
+                            }
+                        }
+                    }
+                }
+            ];
+        };
+
+        var firstService = CreateService();
+        firstService.ScheduleRefresh(_workspacePath);
+        await WaitForAsync(() => File.Exists(GetPersistedCachePath()), timeoutMs: 7000);
+        Assert.Equal(1, submitCount);
+
+        _sessionService.SubmitInputHandler = (_, _, _) =>
+        {
+            Interlocked.Increment(ref submitCount);
+            return [];
+        };
+
+        var secondService = CreateService();
+        secondService.ScheduleRefresh(_workspacePath);
+        await Task.Delay(1500);
+
+        Assert.Equal(1, submitCount);
+    }
+
+    [Fact]
+    public async Task ScheduleRefresh_WhenGenerationFails_KeepsPersistedSnapshot()
+    {
+        await WritePersistedCacheAsync("preserved-after-failure");
+        var before = await File.ReadAllTextAsync(GetPersistedCachePath());
+        await CreateThreadWithMessagesAsync(
+            "Review how welcome suggestions reuse workspace history and memory in Desktop.",
+            "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+
+        _sessionService.SubmitInputHandler = (_, _, _) => [];
+
+        var service = CreateService();
+        service.ScheduleRefresh(_workspacePath);
+        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: 7000);
+
+        var after = await File.ReadAllTextAsync(GetPersistedCachePath());
+        Assert.Equal(before, after);
+
+        var result = await service.SuggestAsync(new WelcomeSuggestionsParams
+        {
+            Identity = CreateIdentity(),
+            MaxItems = 4
+        });
+        Assert.Equal("dynamic", result.Source);
+        Assert.Equal("preserved-after-failure", result.Fingerprint);
     }
 
     [Fact]
@@ -637,6 +760,49 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
             ["prompt"] = "Audit workspace/config/update handling for WelcomeSuggestions.Enabled and list the notification flow."
         }
     ];
+
+    private string GetPersistedCachePath() =>
+        Path.Combine(_workspacePath, ".craft", "cache", "welcome-suggestions.json");
+
+    private async Task WritePersistedCacheAsync(string fingerprint)
+    {
+        var cachePath = GetPersistedCachePath();
+        Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+        var payload = new
+        {
+            SchemaVersion = 1,
+            Result = new WelcomeSuggestionsResult
+            {
+                Source = "dynamic",
+                Fingerprint = fingerprint,
+                GeneratedAt = DateTimeOffset.UtcNow,
+                Items =
+                [
+                    new WelcomeSuggestionItem
+                    {
+                        Title = "Review ConversationWelcome.tsx flow",
+                        Prompt = "Review desktop/src/renderer/components/conversation/ConversationWelcome.tsx and point out where dynamic quick suggestions should be injected."
+                    },
+                    new WelcomeSuggestionItem
+                    {
+                        Title = "Trace WelcomeSuggestionService.cs",
+                        Prompt = "Trace src/DotCraft.Core/Protocol/WelcomeSuggestionService.cs to document how cache-only welcome/suggestions responses are served."
+                    },
+                    new WelcomeSuggestionItem
+                    {
+                        Title = "Inspect welcome/suggestions contract",
+                        Prompt = "Inspect specs/appserver-protocol.md and verify the welcome/suggestions semantics for source and fingerprint."
+                    },
+                    new WelcomeSuggestionItem
+                    {
+                        Title = "Audit workspace/config/update flow",
+                        Prompt = "Audit workspace/config/update handling for WelcomeSuggestions.Enabled and list the notification flow."
+                    }
+                ]
+            }
+        };
+        await File.WriteAllTextAsync(cachePath, JsonSerializer.Serialize(payload));
+    }
 
     private WelcomeSuggestionService CreateService() =>
         new(_sessionService, _persistence, _memoryStore, _workspacePath, NullLogger<WelcomeSuggestionService>.Instance);
