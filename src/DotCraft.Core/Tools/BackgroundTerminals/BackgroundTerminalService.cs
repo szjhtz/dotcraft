@@ -209,8 +209,8 @@ public sealed class BackgroundTerminalService : IBackgroundTerminalService, IAsy
         var yieldMs = NormalizeYield(request.YieldTimeMs);
         if (request.RunInBackground)
         {
-            await Task.Delay(yieldMs, ct).ConfigureAwait(false);
-            if (!process.HasExited)
+            var completed = await WaitForExitOrDelayAsync(process, TimeSpan.FromMilliseconds(yieldMs), ct).ConfigureAwait(false);
+            if (!completed)
                 return terminal.CreateSnapshot(BackgroundTerminalStatus.Running, request.MaxOutputChars, "runInBackground");
         }
         else
@@ -237,7 +237,10 @@ public sealed class BackgroundTerminalService : IBackgroundTerminalService, IAsy
         if (_active.TryGetValue(sessionId, out var active))
         {
             if (waitMs > 0 && !active.Process.HasExited)
-                await Task.Delay(Math.Min(waitMs, _config.MaxYieldTimeMs), ct).ConfigureAwait(false);
+            {
+                var waitFor = TimeSpan.FromMilliseconds(Math.Min(waitMs, _config.MaxYieldTimeMs));
+                await WaitForExitOrDelayAsync(active.Process, waitFor, ct).ConfigureAwait(false);
+            }
             if (active.Process.HasExited)
                 await active.WaitForCompletionMetadataAsync(ct).ConfigureAwait(false);
             return active.CreateSnapshot(maxOutputChars: maxOutputChars ?? _config.DefaultReadMaxOutputChars);

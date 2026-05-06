@@ -3836,6 +3836,8 @@ Clients must check `capabilities.backgroundTerminals` before calling `terminal/*
 - `terminal/stop` params: `{ "sessionId": string }`, result: `{ "terminal": BackgroundTerminal }`
 - `terminal/clean` params: `{ "threadId": string }`, result: `{ "terminals": BackgroundTerminal[] }`
 
+`terminal/read.waitMs` is the maximum time the server waits for an active terminal to produce an updated snapshot or exit. If the wait elapses before the process exits, the server may return the current `running` snapshot.
+
 ### 19A.4 Notifications
 
 Servers that have a client-declared `backgroundTerminals` capability may emit:

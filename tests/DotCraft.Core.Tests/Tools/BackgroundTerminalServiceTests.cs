@@ -20,7 +20,7 @@ public sealed class BackgroundTerminalServiceTests : IAsyncLifetime
             new AppConfig.ShellBackgroundConfig
             {
                 DefaultYieldTimeMs = 100,
-                MaxYieldTimeMs = 2000,
+                MaxYieldTimeMs = 5000,
                 DefaultReadMaxOutputChars = 4000
             });
         return Task.CompletedTask;
@@ -66,8 +66,8 @@ public sealed class BackgroundTerminalServiceTests : IAsyncLifetime
         Assert.Equal(BackgroundTerminalStatus.Running, started.Status);
         Assert.False(string.IsNullOrWhiteSpace(started.SessionId));
 
-        var completed = await Service.ReadAsync(started.SessionId, waitMs: 1200, maxOutputChars: 1000);
-        Assert.NotEqual(BackgroundTerminalStatus.Running, completed.Status);
+        var completed = await Service.ReadAsync(started.SessionId, waitMs: 5000, maxOutputChars: 1000);
+        Assert.Equal(BackgroundTerminalStatus.Completed, completed.Status);
         Assert.Contains("done", completed.Output);
     }
 
