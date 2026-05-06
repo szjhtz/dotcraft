@@ -229,12 +229,16 @@ public sealed class AppConfig
     {
         if (!File.Exists(path))
         {
-            return new AppConfig();
+            var defaultConfig = new AppConfig();
+            ModelContextWindowCatalog.ApplyToConfig(defaultConfig, new JsonObject(), globalConfigPath: null, workspaceConfigPath: path);
+            return defaultConfig;
         }
 
         var node = JsonNode.Parse(File.ReadAllText(path)) ?? new JsonObject();
         ExpandEnvironmentVariables(node);
-        return node.Deserialize<AppConfig>(SerializerOptions) ?? new AppConfig();
+        var config = node.Deserialize<AppConfig>(SerializerOptions) ?? new AppConfig();
+        ModelContextWindowCatalog.ApplyToConfig(config, node, globalConfigPath: null, workspaceConfigPath: path);
+        return config;
     }
 
     public static AppConfig LoadWithGlobalFallback(string workspacePath)
@@ -259,7 +263,9 @@ public sealed class AppConfig
         // Expand environment variable references before deserializing
         ExpandEnvironmentVariables(mergedNode);
 
-        return mergedNode.Deserialize<AppConfig>(SerializerOptions) ?? new AppConfig();
+        var config = mergedNode.Deserialize<AppConfig>(SerializerOptions) ?? new AppConfig();
+        ModelContextWindowCatalog.ApplyToConfig(config, mergedNode, globalConfigPath, workspacePath);
+        return config;
     }
 
     /// <summary>

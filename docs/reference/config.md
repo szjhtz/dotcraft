@@ -31,7 +31,7 @@
 |--------|------|--------|
 | `Compaction.AutoCompactEnabled` | 启用基于阈值的自动压缩 | `true` |
 | `Compaction.ReactiveCompactEnabled` | 启用对 `prompt_too_long` 错误的反应式压缩 | `true` |
-| `Compaction.ContextWindow` | 模型上下文窗口（Token） | `200000` |
+| `Compaction.ContextWindow` | 模型上下文窗口（Token）。未显式配置时，会按 `Model` 从模型上下文窗口映射表推导；未知模型使用 `256000` | 模型映射值 / `256000` |
 | `Compaction.SummaryReserveTokens` | 为摘要输出预留的 Token | `20000` |
 | `Compaction.AutoCompactBufferTokens` | 低于硬上限多少 Token 时触发自动压缩 | `13000` |
 | `Compaction.WarningBufferTokens` | 到达自动阈值前多少 Token 发出 warning | `20000` |
@@ -45,6 +45,25 @@
 | `Compaction.MicrocompactKeepRecent` | 微压缩时保留的最近工具结果数 | `8` |
 | `Compaction.MicrocompactGapMinutes` | 距离上次助理消息超过该分钟数也触发微压缩；`0` 表示禁用 | `20` |
 | `Compaction.MaxConsecutiveFailures` | 连续失败次数达到该值时熔断 | `3` |
+
+### 模型上下文窗口映射
+
+DotCraft 内置一份常见模型的上下文窗口映射表，并会在 `Compaction.ContextWindow` 未显式配置时按当前 `Model` 自动选择。可以通过 JSON 文件补充或覆盖映射：
+
+- 全局：`~/.craft/model-context-windows.json`
+- 工作区：`.craft/model-context-windows.json`
+
+工作区映射优先于全局映射；两者都会覆盖内置映射。模型名按最长前缀匹配，因此 `gpt-4o` 可匹配 `gpt-4o-mini`，`kimi-k2-` 可匹配同系列后续版本。OpenAI-compatible 网关常见的 `provider/model-name`、`provider/org/model-name` 形式会额外尝试匹配斜杠后的各级后缀。
+
+```json
+{
+  "defaultContextWindow": 256000,
+  "models": {
+    "my-256k-model": 256000,
+    "custom-long-context-": 1048576
+  }
+}
+```
 
 ## Reasoning
 

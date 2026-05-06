@@ -25,10 +25,10 @@ public sealed class CompactionConfig
     public bool ReactiveCompactEnabled { get; set; } = true;
 
     /// <summary>
-    /// Model context window in tokens (default tuned for 200K-class models).
+    /// Model context window in tokens (default tuned for 256K-class models).
     /// </summary>
     [ConfigField(Min = 1000, Hint = "Model context window in tokens.")]
-    public int ContextWindow { get; set; } = 200_000;
+    public int ContextWindow { get; set; } = 256_000;
 
     /// <summary>
     /// Tokens reserved for the summary output so auto-compact triggers before

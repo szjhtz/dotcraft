@@ -31,7 +31,7 @@ This page collects configuration fields in one place. For first-time setup, read
 |-------|-------------|---------|
 | `Compaction.AutoCompactEnabled` | Enables threshold-based auto compaction | `true` |
 | `Compaction.ReactiveCompactEnabled` | Enables reactive compaction for `prompt_too_long` errors | `true` |
-| `Compaction.ContextWindow` | Model context window in tokens | `200000` |
+| `Compaction.ContextWindow` | Model context window in tokens. When unset, DotCraft infers it from `Model` using the model context-window catalog; unknown models use `256000` | Model catalog value / `256000` |
 | `Compaction.SummaryReserveTokens` | Tokens reserved for summary output | `20000` |
 | `Compaction.AutoCompactBufferTokens` | Token buffer below the hard limit that triggers auto compaction | `13000` |
 | `Compaction.WarningBufferTokens` | Token buffer before auto threshold that emits warning | `20000` |
@@ -45,6 +45,25 @@ This page collects configuration fields in one place. For first-time setup, read
 | `Compaction.MicrocompactKeepRecent` | Recent tool results kept during micro-compaction | `8` |
 | `Compaction.MicrocompactGapMinutes` | Also triggers after this many minutes since last assistant message; `0` disables it | `20` |
 | `Compaction.MaxConsecutiveFailures` | Consecutive failures before circuit breaking compaction | `3` |
+
+### Model Context-Window Catalog
+
+DotCraft ships a built-in context-window catalog for common models and uses it when `Compaction.ContextWindow` is not explicitly configured. You can extend or override the catalog with JSON files:
+
+- Global: `~/.craft/model-context-windows.json`
+- Workspace: `.craft/model-context-windows.json`
+
+Workspace mappings take precedence over global mappings; both override the built-in catalog. Model names use longest-prefix matching, so `gpt-4o` can match `gpt-4o-mini`, and `kimi-k2-` can match later variants in the same family. For common OpenAI-compatible gateway names like `provider/model-name` and `provider/org/model-name`, DotCraft also tries each suffix after a slash.
+
+```json
+{
+  "defaultContextWindow": 256000,
+  "models": {
+    "my-256k-model": 256000,
+    "custom-long-context-": 1048576
+  }
+}
+```
 
 ## Reasoning
 
