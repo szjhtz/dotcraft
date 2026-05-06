@@ -133,6 +133,15 @@ export interface FeishuSimpleBlock {
   language?: string;
 }
 
+export interface FeishuDocxToolCallResult {
+  success: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  contentItems?: Record<string, unknown>[];
+  structuredResult?: unknown;
+  [key: string]: unknown;
+}
+
 type DocxUpdateMode =
   | "append"
   | "overwrite"
@@ -572,7 +581,7 @@ export async function maybeExecuteFeishuDocxToolCall(params: {
   args: Record<string, unknown>;
   channelTarget?: string;
   client: FeishuClient;
-}): Promise<Record<string, unknown> | null> {
+}): Promise<FeishuDocxToolCallResult | null> {
   if (!isFeishuDocxToolName(params.toolName)) return null;
 
   try {
@@ -803,7 +812,7 @@ async function executeCreateDocxTool(params: {
   args: Record<string, unknown>;
   channelTarget?: string;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const target = params.channelTarget?.trim() ?? "";
   if (!target) {
     throw new DocxToolError(
@@ -917,7 +926,7 @@ async function executeCreateDocxTool(params: {
 async function executeReadDocxTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -938,7 +947,7 @@ async function executeReadDocxTool(params: {
 async function executeAppendDocxTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -965,7 +974,7 @@ async function executeAppendDocxTool(params: {
 async function executeListDocxBlocksTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -990,7 +999,7 @@ async function executeListDocxBlocksTool(params: {
 async function executeGetDocxBlockTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1010,7 +1019,7 @@ async function executeGetDocxBlockTool(params: {
 async function executeInsertDocxBlocksTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1038,7 +1047,7 @@ async function executeInsertDocxBlocksTool(params: {
 async function executeUpdateDocxBlocksTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1093,7 +1102,7 @@ async function executeUpdateDocxBlocksTool(params: {
 async function executeDeleteDocxBlocksTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1112,7 +1121,7 @@ async function executeDeleteDocxBlocksTool(params: {
 async function executeUpdateDocxTitleTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1132,7 +1141,7 @@ async function executeUpdateDocxTitleTool(params: {
 async function executeUpdateDocxContentTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1243,7 +1252,7 @@ async function executeUpdateDocxContentTool(params: {
 async function executeEmbedDocxMediaTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1342,7 +1351,7 @@ async function executeEmbedDocxMediaTool(params: {
 async function executeListDocxCommentsTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1364,7 +1373,7 @@ async function executeListDocxCommentsTool(params: {
 async function executeBatchQueryDocxCommentsTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1384,7 +1393,7 @@ async function executeBatchQueryDocxCommentsTool(params: {
 async function executeListDocxCommentRepliesTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1406,7 +1415,7 @@ async function executeListDocxCommentRepliesTool(params: {
 async function executeAddDocxCommentTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1461,7 +1470,7 @@ async function executeAddDocxCommentTool(params: {
 async function executeAddDocxCommentReplyTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
@@ -1497,7 +1506,7 @@ async function executeAddDocxCommentReplyTool(params: {
 async function executeResolveDocxCommentTool(params: {
   args: Record<string, unknown>;
   client: FeishuClient;
-}): Promise<Record<string, unknown>> {
+}): Promise<FeishuDocxToolCallResult> {
   const documentId = await resolveDocxDocumentId({
     client: params.client,
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
