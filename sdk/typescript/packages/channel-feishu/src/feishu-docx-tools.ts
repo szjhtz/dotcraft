@@ -1044,6 +1044,44 @@ async function executeUpdateDocxBlocksTool(params: {
     documentIdOrUrl: requiredText(params.args.documentIdOrUrl, "documentIdOrUrl"),
   });
   const requests = parseObjectArray(params.args.requests, "requests");
+
+  // Guard: validate each request has block_id and at least one valid operation.
+  // Feishu returns 1770001 (param is invalid) for malformed batch_update requests.
+  const VALID_UPDATE_OPS = [
+    "update_text_elements",
+    "update_text_style",
+    "replace_text",
+    "insert_table_row",
+    "delete_table_row",
+    "insert_table_column",
+    "delete_table_column",
+    "merge_table_cells",
+    "unmerge_table_cells",
+    "update_table_property",
+    "update_table_column",
+    "update_table_cell",
+    "update_table_border",
+    "update_table_cell_border",
+  ];
+  for (let i = 0; i < requests.length; i++) {
+    const req = requests[i] as Record<string, unknown>;
+    if (!req.block_id || typeof req.block_id !== "string") {
+      throw new DocxToolError(
+        "InvalidRequest",
+        `requests[${i}].block_id is required and must be a non-empty string.`,
+      );
+    }
+    const hasOp = VALID_UPDATE_OPS.some((op) => req[op] !== undefined);
+    if (!hasOp) {
+      throw new DocxToolError(
+        "InvalidRequest",
+        `requests[${i}] must contain at least one valid operation field. ` +
+          `Valid operations: ${VALID_UPDATE_OPS.join(", ")}. ` +
+          `Received keys: ${Object.keys(req).join(", ")}`,
+      );
+    }
+  }
+
   const result = await params.client.updateDocxBlocks(documentId, requests);
   return {
     success: true,
@@ -1496,6 +1534,20 @@ function parseFeishuSimpleBlock(value: unknown, path: string): FeishuSimpleBlock
       "InvalidBlocks",
       `${path}.kind must be one of: ${SIMPLE_BLOCK_KINDS.join(", ")}.`,
     );
+  }
+
+  // Guard: reject empty/whitespace-only text for non-divider blocks.
+  // Feishu returns 99992402 (field validation failed) for empty children text.
+  if (kind !== "divider") {
+    const rawText = record.text;
+    if (rawText == null || (typeof rawText === "string" && rawText.trim() === "")) {
+      throw new DocxToolError(
+        "InvalidBlocks",
+        `${path}.text must be a non-empty string for kind "${kind}". ` +
+          `Empty or whitespace-only text is rejected by Feishu (error 99992402). ` +
+          `Use a divider block if you need a visual separator.`,
+      );
+    }
   }
 
   return {

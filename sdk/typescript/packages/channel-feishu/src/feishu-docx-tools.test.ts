@@ -1065,3 +1065,104 @@ test("FeishuResolveDocxComment patches solved state", async () => {
   assert.equal(result?.success, true);
   assert.equal(patched, true);
 });
+
+// --- Defensive validation tests ---
+
+test("FeishuAppendDocxContent rejects empty text for paragraph", async () => {
+  const client = {} as FeishuClient;
+  const result = await maybeExecuteFeishuDocxToolCall({
+    toolName: APPEND_DOCX_TOOL_NAME,
+    args: {
+      documentIdOrUrl: DOC_ID,
+      blocks: [{ kind: "paragraph", text: "" }],
+    },
+    client,
+  });
+  assert.equal(result?.success, false);
+  assert.equal(result?.errorCode, "InvalidBlocks");
+  assert.match(result?.errorMessage ?? "", /must be a non-empty string/);
+});
+
+test("FeishuAppendDocxContent rejects whitespace-only text for bullet", async () => {
+  const client = {} as FeishuClient;
+  const result = await maybeExecuteFeishuDocxToolCall({
+    toolName: APPEND_DOCX_TOOL_NAME,
+    args: {
+      documentIdOrUrl: DOC_ID,
+      blocks: [{ kind: "bullet", text: "   " }],
+    },
+    client,
+  });
+  assert.equal(result?.success, false);
+  assert.equal(result?.errorCode, "InvalidBlocks");
+});
+
+test("FeishuAppendDocxContent accepts divider without text", async () => {
+  let createCalled = 0;
+  const client = {
+    async createDocxBlocks() {
+      createCalled += 1;
+      return { documentId: DOC_ID, revisionId: 1, blocks: [{ blockId: "blk_1", blockType: 22 }] };
+    },
+  } as unknown as FeishuClient;
+  const result = await maybeExecuteFeishuDocxToolCall({
+    toolName: APPEND_DOCX_TOOL_NAME,
+    args: {
+      documentIdOrUrl: DOC_ID,
+      blocks: [{ kind: "divider" }],
+    },
+    client,
+  });
+  assert.equal(result?.success, true);
+  assert.equal(createCalled, 1);
+});
+
+test("FeishuUpdateDocxBlocks rejects request missing block_id", async () => {
+  const client = {} as FeishuClient;
+  const result = await maybeExecuteFeishuDocxToolCall({
+    toolName: UPDATE_DOCX_BLOCKS_TOOL_NAME,
+    args: {
+      documentIdOrUrl: DOC_ID,
+      requests: [{ replace_text: { elements: [] } }],
+    },
+    client,
+  });
+  assert.equal(result?.success, false);
+  assert.equal(result?.errorCode, "InvalidRequest");
+  assert.match(result?.errorMessage ?? "", /block_id/);
+});
+
+test("FeishuUpdateDocxBlocks rejects request with no valid operation", async () => {
+  const client = {} as FeishuClient;
+  const result = await maybeExecuteFeishuDocxToolCall({
+    toolName: UPDATE_DOCX_BLOCKS_TOOL_NAME,
+    args: {
+      documentIdOrUrl: DOC_ID,
+      requests: [{ block_id: "blk_1", foo: "bar" }],
+    },
+    client,
+  });
+  assert.equal(result?.success, false);
+  assert.equal(result?.errorCode, "InvalidRequest");
+  assert.match(result?.errorMessage ?? "", /at least one valid operation/);
+});
+
+test("FeishuUpdateDocxBlocks accepts valid request with replace_text", async () => {
+  let requestCalled = 0;
+  const client = {
+    async updateDocxBlocks() {
+      requestCalled += 1;
+      return { documentId: DOC_ID, revisionId: 1, updatedBlocks: [] };
+    },
+  } as unknown as FeishuClient;
+  const result = await maybeExecuteFeishuDocxToolCall({
+    toolName: UPDATE_DOCX_BLOCKS_TOOL_NAME,
+    args: {
+      documentIdOrUrl: DOC_ID,
+      requests: [{ block_id: "blk_1", replace_text: { elements: [{ text_run: { content: "hi" } }] } }],
+    },
+    client,
+  });
+  assert.equal(result?.success, true);
+  assert.equal(requestCalled, 1);
+});
