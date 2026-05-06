@@ -1373,6 +1373,8 @@ body {
             <div class="stat-card"><div class="stat-label">Errors</div><div class="stat-value text-error" id="statErrors">-</div></div>
             <div class="stat-card"><div class="stat-label">Avg Tool Latency</div><div class="stat-value" id="statAvgToolMs">-</div></div>
             <div class="stat-card"><div class="stat-label">Input Tokens</div><div class="stat-value" id="statInputTokens">-</div></div>
+            <div class="stat-card"><div class="stat-label">Cached Input</div><div class="stat-value info" id="statCachedInputTokens">-</div></div>
+            <div class="stat-card"><div class="stat-label">Cache Hit Rate</div><div class="stat-value success" id="statCacheHitRate">-</div></div>
             <div class="stat-card"><div class="stat-label">Output Tokens</div><div class="stat-value" id="statOutputTokens">-</div></div>
             <div class="stat-card"><div class="stat-label">Total Tokens</div><div class="stat-value success" id="statTotalTokens">-</div></div>
           </div>
@@ -1581,6 +1583,11 @@ function formatNumber(n) {
   if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n/1000).toFixed(1) + 'K';
   return n.toString();
+}
+
+function formatPercent(value) {
+  if (value == null || Number.isNaN(value)) return '-';
+  return (value * 100).toFixed(1) + '%';
 }
 
 function formatDurationMs(ms) {
@@ -1824,6 +1831,9 @@ function renderSessionMetadata(session, idPrefix) {
     ? `<button type="button" class="btn btn-compact session-prompt-btn" data-session-key="${encodedSessionKey}" onclick="showSystemPrompt(event, decodeURIComponent('${encodedSessionKey}'))">System prompt</button>`
     : '';
   const tools = renderToolBadges(session.toolNames || []);
+  const drift = session.promptDriftCount || 0;
+  const promptHash = session.systemPromptHash ? session.systemPromptHash.slice(0, 12) : '-';
+  const toolHash = session.toolSchemaHash ? session.toolSchemaHash.slice(0, 12) : '-';
 
   return `<div class="session-metadata" onclick="event.stopPropagation()">
     <div class="session-meta-line">
@@ -1833,6 +1843,9 @@ function renderSessionMetadata(session, idPrefix) {
     <div class="session-meta-line session-meta-actions">
       ${promptButton}
       <span style="color:var(--text-secondary)">Tools (${(session.toolNames || []).length}):</span>
+      <span class="badge ${drift > 0 ? 'badge-warning' : 'badge-success'}">drift ${formatNumber(drift)}</span>
+      <span class="badge badge-info">prompt ${escapeHtml(promptHash)}</span>
+      <span class="badge badge-info">tools ${escapeHtml(toolHash)}</span>
     </div>
     <div class="session-tools-inline">${tools}</div>
   </div>`;
@@ -1850,6 +1863,8 @@ async function refreshDashboard() {
   document.getElementById('statErrors').textContent = formatNumber(summary.totalErrors);
   document.getElementById('statAvgToolMs').textContent = formatDurationMs(summary.avgToolDurationMs || 0);
   document.getElementById('statInputTokens').textContent = formatNumber(summary.totalInputTokens);
+  document.getElementById('statCachedInputTokens').textContent = formatNumber(summary.totalCachedInputTokens || 0);
+  document.getElementById('statCacheHitRate').textContent = formatPercent(summary.cacheHitRate || 0);
   document.getElementById('statOutputTokens').textContent = formatNumber(summary.totalOutputTokens);
   document.getElementById('statTotalTokens').textContent = formatNumber(summary.totalTokens);
 
@@ -1872,6 +1887,7 @@ async function refreshDashboard() {
             <div class="session-stat"><div class="session-stat-value">${s.toolCallCount}</div><div class="session-stat-label">tools</div></div>
             <div class="session-stat"><div class="session-stat-value" style="color:var(--error)">${s.errorCount || 0}</div><div class="session-stat-label">errors</div></div>
             <div class="session-stat"><div class="session-stat-value">${formatDurationMs(s.avgToolDurationMs || 0)}</div><div class="session-stat-label">avg tool</div></div>
+            <div class="session-stat"><div class="session-stat-value" style="color:var(--info)">${formatPercent(s.cacheHitRate || 0)}</div><div class="session-stat-label">cache hit</div></div>
             <div class="session-stat"><div class="session-stat-value">${formatNumber(s.totalInputTokens + s.totalOutputTokens)}</div><div class="session-stat-label">tokens</div></div>
           </div>
         </div>
@@ -2077,6 +2093,8 @@ function renderTraceEvent(e) {
           <div class="trace-label token">Token Usage</div>
           <div class="trace-tokens-inline">
             <span class="in">↑ ${formatNumber(e.inputTokens)} input</span>
+            <span class="in">${formatNumber(e.cachedInputTokens || 0)} cached</span>
+            <span class="in">${formatPercent((e.inputTokens || 0) > 0 ? (e.cachedInputTokens || 0) / e.inputTokens : 0)} hit</span>
             <span class="out">↓ ${formatNumber(e.outputTokens)} output</span>
             <span style="color:var(--text-muted)">= ${formatNumber(e.totalTokens)} total</span>
           </div>
@@ -2248,11 +2266,16 @@ async function refreshTokenUsage() {
   ].join('');
 
   const totalTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalTokens || 0), 0);
+  const totalInputTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalInputTokens || 0), 0);
+  const totalCachedInputTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalCachedInputTokens || 0), 0);
+  const totalCacheHitRate = totalInputTokens > 0 ? totalCachedInputTokens / totalInputTokens : 0;
   const totalRequests = tokenUsageSources.reduce((sum, s) => sum + (s.requestCount || 0), 0);
   const totalSubjects = tokenUsageSources.reduce((sum, s) => sum + (s.subjectCount || 0), 0);
 
   statsEl.innerHTML = `
     <div class="stat-card"><div class="stat-label">Total Tokens</div><div class="stat-value success">${formatNumber(totalTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">Cached Input</div><div class="stat-value info">${formatNumber(totalCachedInputTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">Cache Hit Rate</div><div class="stat-value success">${formatPercent(totalCacheHitRate)}</div></div>
     <div class="stat-card"><div class="stat-label">Total Requests</div><div class="stat-value accent">${formatNumber(totalRequests)}</div></div>
     <div class="stat-card"><div class="stat-label">Active Sources</div><div class="stat-value info">${formatNumber(tokenUsageSources.length)}</div></div>
     <div class="stat-card"><div class="stat-label">Active Subjects</div><div class="stat-value warning">${formatNumber(totalSubjects)}</div></div>
@@ -2261,7 +2284,7 @@ async function refreshTokenUsage() {
         <div class="stat-label">${escapeHtml(formatSourceLabel(source.sourceId))}</div>
         <div class="stat-value accent">${formatNumber(source.totalTokens || 0)}</div>
         <div style="margin-top:8px;color:var(--text-secondary);font-size:12px">
-          ${formatNumber(source.requestCount || 0)} requests • ${formatNumber(source.subjectCount || 0)} ${pluralizeUsageKind(source.subjectKind, source.subjectCount)}
+          ${formatNumber(source.requestCount || 0)} requests • ${formatPercent(source.cacheHitRate || 0)} cache hit
         </div>
       </div>
     `).join('')}
@@ -2303,6 +2326,8 @@ function renderUsageSourceSection(source, subjects, contexts) {
         </div>
         <div class="session-stats">
           <div class="session-stat"><div class="session-stat-value" style="color:var(--warning)">${formatNumber(source.totalTokens || 0)}</div><div class="session-stat-label">tokens</div></div>
+          <div class="session-stat"><div class="session-stat-value" style="color:var(--info)">${formatNumber(source.totalCachedInputTokens || 0)}</div><div class="session-stat-label">cached</div></div>
+          <div class="session-stat"><div class="session-stat-value" style="color:var(--success)">${formatPercent(source.cacheHitRate || 0)}</div><div class="session-stat-label">cache hit</div></div>
           <div class="session-stat"><div class="session-stat-value">${formatNumber(source.subjectCount || 0)}</div><div class="session-stat-label">${pluralizeUsageKind(source.subjectKind, source.subjectCount)}</div></div>
           <div class="session-stat"><div class="session-stat-value">${formatNumber(source.contextCount || 0)}</div><div class="session-stat-label">${pluralizeUsageKind(source.contextKind || 'context', source.contextCount)}</div></div>
         </div>
@@ -2326,6 +2351,8 @@ function renderUsageBreakdownTable(entries, kind, showRelatedSubjects) {
         <th>${escapeHtml(humanizeUsageKind(kind || 'record'))} ID</th>
         <th>Label</th>
         <th>Input Tokens</th>
+        <th>Cached Input</th>
+        <th>Cache Hit</th>
         <th>Output Tokens</th>
         <th>Total Tokens</th>
         <th>Requests</th>
@@ -2339,6 +2366,8 @@ function renderUsageBreakdownTable(entries, kind, showRelatedSubjects) {
           <td class="config-key">${escapeHtml(entry.id)}</td>
           <td class="config-value">${escapeHtml(entry.label || '-')}</td>
           <td style="color:var(--info);font-family:var(--font-mono)">${formatNumber(entry.totalInputTokens)}</td>
+          <td style="color:var(--info);font-family:var(--font-mono)">${formatNumber(entry.totalCachedInputTokens || 0)}</td>
+          <td style="color:var(--success);font-family:var(--font-mono)">${formatPercent(entry.cacheHitRate || 0)}</td>
           <td style="color:var(--success);font-family:var(--font-mono)">${formatNumber(entry.totalOutputTokens)}</td>
           <td style="color:var(--warning);font-weight:600;font-family:var(--font-mono)">${formatNumber(entry.totalTokens)}</td>
           <td style="font-family:var(--font-mono)">${formatNumber(entry.requestCount)}</td>

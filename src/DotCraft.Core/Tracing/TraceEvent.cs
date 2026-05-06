@@ -56,9 +56,21 @@ public sealed class TraceEvent
 
     public string[]? ToolNames { get; init; }
 
+    public string? SystemPromptHash { get; init; }
+
+    public string? ToolSchemaHash { get; init; }
+
+    public bool? PromptDriftDetected { get; init; }
+
     public long? InputTokens { get; init; }
 
     public long? OutputTokens { get; init; }
+
+    public long? CachedInputTokens { get; init; }
+
+    public long? NonCachedInputTokens { get; init; }
+
+    public long? ReasoningOutputTokens { get; init; }
 
     public long? TotalTokens { get; init; }
 }
@@ -73,12 +85,24 @@ public sealed class TraceSession
 
     private long _totalInputTokens;
     private long _totalOutputTokens;
+    private long _totalCachedInputTokens;
+    private long _totalReasoningOutputTokens;
     private long _totalToolDurationMs;
     private long _maxToolDurationMs;
 
     public long TotalInputTokens => Interlocked.Read(ref _totalInputTokens);
 
     public long TotalOutputTokens => Interlocked.Read(ref _totalOutputTokens);
+
+    public long TotalCachedInputTokens => Interlocked.Read(ref _totalCachedInputTokens);
+
+    public long TotalNonCachedInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens);
+
+    public long TotalReasoningOutputTokens => Interlocked.Read(ref _totalReasoningOutputTokens);
+
+    public double CacheHitRate => TotalInputTokens > 0
+        ? TotalCachedInputTokens / (double)TotalInputTokens
+        : 0;
 
     public long TotalToolDurationMs => Interlocked.Read(ref _totalToolDurationMs);
 
@@ -91,6 +115,10 @@ public sealed class TraceSession
     public void AddInputTokens(long value) => Interlocked.Add(ref _totalInputTokens, value);
 
     public void AddOutputTokens(long value) => Interlocked.Add(ref _totalOutputTokens, value);
+
+    public void AddCachedInputTokens(long value) => Interlocked.Add(ref _totalCachedInputTokens, value);
+
+    public void AddReasoningOutputTokens(long value) => Interlocked.Add(ref _totalReasoningOutputTokens, value);
 
     public void AddToolDuration(long value)
     {
@@ -108,11 +136,15 @@ public sealed class TraceSession
     internal void LoadAggregateSnapshot(
         long totalInputTokens,
         long totalOutputTokens,
+        long totalCachedInputTokens,
+        long totalReasoningOutputTokens,
         long totalToolDurationMs,
         long maxToolDurationMs)
     {
         Interlocked.Exchange(ref _totalInputTokens, totalInputTokens);
         Interlocked.Exchange(ref _totalOutputTokens, totalOutputTokens);
+        Interlocked.Exchange(ref _totalCachedInputTokens, totalCachedInputTokens);
+        Interlocked.Exchange(ref _totalReasoningOutputTokens, totalReasoningOutputTokens);
         Interlocked.Exchange(ref _totalToolDurationMs, totalToolDurationMs);
         Interlocked.Exchange(ref _maxToolDurationMs, maxToolDurationMs);
     }
@@ -130,6 +162,12 @@ public sealed class TraceSession
     public int ThinkingCount { get; set; }
 
     public string? FinalSystemPrompt { get; set; }
+
+    public string? SystemPromptHash { get; set; }
+
+    public string? ToolSchemaHash { get; set; }
+
+    public int PromptDriftCount { get; set; }
 
     public string? FirstUserRequest { get; set; }
 

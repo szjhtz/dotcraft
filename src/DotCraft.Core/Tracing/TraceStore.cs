@@ -96,6 +96,8 @@ public sealed class TraceStore
         string sessionKey,
         string? finalSystemPrompt,
         IEnumerable<string>? toolNames,
+        string? systemPromptHash = null,
+        string? toolSchemaHash = null,
         DateTimeOffset? capturedAt = null)
     {
         var session = _sessions.GetOrAdd(sessionKey, key => new TraceSession
@@ -105,6 +107,28 @@ public sealed class TraceStore
 
         if (!string.IsNullOrWhiteSpace(finalSystemPrompt) && string.IsNullOrWhiteSpace(session.FinalSystemPrompt))
             session.FinalSystemPrompt = finalSystemPrompt;
+
+        if (!string.IsNullOrWhiteSpace(systemPromptHash))
+        {
+            if (!string.IsNullOrWhiteSpace(session.SystemPromptHash)
+                && !string.Equals(session.SystemPromptHash, systemPromptHash, StringComparison.Ordinal))
+            {
+                session.PromptDriftCount++;
+            }
+
+            session.SystemPromptHash = systemPromptHash;
+        }
+
+        if (!string.IsNullOrWhiteSpace(toolSchemaHash))
+        {
+            if (!string.IsNullOrWhiteSpace(session.ToolSchemaHash)
+                && !string.Equals(session.ToolSchemaHash, toolSchemaHash, StringComparison.Ordinal))
+            {
+                session.PromptDriftCount++;
+            }
+
+            session.ToolSchemaHash = toolSchemaHash;
+        }
 
         session.SetToolNames(toolNames);
 
@@ -275,7 +299,7 @@ public sealed class TraceStore
 
     public TraceSummary GetSummary()
     {
-        long totalInput = 0, totalOutput = 0;
+        long totalInput = 0, totalOutput = 0, totalCachedInput = 0, totalReasoningOutput = 0;
         int totalRequests = 0, totalResponses = 0, totalToolCalls = 0, totalErrors = 0, totalContextCompactions = 0;
         long totalToolDuration = 0, maxToolDuration = 0;
 
@@ -283,6 +307,8 @@ public sealed class TraceStore
         {
             totalInput += session.TotalInputTokens;
             totalOutput += session.TotalOutputTokens;
+            totalCachedInput += session.TotalCachedInputTokens;
+            totalReasoningOutput += session.TotalReasoningOutputTokens;
             totalRequests += session.RequestCount;
             totalResponses += session.ResponseCount;
             totalToolCalls += session.ToolCallCount;
@@ -305,6 +331,8 @@ public sealed class TraceStore
             MaxToolDurationMs = maxToolDuration,
             TotalInputTokens = totalInput,
             TotalOutputTokens = totalOutput,
+            TotalCachedInputTokens = totalCachedInput,
+            TotalReasoningOutputTokens = totalReasoningOutput,
             TotalTokens = totalInput + totalOutput
         };
     }
@@ -364,7 +392,13 @@ public sealed class TraceStore
         switch (evt.Type)
         {
             case TraceEventType.SessionMetadata:
-                UpsertSessionMetadata(evt.SessionKey, evt.FinalSystemPrompt, evt.ToolNames, evt.Timestamp);
+                UpsertSessionMetadata(
+                    evt.SessionKey,
+                    evt.FinalSystemPrompt,
+                    evt.ToolNames,
+                    evt.SystemPromptHash,
+                    evt.ToolSchemaHash,
+                    evt.Timestamp);
                 break;
             case TraceEventType.Request:
                 session.RequestCount++;
@@ -386,6 +420,10 @@ public sealed class TraceStore
                     session.AddInputTokens(evt.InputTokens.Value);
                 if (evt.OutputTokens.HasValue)
                     session.AddOutputTokens(evt.OutputTokens.Value);
+                if (evt.CachedInputTokens.HasValue)
+                    session.AddCachedInputTokens(evt.CachedInputTokens.Value);
+                if (evt.ReasoningOutputTokens.HasValue)
+                    session.AddReasoningOutputTokens(evt.ReasoningOutputTokens.Value);
                 break;
             case TraceEventType.Error:
                 session.ErrorCount++;
@@ -526,6 +564,8 @@ public sealed class TraceStore
                 thinking_count,
                 total_input_tokens,
                 total_output_tokens,
+                total_cached_input_tokens,
+                total_reasoning_output_tokens,
                 total_tool_duration_ms,
                 max_tool_duration_ms,
                 last_finish_reason,
@@ -543,6 +583,8 @@ public sealed class TraceStore
                 $thinking_count,
                 $total_input_tokens,
                 $total_output_tokens,
+                $total_cached_input_tokens,
+                $total_reasoning_output_tokens,
                 $total_tool_duration_ms,
                 $max_tool_duration_ms,
                 $last_finish_reason,
@@ -560,6 +602,8 @@ public sealed class TraceStore
                 thinking_count = excluded.thinking_count,
                 total_input_tokens = excluded.total_input_tokens,
                 total_output_tokens = excluded.total_output_tokens,
+                total_cached_input_tokens = excluded.total_cached_input_tokens,
+                total_reasoning_output_tokens = excluded.total_reasoning_output_tokens,
                 total_tool_duration_ms = excluded.total_tool_duration_ms,
                 max_tool_duration_ms = excluded.max_tool_duration_ms,
                 last_finish_reason = excluded.last_finish_reason,
@@ -577,6 +621,8 @@ public sealed class TraceStore
         command.Parameters.AddWithValue("$thinking_count", session.ThinkingCount);
         command.Parameters.AddWithValue("$total_input_tokens", session.TotalInputTokens);
         command.Parameters.AddWithValue("$total_output_tokens", session.TotalOutputTokens);
+        command.Parameters.AddWithValue("$total_cached_input_tokens", session.TotalCachedInputTokens);
+        command.Parameters.AddWithValue("$total_reasoning_output_tokens", session.TotalReasoningOutputTokens);
         command.Parameters.AddWithValue("$total_tool_duration_ms", session.TotalToolDurationMs);
         command.Parameters.AddWithValue("$max_tool_duration_ms", session.MaxToolDurationMs);
         command.Parameters.AddWithValue("$last_finish_reason", (object?)session.LastFinishReason ?? DBNull.Value);
@@ -644,6 +690,9 @@ public sealed class TraceStore
             ContextCompactionCount = session.ContextCompactionCount,
             ThinkingCount = session.ThinkingCount,
             FinalSystemPrompt = session.FinalSystemPrompt,
+            SystemPromptHash = session.SystemPromptHash,
+            ToolSchemaHash = session.ToolSchemaHash,
+            PromptDriftCount = session.PromptDriftCount,
             FirstUserRequest = session.FirstUserRequest,
             LastFinishReason = session.LastFinishReason,
             SessionMetadataCapturedAt = session.SessionMetadataCapturedAt
@@ -652,6 +701,8 @@ public sealed class TraceStore
         clone.LoadAggregateSnapshot(
             session.TotalInputTokens,
             session.TotalOutputTokens,
+            session.TotalCachedInputTokens,
+            session.TotalReasoningOutputTokens,
             session.TotalToolDurationMs,
             session.MaxToolDurationMs);
         foreach (var evt in session.Events)
@@ -686,6 +737,16 @@ public sealed class TraceSummary
     public long TotalInputTokens { get; init; }
 
     public long TotalOutputTokens { get; init; }
+
+    public long TotalCachedInputTokens { get; init; }
+
+    public long TotalNonCachedInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens);
+
+    public long TotalReasoningOutputTokens { get; init; }
+
+    public double CacheHitRate => TotalInputTokens > 0
+        ? TotalCachedInputTokens / (double)TotalInputTokens
+        : 0;
 
     public long TotalTokens { get; init; }
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using DotCraft.Tools;
@@ -28,12 +29,19 @@ public sealed class TraceCollector(TraceStore store)
     {
         var normalizedToolNames = NormalizeToolNames(toolNames);
         var existing = store.GetSession(sessionKey);
+        var systemPromptHash = ComputeHash(finalSystemPrompt);
+        var toolSchemaHash = ComputeHash(string.Join("\n", normalizedToolNames));
+        var promptDriftDetected =
+            (!string.IsNullOrWhiteSpace(existing?.SystemPromptHash)
+             && !string.Equals(existing.SystemPromptHash, systemPromptHash, StringComparison.Ordinal))
+            || (!string.IsNullOrWhiteSpace(existing?.ToolSchemaHash)
+                && !string.Equals(existing.ToolSchemaHash, toolSchemaHash, StringComparison.Ordinal));
         var hasPrompt = !string.IsNullOrWhiteSpace(existing?.FinalSystemPrompt);
         var hasTools = existing is { ToolNames.Count: > 0 };
 
-        store.UpsertSessionMetadata(sessionKey, finalSystemPrompt, normalizedToolNames);
+        store.UpsertSessionMetadata(sessionKey, finalSystemPrompt, normalizedToolNames, systemPromptHash, toolSchemaHash);
 
-        if (hasPrompt && hasTools)
+        if (hasPrompt && hasTools && !promptDriftDetected)
             return;
 
         store.Record(new TraceEvent
@@ -41,7 +49,10 @@ public sealed class TraceCollector(TraceStore store)
             Type = TraceEventType.SessionMetadata,
             SessionKey = sessionKey,
             FinalSystemPrompt = finalSystemPrompt,
-            ToolNames = normalizedToolNames
+            ToolNames = normalizedToolNames,
+            SystemPromptHash = systemPromptHash,
+            ToolSchemaHash = toolSchemaHash,
+            PromptDriftDetected = promptDriftDetected
         });
     }
 
@@ -136,15 +147,20 @@ public sealed class TraceCollector(TraceStore store)
     }
 
     public void RecordTokenUsage(string sessionKey, long inputTokens, long outputTokens)
+        => RecordTokenUsage(sessionKey, new TokenUsageSnapshot(inputTokens, outputTokens, 0, 0));
+
+    public void RecordTokenUsage(string sessionKey, TokenUsageSnapshot usage)
     {
-        var total = inputTokens + outputTokens;
         store.Record(new TraceEvent
         {
             Type = TraceEventType.TokenUsage,
             SessionKey = sessionKey,
-            InputTokens = inputTokens,
-            OutputTokens = outputTokens,
-            TotalTokens = total
+            InputTokens = usage.InputTokens,
+            OutputTokens = usage.OutputTokens,
+            CachedInputTokens = usage.CachedInputTokens,
+            NonCachedInputTokens = usage.NonCachedInputTokens,
+            ReasoningOutputTokens = usage.ReasoningOutputTokens,
+            TotalTokens = usage.TotalTokens
         });
     }
 
@@ -221,7 +237,17 @@ public sealed class TraceCollector(TraceStore store)
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => t.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static string? ComputeHash(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var bytes = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }
 

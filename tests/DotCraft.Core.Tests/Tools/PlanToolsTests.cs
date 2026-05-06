@@ -175,6 +175,53 @@ public sealed class PlanToolsTests
         Assert.Equal("", parsed.Content);
     }
 
+    [Fact]
+    public async Task TodoWrite_ReturnsStableShortResult()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"plan_tools_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var sessionId = "thread_001";
+            await new ThreadStore(tempDir).SaveThreadAsync(new SessionThread
+            {
+                Id = sessionId,
+                WorkspacePath = tempDir,
+                UserId = "user",
+                OriginChannel = "test",
+                Status = ThreadStatus.Active,
+                HistoryMode = HistoryMode.Server,
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastActiveAt = DateTimeOffset.UtcNow
+            });
+            var tools = new PlanTools(new PlanStore(tempDir), () => sessionId);
+
+            var result = await tools.TodoWrite([
+                new TodoWriteInput
+                {
+                    Id = "cache-metrics",
+                    Content = "Expose cache hit rate",
+                    Status = PlanTodoStatus.InProgress
+                }
+            ]);
+
+            Assert.Equal("Plan updated", result);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup; Windows may briefly retain the SQLite file handle.
+            }
+        }
+    }
+
     private static JsonElement GetPropertySchema(JsonElement schema, string propertyName) =>
         schema.GetProperty("properties").GetProperty(propertyName);
 }

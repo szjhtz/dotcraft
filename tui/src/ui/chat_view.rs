@@ -475,34 +475,36 @@ impl ChatView<'_> {
         }
 
         // Result summary (always visible, dimmed, max TOOL_CALL_MAX_LINES).
-        if let Some(result_text) = result {
-            if !result_text.is_empty() {
-                let result_lines: Vec<String> = if let Some(formatted) =
-                    format_result_summary(name, result_text)
-                {
-                    formatted
-                } else {
-                    result_text.lines().map(str::to_string).collect()
-                };
-                let show_count = result_lines.len().min(TOOL_CALL_MAX_LINES);
-                let last_shown = show_count.saturating_sub(1);
-                for (i, line) in result_lines.iter().take(show_count).enumerate() {
-                    let is_last = i == last_shown;
-                    let truncated_suffix = if is_last && result_lines.len() > TOOL_CALL_MAX_LINES {
-                        "…"
-                    } else {
-                        ""
-                    };
-                    let text = truncate(line, width.saturating_sub(8) as usize);
-                    let prefix_str = if is_last && inline {
-                        "    └ "
-                    } else {
-                        "    │ "
-                    };
-                    out.push(Line::from(vec![
-                        Span::styled(prefix_str.to_string(), self.theme.dim),
-                        Span::styled(format!("{text}{truncated_suffix}"), self.theme.dim),
-                    ]));
+        if !is_todo_progress_tool(name) {
+            if let Some(result_text) = result {
+                if !result_text.is_empty() {
+                    let result_lines: Vec<String> =
+                        if let Some(formatted) = format_result_summary(name, result_text) {
+                            formatted
+                        } else {
+                            result_text.lines().map(str::to_string).collect()
+                        };
+                    let show_count = result_lines.len().min(TOOL_CALL_MAX_LINES);
+                    let last_shown = show_count.saturating_sub(1);
+                    for (i, line) in result_lines.iter().take(show_count).enumerate() {
+                        let is_last = i == last_shown;
+                        let truncated_suffix =
+                            if is_last && result_lines.len() > TOOL_CALL_MAX_LINES {
+                                "…"
+                            } else {
+                                ""
+                            };
+                        let text = truncate(line, width.saturating_sub(8) as usize);
+                        let prefix_str = if is_last && inline {
+                            "    └ "
+                        } else {
+                            "    │ "
+                        };
+                        out.push(Line::from(vec![
+                            Span::styled(prefix_str.to_string(), self.theme.dim),
+                            Span::styled(format!("{text}{truncated_suffix}"), self.theme.dim),
+                        ]));
+                    }
                 }
             }
         }
@@ -749,6 +751,10 @@ impl ChatView<'_> {
         }
         out.push(Line::default());
     }
+}
+
+fn is_todo_progress_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "TodoWrite" | "UpdateTodos")
 }
 
 /// Truncate `s` to at most `max_cols` display columns. Appends '…' if truncated.
@@ -1151,5 +1157,29 @@ mod tests {
         let text = plain_text(&out).join("\n");
 
         assert!(text.contains("(2.0s)"));
+    }
+
+    #[test]
+    fn committed_todo_tool_omits_fixed_result_text() {
+        let theme = Theme::default();
+        let strings = load("en");
+        let mut state = AppState::new("workspace".to_string());
+        state.history.push(HistoryEntry::ToolCall {
+            call_id: "todo-call".to_string(),
+            name: "TodoWrite".to_string(),
+            args: r#"{"merge":false,"todos":[{"id":"t1","content":"Stabilize prompt cache","status":"pending"}]}"#.to_string(),
+            result: Some("Plan updated".to_string()),
+            success: true,
+            duration: Some(Duration::from_millis(80)),
+        });
+
+        let view = ChatView::new(&state, &theme, &strings);
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let entry = state.history.first().expect("tool history exists");
+        view.render_history_entry(entry, 80, &mut out);
+        let text = plain_text(&out).join("\n");
+
+        assert!(text.contains("Create to-do Stabilize prompt cache"));
+        assert!(!text.contains("Plan updated"));
     }
 }

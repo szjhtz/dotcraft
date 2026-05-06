@@ -167,6 +167,55 @@ public sealed class TracingChatClientTests
         }
     }
 
+    [Fact]
+    public async Task StreamingUsage_RecordsCachedInputTokens()
+    {
+        var store = await RunStreamingAsync([
+            new ChatResponseUpdate(ChatRole.Assistant, [
+                new UsageContent(new UsageDetails
+                {
+                    InputTokenCount = 100,
+                    OutputTokenCount = 20,
+                    CachedInputTokenCount = 64,
+                    ReasoningTokenCount = 7
+                })
+            ])
+        ], "trace-cached");
+
+        var usage = Assert.Single(EventsOfType(store, "trace-cached", TraceEventType.TokenUsage));
+        var session = store.GetSession("trace-cached");
+
+        Assert.Equal(100, usage.InputTokens);
+        Assert.Equal(20, usage.OutputTokens);
+        Assert.Equal(64, usage.CachedInputTokens);
+        Assert.Equal(36, usage.NonCachedInputTokens);
+        Assert.Equal(7, usage.ReasoningOutputTokens);
+        Assert.Equal(64, session?.TotalCachedInputTokens);
+        Assert.Equal(0.64, session?.CacheHitRate);
+    }
+
+    [Fact]
+    public void TokenUsageExtractor_ReadsProviderRawCachedTokenShapes()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+            {
+              "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": { "cached_tokens": 72 },
+                "output_tokens": 9,
+                "output_tokens_details": { "reasoning_tokens": 3 }
+              }
+            }
+            """);
+
+        var usage = TokenUsageExtractor.FromUsageDetails(null, rawRepresentation: doc.RootElement);
+
+        Assert.Equal(100, usage.InputTokens);
+        Assert.Equal(9, usage.OutputTokens);
+        Assert.Equal(72, usage.CachedInputTokens);
+        Assert.Equal(3, usage.ReasoningOutputTokens);
+    }
+
     private static async Task<TraceStore> RunStreamingAsync(
         ChatResponseUpdate[] updates,
         string sessionKey,

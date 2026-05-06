@@ -202,7 +202,9 @@ public sealed class StateBackedStoreTests : IDisposable
             SessionKey = "thread-1",
             ThreadId = "thread-1",
             InputTokens = 3,
-            OutputTokens = 5
+            OutputTokens = 5,
+            CachedInputTokens = 1,
+            ReasoningOutputTokens = 2
         });
         writer.Record(new TokenUsageRecord
         {
@@ -217,7 +219,9 @@ public sealed class StateBackedStoreTests : IDisposable
             SessionKey = "thread-2",
             ThreadId = "thread-2",
             InputTokens = 7,
-            OutputTokens = 11
+            OutputTokens = 11,
+            CachedInputTokens = 4,
+            ReasoningOutputTokens = 3
         });
 
         var reader = new TokenUsageStore(_tracingPath, stateRuntime: _stateRuntime);
@@ -225,6 +229,10 @@ public sealed class StateBackedStoreTests : IDisposable
         var summary = Assert.Single(reader.GetSourceSummaries());
         Assert.Equal("qq", summary.SourceId);
         Assert.Equal(26, summary.TotalTokens);
+        Assert.Equal(5, summary.TotalCachedInputTokens);
+        Assert.Equal(5, summary.TotalNonCachedInputTokens);
+        Assert.Equal(5, summary.TotalReasoningOutputTokens);
+        Assert.Equal(0.5, summary.CacheHitRate);
         Assert.Equal(2, summary.RequestCount);
         Assert.Equal(2, summary.SubjectCount);
         Assert.Equal(1, summary.ContextCount);
@@ -236,6 +244,7 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal("42", context.Id);
         Assert.Equal("Team", context.Label);
         Assert.Equal(1, context.RelatedSubjectCount);
+        Assert.Equal(4, context.TotalCachedInputTokens);
     }
 
     [Fact]
@@ -350,8 +359,9 @@ public sealed class StateBackedStoreTests : IDisposable
                 SubjectKind = TokenUsageSubjectKinds.User,
                 SubjectId = "u1",
                 SubjectLabel = "Alice",
-                InputTokens = 3,
-                OutputTokens = 5
+            InputTokens = 3,
+            OutputTokens = 5,
+            CachedInputTokens = 1
             }),
             JsonSerializer.Serialize(new TokenUsageRecord
             {
@@ -365,7 +375,8 @@ public sealed class StateBackedStoreTests : IDisposable
                 ContextId = "g1",
                 ContextLabel = "Team",
                 InputTokens = 7,
-                OutputTokens = 11
+                OutputTokens = 11,
+                CachedInputTokens = 6
             })
         ]);
 
@@ -380,6 +391,8 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal(2, summary.SubjectCount);
         Assert.Equal(1, summary.ContextCount);
         Assert.Equal(26, summary.TotalTokens);
+        Assert.Equal(7, summary.TotalCachedInputTokens);
+        Assert.Equal(3, summary.TotalNonCachedInputTokens);
 
         var subjectIds = store.GetSubjectBreakdown("qq").Select(entry => entry.Id).OrderBy(id => id).ToArray();
         Assert.Equal(["u1", "u2"], subjectIds);

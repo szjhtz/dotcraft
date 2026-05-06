@@ -1140,7 +1140,7 @@ describe('ToolCallCard todo rendering safety', () => {
         merge: false,
         todos: [{ id: 't1', content: 'Next step is ABCDEFGHIJKLMNOPQRSTUVWXYZ', status: 'pending' }]
       },
-      result: 'Created task list with 1 item(s).',
+      result: 'Plan updated',
       success: true,
       createdAt: new Date().toISOString()
     }
@@ -1148,6 +1148,10 @@ describe('ToolCallCard todo rendering safety', () => {
     renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
     expect(screen.getByText(/Create to-do/)).toBeInTheDocument()
+    expect(document.querySelector('[data-testid="tool-disclosure-icon"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Create to-do/ }))
+    expect(screen.queryByTestId('tool-expanded-content')).toBeNull()
+    expect(screen.queryByText('Plan updated')).toBeNull()
   })
 
   it('renders UpdateTodos fallback label when plan is unavailable', () => {
@@ -1160,7 +1164,7 @@ describe('ToolCallCard todo rendering safety', () => {
       arguments: {
         updates: [{ id: 't1', status: 'completed' }]
       },
-      result: 'Updated plan tasks',
+      result: 'Plan updated',
       success: true,
       createdAt: new Date().toISOString()
     }
@@ -1168,6 +1172,10 @@ describe('ToolCallCard todo rendering safety', () => {
     renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
     expect(screen.getByText('Updated to-do')).toBeInTheDocument()
+    expect(document.querySelector('[data-testid="tool-disclosure-icon"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Updated to-do' }))
+    expect(screen.queryByTestId('tool-expanded-content')).toBeNull()
+    expect(screen.queryByText('Plan updated')).toBeNull()
   })
 
   it('does not throw when plan todo ids are non-string values', () => {
@@ -1186,7 +1194,7 @@ describe('ToolCallCard todo rendering safety', () => {
       arguments: {
         updates: [{ id: '123', status: 'in_progress' }]
       },
-      result: 'Updated plan tasks',
+      result: 'Plan updated',
       success: true,
       createdAt: new Date().toISOString()
     }
@@ -1194,6 +1202,10 @@ describe('ToolCallCard todo rendering safety', () => {
     renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
     expect(screen.getByText('Started to-do')).toBeInTheDocument()
+    expect(document.querySelector('[data-testid="tool-disclosure-icon"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Started to-do' }))
+    expect(screen.queryByTestId('tool-expanded-content')).toBeNull()
+    expect(screen.queryByText('Plan updated')).toBeNull()
   })
 })
 

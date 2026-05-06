@@ -144,10 +144,9 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
 
         if (response.Usage != null)
         {
-            var input = response.Usage.InputTokenCount ?? 0;
-            var output = response.Usage.OutputTokenCount ?? 0;
-            if (input > 0 || output > 0)
-                collector.RecordTokenUsage(sessionKey, input, output);
+            var usage = TokenUsageExtractor.FromResponse(response);
+            if (usage.InputTokens > 0 || usage.OutputTokens > 0)
+                collector.RecordTokenUsage(sessionKey, usage);
         }
 
         return response;
@@ -170,7 +169,7 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
         DateTimeOffset? thinkingStartedAt = null;
         DateTimeOffset? responseStartedAt = null;
         ChatResponseUpdate? responseLastUpdate = null;
-        long inputTokens = 0, outputTokens = 0;
+        var tokenUsage = new TokenUsageSnapshot();
 
         void FlushThinking()
         {
@@ -316,10 +315,7 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
                     }
                     case UsageContent usage:
                     {
-                        if (usage.Details.InputTokenCount.HasValue)
-                            inputTokens = usage.Details.InputTokenCount.Value;
-                        if (usage.Details.OutputTokenCount.HasValue)
-                            outputTokens = usage.Details.OutputTokenCount.Value;
+                        tokenUsage = TokenUsageExtractor.FromUsageContent(usage);
                         break;
                     }
                 }
@@ -333,8 +329,8 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
 
         FlushPendingSegments(includeResponseFinishReason: true);
 
-        if (inputTokens > 0 || outputTokens > 0)
-            collector.RecordTokenUsage(sessionKey, inputTokens, outputTokens);
+        if (tokenUsage.InputTokens > 0 || tokenUsage.OutputTokens > 0)
+            collector.RecordTokenUsage(sessionKey, tokenUsage);
     }
 
     private void RecordRequestIfFirst(string sessionKey, IList<ChatMessage> messages, SessionCallState state)

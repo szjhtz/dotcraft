@@ -94,6 +94,10 @@ public static class DashBoardMiddleware
                     lastActivityAt = s.LastActivityAt.ToString("o"),
                     s.TotalInputTokens,
                     s.TotalOutputTokens,
+                    s.TotalCachedInputTokens,
+                    s.TotalNonCachedInputTokens,
+                    s.TotalReasoningOutputTokens,
+                    s.CacheHitRate,
                     totalTokens = s.TotalInputTokens + s.TotalOutputTokens,
                     s.RequestCount,
                     s.ResponseCount,
@@ -105,6 +109,9 @@ public static class DashBoardMiddleware
                     maxToolDurationMs = s.MaxToolDurationMs,
                     firstUserRequest = s.FirstUserRequest,
                     finalSystemPrompt = s.FinalSystemPrompt,
+                    systemPromptHash = s.SystemPromptHash,
+                    toolSchemaHash = s.ToolSchemaHash,
+                    promptDriftCount = s.PromptDriftCount,
                     toolNames = s.ToolNames,
                     lastFinishReason = s.LastFinishReason,
                     rootThreadId = descriptor?.RootThreadId,
@@ -311,6 +318,10 @@ public static class DashBoardMiddleware
                     requestCount = summary.RequestCount,
                     totalInputTokens = summary.TotalInputTokens,
                     totalOutputTokens = summary.TotalOutputTokens,
+                    totalCachedInputTokens = summary.TotalCachedInputTokens,
+                    totalNonCachedInputTokens = summary.TotalNonCachedInputTokens,
+                    totalReasoningOutputTokens = summary.TotalReasoningOutputTokens,
+                    cacheHitRate = summary.CacheHitRate,
                     totalTokens = summary.TotalTokens,
                     lastActiveAt = summary.LastActiveAt.ToString("o")
                 });
@@ -328,6 +339,10 @@ public static class DashBoardMiddleware
                     relatedSubjectCount = entry.RelatedSubjectCount,
                     totalInputTokens = entry.TotalInputTokens,
                     totalOutputTokens = entry.TotalOutputTokens,
+                    totalCachedInputTokens = entry.TotalCachedInputTokens,
+                    totalNonCachedInputTokens = entry.TotalNonCachedInputTokens,
+                    totalReasoningOutputTokens = entry.TotalReasoningOutputTokens,
+                    cacheHitRate = entry.CacheHitRate,
                     totalTokens = entry.TotalTokens,
                     lastActiveAt = entry.LastActiveAt.ToString("o")
                 });
@@ -345,6 +360,10 @@ public static class DashBoardMiddleware
                     relatedSubjectCount = entry.RelatedSubjectCount,
                     totalInputTokens = entry.TotalInputTokens,
                     totalOutputTokens = entry.TotalOutputTokens,
+                    totalCachedInputTokens = entry.TotalCachedInputTokens,
+                    totalNonCachedInputTokens = entry.TotalNonCachedInputTokens,
+                    totalReasoningOutputTokens = entry.TotalReasoningOutputTokens,
+                    cacheHitRate = entry.CacheHitRate,
                     totalTokens = entry.TotalTokens,
                     lastActiveAt = entry.LastActiveAt.ToString("o")
                 });

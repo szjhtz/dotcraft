@@ -174,7 +174,8 @@ public sealed class AgentFactory : IAsyncDisposable
     {
         var tools = _toolProviders
             .OrderBy(p => p.Priority)
-            .SelectMany(p => p.CreateTools(toolContext))
+            .ThenBy(p => p.GetType().FullName, StringComparer.Ordinal)
+            .SelectMany(p => SortTools(p.CreateTools(toolContext)))
             .ToList();
 
         // Apply global tool filtering if configured
@@ -191,7 +192,7 @@ public sealed class AgentFactory : IAsyncDisposable
         tools = ApplyHooks(tools);
 
         tools = ApplyResultLimits(tools, toolContext.WorkspacePath);
-        tools = ToolSchemaSanitizer.SanitizeTools(tools);
+        tools = SortTools(ToolSchemaSanitizer.SanitizeTools(tools));
 
         return tools;
     }
@@ -205,7 +206,8 @@ public sealed class AgentFactory : IAsyncDisposable
     {
         var tools = providers
             .OrderBy(p => p.Priority)
-            .SelectMany(p => p.CreateTools(toolContext))
+            .ThenBy(p => p.GetType().FullName, StringComparer.Ordinal)
+            .SelectMany(p => SortTools(p.CreateTools(toolContext)))
             .ToList();
 
         if (_globalEnabledToolNames.Count > 0)
@@ -220,7 +222,7 @@ public sealed class AgentFactory : IAsyncDisposable
         tools = ApplyHooks(tools);
 
         tools = ApplyResultLimits(tools, toolContext.WorkspacePath);
-        tools = ToolSchemaSanitizer.SanitizeTools(tools);
+        tools = SortTools(ToolSchemaSanitizer.SanitizeTools(tools));
 
         return tools;
     }
@@ -258,7 +260,7 @@ public sealed class AgentFactory : IAsyncDisposable
         }
 
         tools = ApplyResultLimits(tools, toolContext.WorkspacePath);
-        tools = ToolSchemaSanitizer.SanitizeTools(tools);
+        tools = SortTools(ToolSchemaSanitizer.SanitizeTools(tools));
 
         return tools;
     }
@@ -307,7 +309,7 @@ public sealed class AgentFactory : IAsyncDisposable
         ToolProviderContext ctx,
         string? instructions = null)
     {
-        tools = ToolSchemaSanitizer.SanitizeTools(tools);
+        tools = SortTools(ToolSchemaSanitizer.SanitizeTools(tools));
         LastCreatedTools = tools;
 
         var deferredRegistry = ctx.DeferredToolRegistry;
@@ -372,6 +374,7 @@ public sealed class AgentFactory : IAsyncDisposable
             {
                 deferredServerNames = ctx.McpClientManager.ToolServerMap.Values
                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
             }
 
@@ -394,11 +397,10 @@ public sealed class AgentFactory : IAsyncDisposable
                     ctx.BotPath,
                     ctx.WorkspacePath,
                     _traceCollector,
-                    () => tools.Select(t => t.Name).ToArray(),
+                    () => tools.Select(t => t.Name).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(),
                     _customCommandLoader,
                     modeManager,
                     _planStore,
-                    () => TracingChatClient.CurrentSessionKey,
                     sandboxEnabled: _config.Tools.Sandbox.Enabled,
                     deferredMcpServerNames: deferredServerNames,
                     subAgentProfilesSection: subAgentProfilesSection,
@@ -532,6 +534,12 @@ public sealed class AgentFactory : IAsyncDisposable
             ? []
             : new HashSet<string>(config.EnabledTools, StringComparer.OrdinalIgnoreCase);
     }
+
+    private static List<AITool> SortTools(IEnumerable<AITool> tools) =>
+        tools
+            .OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(t => t.GetType().FullName, StringComparer.Ordinal)
+            .ToList();
 
     private static List<AITool> DropConflictingPluginFunctions(List<AITool> tools)
     {

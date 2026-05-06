@@ -143,10 +143,11 @@ export const ToolCallCard = memo(function ToolCallCard({
   const isWebFetchTool = toolName === 'WebFetch'
   const isSkillManageTool = toolName === SKILL_MANAGE_TOOL_NAME
   const isSkillViewTool = toolName === SKILL_VIEW_TOOL_NAME
+  const isTodoTool = toolName === 'TodoWrite' || toolName === 'UpdateTodos'
   const isShellTool = isShellToolName(toolName)
   const isStreamingFileTool = FILE_WRITE_TOOLS.has(toolName)
   const autoExpandEligible = isShellTool || isStreamingFileTool
-  const canExpandWhileRunning = !isWebFetchTool && !isSkillManageTool && !isSkillViewTool
+  const canExpandWhileRunning = !isWebFetchTool && !isSkillManageTool && !isSkillViewTool && !isTodoTool
   const streamingDisplay = getStreamingToolDisplay(
     toolName,
     item.argumentsPreview ?? null,
@@ -200,7 +201,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const fileDiff = FILE_WRITE_TOOLS.has(toolName) ? itemDiffs.get(item.id) : undefined
   const streamingFileDiff = FILE_WRITE_TOOLS.has(toolName) ? streamingItemDiffs.get(item.id) : undefined
   const skillManageDiff = isSkillManageTool ? buildSkillManageDiff(args, item.result, turnId) : null
-  const canExpandCompleted = !isWebFetchTool && !isSkillManageTool && !isSkillViewTool
+  const canExpandCompleted = !isWebFetchTool && !isSkillManageTool && !isSkillViewTool && !isTodoTool
   const subAgentRunningLabel = formatSubAgentRunningLabel(toolName, args, locale, subAgentLookup)
   const runningBaseLabel = subAgentRunningLabel
     ?? formatRunningToolLabel(

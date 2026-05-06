@@ -26,7 +26,11 @@ public sealed class DeferredToolRegistry
     /// </summary>
     public DeferredToolRegistry(IEnumerable<AITool> deferredTools)
     {
-        _deferredTools = deferredTools.GroupBy(t => t.Name).ToDictionary(g => g.Key, g => g.Last());
+        _deferredTools = deferredTools
+            .GroupBy(t => t.Name, StringComparer.Ordinal)
+            .Select(g => g.Last())
+            .OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(t => t.Name, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -46,11 +50,13 @@ public sealed class DeferredToolRegistry
     /// Used by <c>DynamicToolInjectionChatClient</c> to detect newly
     /// activated tools since the last LLM call.
     /// </summary>
-    public IReadOnlySet<string> GetActivatedToolNames()
+    public IReadOnlyList<string> GetActivatedToolNames()
     {
         lock (_lock)
         {
-            return new HashSet<string>(_activatedNames);
+            return _activatedNames
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
     }
 
@@ -79,7 +85,13 @@ public sealed class DeferredToolRegistry
                 scored.Add((tool, score));
         }
 
-        scored.Sort(static (a, b) => b.Score.CompareTo(a.Score));
+        scored.Sort(static (a, b) =>
+        {
+            var score = b.Score.CompareTo(a.Score);
+            return score != 0
+                ? score
+                : string.Compare(a.Tool.Name, b.Tool.Name, StringComparison.OrdinalIgnoreCase);
+        });
 
         var results = new List<ToolSearchResult>(Math.Min(scored.Count, maxResults));
 

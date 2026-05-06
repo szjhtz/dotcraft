@@ -53,6 +53,16 @@ public sealed class TokenUsageRecord
 
     public long OutputTokens { get; init; }
 
+    public long CachedInputTokens { get; init; }
+
+    public long NonCachedInputTokens => Math.Max(0, InputTokens - CachedInputTokens);
+
+    public long ReasoningOutputTokens { get; init; }
+
+    public double CacheHitRate => InputTokens > 0
+        ? CachedInputTokens / (double)InputTokens
+        : 0;
+
     public long TotalTokens => InputTokens + OutputTokens;
 }
 
@@ -76,6 +86,16 @@ public sealed class UsageSourceSummary
 
     public long TotalOutputTokens { get; init; }
 
+    public long TotalCachedInputTokens { get; init; }
+
+    public long TotalNonCachedInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens);
+
+    public long TotalReasoningOutputTokens { get; init; }
+
+    public double CacheHitRate => TotalInputTokens > 0
+        ? TotalCachedInputTokens / (double)TotalInputTokens
+        : 0;
+
     public long TotalTokens => TotalInputTokens + TotalOutputTokens;
 
     public DateTimeOffset LastActiveAt { get; init; }
@@ -96,6 +116,16 @@ public sealed class UsageBreakdownEntry
     public long TotalInputTokens { get; init; }
 
     public long TotalOutputTokens { get; init; }
+
+    public long TotalCachedInputTokens { get; init; }
+
+    public long TotalNonCachedInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens);
+
+    public long TotalReasoningOutputTokens { get; init; }
+
+    public double CacheHitRate => TotalInputTokens > 0
+        ? TotalCachedInputTokens / (double)TotalInputTokens
+        : 0;
 
     public long TotalTokens => TotalInputTokens + TotalOutputTokens;
 
@@ -275,6 +305,8 @@ public sealed class TokenUsageStore
                 COUNT(*) AS request_count,
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+                COALESCE(SUM(cached_input_tokens), 0) AS total_cached_input_tokens,
+                COALESCE(SUM(reasoning_output_tokens), 0) AS total_reasoning_output_tokens,
                 MAX(timestamp) AS last_active_at,
                 COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens
             FROM dashboard_usage_records
@@ -300,7 +332,9 @@ public sealed class TokenUsageStore
                 RequestCount = reader.GetInt32(6),
                 TotalInputTokens = reader.GetInt64(7),
                 TotalOutputTokens = reader.GetInt64(8),
-                LastActiveAt = DateTimeOffset.Parse(reader.GetString(9))
+                TotalCachedInputTokens = reader.GetInt64(9),
+                TotalReasoningOutputTokens = reader.GetInt64(10),
+                LastActiveAt = DateTimeOffset.Parse(reader.GetString(11))
             });
         }
 
@@ -322,6 +356,8 @@ public sealed class TokenUsageStore
                 COUNT(*) AS request_count,
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+                COALESCE(SUM(cached_input_tokens), 0) AS total_cached_input_tokens,
+                COALESCE(SUM(reasoning_output_tokens), 0) AS total_reasoning_output_tokens,
                 MAX(timestamp) AS last_active_at,
                 COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens
             FROM dashboard_usage_records
@@ -343,7 +379,9 @@ public sealed class TokenUsageStore
                 RequestCount = reader.GetInt32(3),
                 TotalInputTokens = reader.GetInt64(4),
                 TotalOutputTokens = reader.GetInt64(5),
-                LastActiveAt = DateTimeOffset.Parse(reader.GetString(6))
+                TotalCachedInputTokens = reader.GetInt64(6),
+                TotalReasoningOutputTokens = reader.GetInt64(7),
+                LastActiveAt = DateTimeOffset.Parse(reader.GetString(8))
             });
         }
 
@@ -366,6 +404,8 @@ public sealed class TokenUsageStore
                 COUNT(DISTINCT subject_id) AS related_subject_count,
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+                COALESCE(SUM(cached_input_tokens), 0) AS total_cached_input_tokens,
+                COALESCE(SUM(reasoning_output_tokens), 0) AS total_reasoning_output_tokens,
                 MAX(timestamp) AS last_active_at,
                 COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS total_tokens
             FROM dashboard_usage_records
@@ -389,7 +429,9 @@ public sealed class TokenUsageStore
                 RelatedSubjectCount = reader.GetInt32(4),
                 TotalInputTokens = reader.GetInt64(5),
                 TotalOutputTokens = reader.GetInt64(6),
-                LastActiveAt = DateTimeOffset.Parse(reader.GetString(7))
+                TotalCachedInputTokens = reader.GetInt64(7),
+                TotalReasoningOutputTokens = reader.GetInt64(8),
+                LastActiveAt = DateTimeOffset.Parse(reader.GetString(9))
             });
         }
 
@@ -418,7 +460,9 @@ public sealed class TokenUsageStore
                     thread_id,
                     session_key,
                     input_tokens,
-                    output_tokens
+                    output_tokens,
+                    cached_input_tokens,
+                    reasoning_output_tokens
                 ) VALUES (
                     $timestamp,
                     $source_id,
@@ -432,7 +476,9 @@ public sealed class TokenUsageStore
                     $thread_id,
                     $session_key,
                     $input_tokens,
-                    $output_tokens
+                    $output_tokens,
+                    $cached_input_tokens,
+                    $reasoning_output_tokens
                 )
                 """;
             command.Parameters.AddWithValue("$timestamp", record.Timestamp.UtcDateTime.ToString("O"));
@@ -448,6 +494,8 @@ public sealed class TokenUsageStore
             command.Parameters.AddWithValue("$session_key", (object?)record.SessionKey ?? DBNull.Value);
             command.Parameters.AddWithValue("$input_tokens", record.InputTokens);
             command.Parameters.AddWithValue("$output_tokens", record.OutputTokens);
+            command.Parameters.AddWithValue("$cached_input_tokens", record.CachedInputTokens);
+            command.Parameters.AddWithValue("$reasoning_output_tokens", record.ReasoningOutputTokens);
             command.ExecuteNonQuery();
         }
         catch
@@ -498,6 +546,8 @@ public sealed class TokenUsageStore
                     RequestCount = source.RequestCount,
                     TotalInputTokens = source.TotalInputTokens,
                     TotalOutputTokens = source.TotalOutputTokens,
+                    TotalCachedInputTokens = source.TotalCachedInputTokens,
+                    TotalReasoningOutputTokens = source.TotalReasoningOutputTokens,
                     LastActiveAt = source.LastActiveAt
                 })
                 .OrderByDescending(summary => summary.TotalTokens)
@@ -525,6 +575,8 @@ public sealed class TokenUsageStore
                     RequestCount = entry.RequestCount,
                     TotalInputTokens = entry.TotalInputTokens,
                     TotalOutputTokens = entry.TotalOutputTokens,
+                    TotalCachedInputTokens = entry.TotalCachedInputTokens,
+                    TotalReasoningOutputTokens = entry.TotalReasoningOutputTokens,
                     LastActiveAt = entry.LastActiveAt
                 })
                 .OrderByDescending(entry => entry.TotalTokens)
@@ -553,6 +605,8 @@ public sealed class TokenUsageStore
                     RelatedSubjectCount = entry.RelatedSubjectIds.Count,
                     TotalInputTokens = entry.TotalInputTokens,
                     TotalOutputTokens = entry.TotalOutputTokens,
+                    TotalCachedInputTokens = entry.TotalCachedInputTokens,
+                    TotalReasoningOutputTokens = entry.TotalReasoningOutputTokens,
                     LastActiveAt = entry.LastActiveAt
                 })
                 .OrderByDescending(entry => entry.TotalTokens)
@@ -578,6 +632,8 @@ public sealed class TokenUsageStore
             source.RequestCount++;
             source.TotalInputTokens += record.InputTokens;
             source.TotalOutputTokens += record.OutputTokens;
+            source.TotalCachedInputTokens += record.CachedInputTokens;
+            source.TotalReasoningOutputTokens += record.ReasoningOutputTokens;
             if (record.Timestamp > source.LastActiveAt)
                 source.LastActiveAt = record.Timestamp;
 
@@ -589,7 +645,13 @@ public sealed class TokenUsageStore
                 source.Subjects[subjectKey] = subject;
             }
 
-            subject.Add(record.SubjectLabel, record.Timestamp, record.InputTokens, record.OutputTokens);
+            subject.Add(
+                record.SubjectLabel,
+                record.Timestamp,
+                record.InputTokens,
+                record.OutputTokens,
+                record.CachedInputTokens,
+                record.ReasoningOutputTokens);
 
             if (string.IsNullOrWhiteSpace(record.ContextId))
                 return;
@@ -607,7 +669,14 @@ public sealed class TokenUsageStore
                 source.Contexts[contextKey] = context;
             }
 
-            context.Add(record.ContextLabel, record.SubjectId, record.Timestamp, record.InputTokens, record.OutputTokens);
+            context.Add(
+                record.ContextLabel,
+                record.SubjectId,
+                record.Timestamp,
+                record.InputTokens,
+                record.OutputTokens,
+                record.CachedInputTokens,
+                record.ReasoningOutputTokens);
         }
     }
 
@@ -705,6 +774,10 @@ public sealed class TokenUsageStore
 
         public long TotalOutputTokens { get; set; }
 
+        public long TotalCachedInputTokens { get; set; }
+
+        public long TotalReasoningOutputTokens { get; set; }
+
         public DateTimeOffset LastActiveAt { get; set; } = DateTimeOffset.MinValue;
     }
 
@@ -722,9 +795,19 @@ public sealed class TokenUsageStore
 
         public long TotalOutputTokens { get; private set; }
 
+        public long TotalCachedInputTokens { get; private set; }
+
+        public long TotalReasoningOutputTokens { get; private set; }
+
         public DateTimeOffset LastActiveAt { get; private set; } = DateTimeOffset.MinValue;
 
-        public void Add(string? label, DateTimeOffset timestamp, long inputTokens, long outputTokens)
+        public void Add(
+            string? label,
+            DateTimeOffset timestamp,
+            long inputTokens,
+            long outputTokens,
+            long cachedInputTokens,
+            long reasoningOutputTokens)
         {
             if (string.IsNullOrWhiteSpace(Label) && !string.IsNullOrWhiteSpace(label))
                 Label = label;
@@ -732,6 +815,8 @@ public sealed class TokenUsageStore
             RequestCount++;
             TotalInputTokens += inputTokens;
             TotalOutputTokens += outputTokens;
+            TotalCachedInputTokens += cachedInputTokens;
+            TotalReasoningOutputTokens += reasoningOutputTokens;
             if (timestamp > LastActiveAt)
                 LastActiveAt = timestamp;
         }
@@ -742,9 +827,16 @@ public sealed class TokenUsageStore
     {
         public HashSet<string> RelatedSubjectIds { get; } = new(StringComparer.Ordinal);
 
-        public void Add(string? label, string subjectId, DateTimeOffset timestamp, long inputTokens, long outputTokens)
+        public void Add(
+            string? label,
+            string subjectId,
+            DateTimeOffset timestamp,
+            long inputTokens,
+            long outputTokens,
+            long cachedInputTokens,
+            long reasoningOutputTokens)
         {
-            base.Add(label, timestamp, inputTokens, outputTokens);
+            base.Add(label, timestamp, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens);
             RelatedSubjectIds.Add(subjectId);
         }
     }

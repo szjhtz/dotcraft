@@ -120,6 +120,20 @@ public sealed class ToolSchemaSanitizerTests
     }
 
     [Fact]
+    public void DeferredRegistry_ActivatesToolsInDeterministicNameOrder()
+    {
+        var beta = AIFunctionFactory.Create(NullableStringTool, name: "BetaTool");
+        var alpha = AIFunctionFactory.Create(NullableStringTool, name: "AlphaTool");
+        var registry = new DeferredToolRegistry([beta, alpha]);
+
+        var results = registry.SearchAndActivate("Tool", maxResults: 10);
+
+        Assert.Equal(["AlphaTool", "BetaTool"], results.Select(r => r.Name).ToArray());
+        Assert.Equal(["AlphaTool", "BetaTool"], registry.GetActivatedToolNames().ToArray());
+        Assert.Equal(["AlphaTool", "BetaTool"], registry.ActivatedToolsList.Select(t => t.Name).ToArray());
+    }
+
+    [Fact]
     public async Task DynamicToolInjection_InjectsSanitizedActivatedTools()
     {
         var rawTool = AIFunctionFactory.Create(NullableStringTool, name: "NullableStringTool");

@@ -17,7 +17,6 @@ public sealed class PromptBuilder(
     CustomCommandLoader? customCommandLoader = null,
     AgentModeManager? modeManager = null,
     PlanStore? planStore = null,
-    Func<string?>? sessionIdProvider = null,
     bool sandboxEnabled = false,
     IReadOnlyList<string>? deferredMcpServerNames = null,
     string? subAgentProfilesSection = null,
@@ -439,51 +438,26 @@ When using the Exec tool, write standard Bash commands.
 
     private string? GetModePromptSection(AgentModeManager mm)
     {
-        var existingPlan = LoadCurrentPlan();
-
         if (mm.JustSwitchedFromPlan)
         {
             mm.AcknowledgeTransition();
-            if (existingPlan != null)
-                return AgentSwitchPrompt + $"\n\n## Plan to Execute\n\n{existingPlan}";
             return AgentSwitchPrompt;
         }
 
         if (mm.CurrentMode == AgentMode.Plan)
         {
-            if (existingPlan != null)
-                return PlanModePrompt + $"\n\nA plan file already exists for this session. Review and refine it:\n\n{existingPlan}";
             return PlanModePrompt;
         }
 
-        // Agent mode with an active plan: inject both todo guidance and plan tracking.
-        // AgentTodoPrompt is only included when planStore is available (i.e. TodoWrite tool exists).
-        if (mm.CurrentMode == AgentMode.Agent && existingPlan != null)
-        {
-            var prefix = planStore != null ? AgentTodoPrompt + "\n\n" : "";
-            return prefix + AgentPlanTrackingPrompt + $"\n\n## Current Plan\n\n{existingPlan}";
-        }
-
-        // Agent mode without a plan: inject todo guidance only when the tool is available.
+        // Todo state is UI/session state. Keep the tool guidance stable and do not
+        // render the current todo list into instructions, otherwise every todo
+        // update invalidates the provider prompt cache prefix.
         if (mm.CurrentMode == AgentMode.Agent && planStore != null)
         {
             return AgentTodoPrompt;
         }
 
         return null;
-    }
-
-    private string? LoadCurrentPlan()
-    {
-        if (planStore == null || sessionIdProvider == null)
-            return null;
-
-        var sessionId = sessionIdProvider();
-        if (string.IsNullOrEmpty(sessionId))
-            return null;
-
-        var structured = planStore.LoadStructuredPlanAsync(sessionId).GetAwaiter().GetResult();
-        return structured == null ? null : PlanStore.RenderPlanMarkdown(structured);
     }
 
     private const string AgentTodoPrompt =

@@ -59,6 +59,7 @@ public sealed class AcpBridgeHandler(
     private bool _initialized;
     private readonly ConcurrentDictionary<string, string?> _activeTurnIds = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activePrompts = new();
+    private readonly ConcurrentDictionary<string, string> _activeToolNames = new();
 
     private readonly AppServerProcess? _appServerProcess = appServerProcess;
 
@@ -377,6 +378,26 @@ public sealed class AcpBridgeHandler(
             return agentMsg.Text;
         return null;
     }
+
+    internal static bool IsTodoProgressTool(string? toolName) =>
+        string.Equals(toolName, "TodoWrite", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(toolName, "UpdateTodos", StringComparison.OrdinalIgnoreCase);
+
+    internal static List<AcpContentBlock>? BuildToolResultContent(
+        string? toolName,
+        object? resultObj,
+        bool success)
+    {
+        if (success && IsTodoProgressTool(toolName))
+            return null;
+
+        var preview = ImageContentSanitizingChatClient.DescribeResult(resultObj);
+        if (preview.Length > 500) preview = preview[..500] + "...";
+        return new List<AcpContentBlock> { new() { Type = "text", Text = preview } };
+    }
+
+    private static string ToolCallKey(string sessionId, string callId) =>
+        $"{sessionId}\u001F{callId}";
 
     private async Task HandleSessionListAsync(JsonRpcRequest request, CancellationToken ct)
     {
@@ -815,6 +836,8 @@ public sealed class AcpBridgeHandler(
                 if (!item.TryGetProperty("payload", out var payload)) break;
                 var toolName = payload.TryGetProperty("toolName", out var tn) ? tn.GetString() ?? "" : "";
                 var callId = payload.TryGetProperty("callId", out var ci) ? ci.GetString() ?? "" : "";
+                if (!string.IsNullOrEmpty(callId))
+                    _activeToolNames[ToolCallKey(sessionId, callId)] = toolName;
                 string? argsStr = null;
                 if (payload.TryGetProperty("arguments", out var args) && args.ValueKind == JsonValueKind.Object)
                 {
@@ -876,10 +899,15 @@ public sealed class AcpBridgeHandler(
                         : JsonSerializer.Deserialize<object>(r.GetRawText(), JsonOptions);
                 }
 
-                var preview = ImageContentSanitizingChatClient.DescribeResult(resultObj);
-                if (preview.Length > 500) preview = preview[..500] + "...";
-
                 var success = payload.TryGetProperty("success", out var su) ? su.GetBoolean() : true;
+                var toolName = payload.TryGetProperty("toolName", out var tn) ? tn.GetString() : null;
+                if (!string.IsNullOrEmpty(callId)
+                    && _activeToolNames.TryRemove(ToolCallKey(sessionId, callId), out var trackedToolName)
+                    && string.IsNullOrEmpty(toolName))
+                {
+                    toolName = trackedToolName;
+                }
+                var content = BuildToolResultContent(toolName, resultObj, success);
 
                 acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
                 {
@@ -889,7 +917,7 @@ public sealed class AcpBridgeHandler(
                         SessionUpdate = AcpUpdateKind.ToolCallUpdate,
                         ToolCallId = callId,
                         Status = success ? AcpToolStatus.Completed : AcpToolStatus.Failed,
-                        Content = new List<AcpContentBlock> { new() { Type = "text", Text = preview } }
+                        Content = content
                     }
                 });
                 break;

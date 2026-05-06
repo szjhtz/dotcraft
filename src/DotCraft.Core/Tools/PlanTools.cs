@@ -136,7 +136,7 @@ public sealed class PlanTools(
             await planStore.SaveStructuredPlanAsync(sessionId, plan);
             onPlanUpdated?.Invoke(plan);
             DebugModeService.LogIfEnabled($"[PlanTools] UpdateTodos: Updated {results.Count} task(s) for session {sessionId}");
-            return $"Updated {results.Count} task(s): {string.Join(", ", results)}";
+            return "Plan updated";
         }
         catch (Exception ex)
         {
@@ -266,7 +266,7 @@ public sealed class PlanTools(
 
             var action = merge && existing != null ? "Updated" : "Created";
             DebugModeService.LogIfEnabled($"[PlanTools] TodoWrite: {action} {plan.Todos.Count} task(s) for session {sessionId}");
-            return $"{action} task list with {plan.Todos.Count} item(s).";
+            return "Plan updated";
         }
         catch (Exception ex)
         {

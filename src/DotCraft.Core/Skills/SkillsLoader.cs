@@ -96,7 +96,7 @@ public sealed class SkillsLoader(string workspaceRoot, string? userSkillsPath = 
         // User-owned workspace skills have the highest priority.
         if (Directory.Exists(WorkspaceSkillsPath))
         {
-            foreach (var dir in Directory.GetDirectories(WorkspaceSkillsPath))
+            foreach (var dir in EnumerateSkillDirectories(WorkspaceSkillsPath))
             {
                 var skillFile = Path.Combine(dir, "SKILL.md");
                 if (!File.Exists(skillFile) || File.Exists(Path.Combine(dir, ".builtin")))
@@ -106,12 +106,12 @@ public sealed class SkillsLoader(string workspaceRoot, string? userSkillsPath = 
             }
         }
 
-        foreach (var source in _pluginSkillSources)
+        foreach (var source in _pluginSkillSources.OrderBy(s => s.PluginId, StringComparer.OrdinalIgnoreCase))
         {
             if (!Directory.Exists(source.SkillsPath))
                 continue;
 
-            foreach (var dir in Directory.GetDirectories(source.SkillsPath))
+            foreach (var dir in EnumerateSkillDirectories(source.SkillsPath))
             {
                 var skillFile = Path.Combine(dir, "SKILL.md");
                 if (!File.Exists(skillFile))
@@ -130,7 +130,7 @@ public sealed class SkillsLoader(string workspaceRoot, string? userSkillsPath = 
         // Built-in workspace skills are kept for compatibility and are lower priority than plugin-contained skills.
         if (Directory.Exists(WorkspaceSkillsPath))
         {
-            foreach (var dir in Directory.GetDirectories(WorkspaceSkillsPath))
+            foreach (var dir in EnumerateSkillDirectories(WorkspaceSkillsPath))
             {
                 var skillFile = Path.Combine(dir, "SKILL.md");
                 if (!File.Exists(skillFile) || !File.Exists(Path.Combine(dir, ".builtin")))
@@ -147,7 +147,7 @@ public sealed class SkillsLoader(string workspaceRoot, string? userSkillsPath = 
         // User skills
         if (Directory.Exists(UserSkillsPath))
         {
-            foreach (var dir in Directory.GetDirectories(UserSkillsPath))
+            foreach (var dir in EnumerateSkillDirectories(UserSkillsPath))
             {
                 var skillFile = Path.Combine(dir, "SKILL.md");
                 if (File.Exists(skillFile))
@@ -164,10 +164,17 @@ public sealed class SkillsLoader(string workspaceRoot, string? userSkillsPath = 
 
         // Filter by requirements if requested
         if (filterUnavailable)
-            return skills.Where(s => s.Available).ToList();
+            return SortSkills(skills.Where(s => s.Available)).ToList();
 
-        return skills;
+        return SortSkills(skills).ToList();
     }
+
+    private static IEnumerable<string> EnumerateSkillDirectories(string path) =>
+        Directory.GetDirectories(path)
+            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase);
+
+    private static IOrderedEnumerable<SkillInfo> SortSkills(IEnumerable<SkillInfo> skills) =>
+        skills.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase);
 
     private void AddSkillInfo(
         List<SkillInfo> skills,

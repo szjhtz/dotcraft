@@ -2,6 +2,7 @@ using DotCraft.Agents;
 using DotCraft.Configuration;
 using DotCraft.Context;
 using DotCraft.Memory;
+using DotCraft.Protocol;
 using DotCraft.Skills;
 
 namespace DotCraft.Tests.Context;
@@ -103,6 +104,55 @@ public sealed class PromptBuilderSubAgentTests : IDisposable
         Assert.DoesNotContain("## Skill Self-Learning", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("# Memory", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("## Available Tool Sources", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentPrompt_WithExistingTodoList_DoesNotInjectTodoState()
+    {
+        var planStore = new PlanStore(_craftDir);
+        await new ThreadStore(_craftDir).SaveThreadAsync(new SessionThread
+        {
+            Id = "thread-1",
+            WorkspacePath = _tempDir,
+            UserId = "user",
+            OriginChannel = "test",
+            Status = ThreadStatus.Active,
+            HistoryMode = HistoryMode.Server,
+            CreatedAt = DateTimeOffset.UtcNow,
+            LastActiveAt = DateTimeOffset.UtcNow
+        });
+        await planStore.SaveStructuredPlanAsync("thread-1", new StructuredPlan
+        {
+            Title = "Cache Recovery",
+            Overview = "",
+            Content = "Do not inject this plan body.",
+            Todos =
+            [
+                new PlanTodo
+                {
+                    Id = "stabilize-prefix",
+                    Content = "This todo must stay out of the system prompt",
+                    Status = PlanTodoStatus.InProgress
+                }
+            ],
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+
+        var modeManager = new AgentModeManager();
+        var prompt = new PromptBuilder(
+                new MemoryStore(_craftDir),
+                new SkillsLoader(_craftDir),
+                _craftDir,
+                _tempDir,
+                modeManager: modeManager,
+                planStore: planStore,
+                toolNamesProvider: () => ["TodoWrite"])
+            .BuildSystemPrompt();
+
+        Assert.Contains("## Task Management", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("This todo must stay out of the system prompt", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Current Plan", prompt, StringComparison.Ordinal);
     }
 
     private PromptBuilder CreateMainBuilder(IReadOnlyList<string> toolNames) =>

@@ -18,8 +18,12 @@ public sealed class TokenTracker
     private long _lastInputTokens;
     private long _totalInputTokens;
     private long _totalOutputTokens;
+    private long _totalCachedInputTokens;
+    private long _totalReasoningOutputTokens;
     private long _subAgentInputTokens;
     private long _subAgentOutputTokens;
+    private long _subAgentCachedInputTokens;
+    private long _subAgentReasoningOutputTokens;
 
     /// <summary>
     /// Input tokens from the most recent LLM call (for context compaction threshold).
@@ -32,14 +36,23 @@ public sealed class TokenTracker
     public long TotalInputTokens => Interlocked.Read(ref _totalInputTokens);
 
     public long TotalOutputTokens => Interlocked.Read(ref _totalOutputTokens);
+    public long TotalCachedInputTokens => Interlocked.Read(ref _totalCachedInputTokens);
+    public long TotalReasoningOutputTokens => Interlocked.Read(ref _totalReasoningOutputTokens);
     public long SubAgentInputTokens => Interlocked.Read(ref _subAgentInputTokens);
     public long SubAgentOutputTokens => Interlocked.Read(ref _subAgentOutputTokens);
+    public long SubAgentCachedInputTokens => Interlocked.Read(ref _subAgentCachedInputTokens);
+    public long SubAgentReasoningOutputTokens => Interlocked.Read(ref _subAgentReasoningOutputTokens);
 
     public void Update(long inputTokens, long outputTokens)
+        => Update(inputTokens, outputTokens, 0, 0);
+
+    public void Update(long inputTokens, long outputTokens, long cachedInputTokens, long reasoningOutputTokens)
     {
         Interlocked.Exchange(ref _lastInputTokens, inputTokens);
         Interlocked.Add(ref _totalInputTokens, inputTokens);
         Interlocked.Add(ref _totalOutputTokens, outputTokens);
+        Interlocked.Add(ref _totalCachedInputTokens, cachedInputTokens);
+        Interlocked.Add(ref _totalReasoningOutputTokens, reasoningOutputTokens);
     }
 
     /// <summary>
@@ -47,16 +60,31 @@ public sealed class TokenTracker
     /// and record the latest cumulative input token count for <see cref="LastInputTokens"/> compaction checks.
     /// </summary>
     public void UpdateWithStreamingDeltas(long deltaInput, long deltaOutput, long cumulativeInputSnapshot)
+        => UpdateWithStreamingDeltas(deltaInput, deltaOutput, 0, 0, cumulativeInputSnapshot);
+
+    public void UpdateWithStreamingDeltas(
+        long deltaInput,
+        long deltaOutput,
+        long deltaCachedInput,
+        long deltaReasoningOutput,
+        long cumulativeInputSnapshot)
     {
         Interlocked.Exchange(ref _lastInputTokens, cumulativeInputSnapshot);
         Interlocked.Add(ref _totalInputTokens, deltaInput);
         Interlocked.Add(ref _totalOutputTokens, deltaOutput);
+        Interlocked.Add(ref _totalCachedInputTokens, deltaCachedInput);
+        Interlocked.Add(ref _totalReasoningOutputTokens, deltaReasoningOutput);
     }
 
     public void AddSubAgentTokens(long input, long output)
+        => AddSubAgentTokens(input, output, 0, 0);
+
+    public void AddSubAgentTokens(long input, long output, long cachedInput, long reasoningOutput)
     {
         Interlocked.Add(ref _subAgentInputTokens, input);
         Interlocked.Add(ref _subAgentOutputTokens, output);
+        Interlocked.Add(ref _subAgentCachedInputTokens, cachedInput);
+        Interlocked.Add(ref _subAgentReasoningOutputTokens, reasoningOutput);
     }
 
     public void Reset()
@@ -64,8 +92,12 @@ public sealed class TokenTracker
         Interlocked.Exchange(ref _lastInputTokens, 0);
         Interlocked.Exchange(ref _totalInputTokens, 0);
         Interlocked.Exchange(ref _totalOutputTokens, 0);
+        Interlocked.Exchange(ref _totalCachedInputTokens, 0);
+        Interlocked.Exchange(ref _totalReasoningOutputTokens, 0);
         Interlocked.Exchange(ref _subAgentInputTokens, 0);
         Interlocked.Exchange(ref _subAgentOutputTokens, 0);
+        Interlocked.Exchange(ref _subAgentCachedInputTokens, 0);
+        Interlocked.Exchange(ref _subAgentReasoningOutputTokens, 0);
     }
 
     /// <summary>
