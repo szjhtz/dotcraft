@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ipcMain, shell } from 'electron'
 import { promises as fs } from 'fs'
 
-const { scanModulesMock, moduleProcessManagerStartMock, detectEditorsMock, launchEditorMock } = vi.hoisted(() => ({
+const { scanModulesMock, moduleProcessManagerStartMock, detectEditorsMock, launchEditorMock, execFileMock } = vi.hoisted(() => ({
   scanModulesMock: vi.fn(),
   moduleProcessManagerStartMock: vi.fn(),
   detectEditorsMock: vi.fn(),
-  launchEditorMock: vi.fn()
+  launchEditorMock: vi.fn(),
+  execFileMock: vi.fn()
 }))
 
 vi.mock('fs', () => ({
@@ -18,6 +19,10 @@ vi.mock('fs', () => ({
     rm: vi.fn(),
     rename: vi.fn()
   }
+}))
+
+vi.mock('child_process', () => ({
+  execFile: execFileMock
 }))
 
 vi.mock('electron', () => ({
@@ -84,6 +89,65 @@ import {
   openExternalUrl,
   openExternalHttpUrl
 } from '../ipcBridge'
+
+type IpcCallbacks = NonNullable<Parameters<typeof registerIpcHandlers>[3]>
+type ExecFileCallback = (
+  error: (Error & { code?: number | string }) | null,
+  stdout: string,
+  stderr: string
+) => void
+
+function createIpcCallbacks(overrides: Partial<IpcCallbacks> = {}): IpcCallbacks {
+  return {
+    onSwitchWorkspace: vi.fn().mockResolvedValue(undefined),
+    onClearWorkspaceSelection: vi.fn().mockResolvedValue(undefined),
+    onRunWorkspaceSetup: vi.fn().mockResolvedValue(undefined),
+    onListSetupModels: vi.fn().mockResolvedValue({ kind: 'unsupported' }),
+    onOpenNewWindow: vi.fn(),
+    onRestartManagedAppServer: vi.fn().mockResolvedValue(undefined),
+    onRestartManagedProxy: vi.fn().mockResolvedValue(undefined),
+    getProxyStatus: vi.fn(() => ({ status: 'stopped' })),
+    startProxyOAuth: vi.fn().mockResolvedValue({ url: 'http://127.0.0.1/oauth', state: 's1' }),
+    getProxyOAuthStatus: vi.fn().mockResolvedValue({ status: 'wait' }),
+    getProxyAuthFiles: vi.fn().mockResolvedValue([]),
+    getProxyUsageSummary: vi.fn().mockResolvedValue({
+      totalRequests: 0,
+      successCount: 0,
+      failureCount: 0,
+      totalTokens: 0,
+      failedRequests: 0
+    }),
+    getSettings: vi.fn(() => ({ locale: 'en' })),
+    updateSettings: vi.fn(),
+    getRecentWorkspaces: vi.fn(() => []),
+    getConnectionStatus: vi.fn(() => ({ status: 'disconnected' })),
+    getWorkspaceStatus: vi.fn(() => ({ status: 'ready', workspacePath: '/workspace', hasUserConfig: false })),
+    ...overrides
+  }
+}
+
+function registerHandlersForTest(workspacePath = '/workspace'): Map<string, (...args: unknown[]) => unknown> {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>()
+  vi.mocked(ipcMain.handle).mockImplementation((channel, handler) => {
+    handlers.set(channel, handler as (...args: unknown[]) => unknown)
+  })
+  registerIpcHandlers(null, () => null, workspacePath, createIpcCallbacks())
+  return handlers
+}
+
+function gitError(exitCode: number, message = ''): Error & { code: number } {
+  return Object.assign(new Error(message), { code: exitCode })
+}
+
+function mockGitCommands(
+  resolver: (args: string[]) => { error?: Error & { code?: number | string }; stdout?: string; stderr?: string }
+): void {
+  execFileMock.mockImplementation((_command, args, _options, callback: ExecFileCallback) => {
+    const result = resolver(args as string[])
+    callback(result.error ?? null, result.stdout ?? '', result.stderr ?? '')
+    return null
+  })
+}
 
 // ---------------------------------------------------------------------------
 // ipcBridge — server-request bridge tests
@@ -200,6 +264,102 @@ describe('registerIpcHandlers', () => {
       { id: 'explorer', labelKey: 'editors.explorer', iconKey: 'explorer' }
     ])
     launchEditorMock.mockResolvedValue(undefined)
+  })
+
+  it('git:commit filters missing and ignored paths before staging and committing', async () => {
+    mockGitCommands((args) => {
+      if (args[0] === 'status') {
+        return { stdout: ' M src/valid.ts\0' }
+      }
+      if (args[0] === 'diff') {
+        return { error: gitError(1) }
+      }
+      if (args[0] === 'commit') {
+        return { stdout: '[main abc123] fix: valid\n 1 file changed\n' }
+      }
+      return { stdout: '' }
+    })
+    const handlers = registerHandlersForTest()
+    const commit = handlers.get('git:commit')!
+
+    const result = await commit(
+      {},
+      '/workspace',
+      ['src/valid.ts', 'server/internal/distribution/db_migrations.go', 'ignored/generated.log'],
+      'fix: valid'
+    )
+
+    expect(result).toBe('[main abc123] fix: valid\n 1 file changed')
+    const gitCalls = execFileMock.mock.calls.map(([, args]) => args as string[])
+    expect(gitCalls).toEqual([
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', 'src/valid.ts', 'server/internal/distribution/db_migrations.go', 'ignored/generated.log'],
+      ['add', '--', 'src/valid.ts'],
+      ['diff', '--cached', '--quiet', '--', 'src/valid.ts'],
+      ['commit', '-m', 'fix: valid', '--', 'src/valid.ts']
+    ])
+  })
+
+  it('git:commit skips add and commit when every requested path is filtered out', async () => {
+    mockGitCommands((args) => {
+      if (args[0] === 'status') return { stdout: '' }
+      throw new Error(`Unexpected git command: ${args.join(' ')}`)
+    })
+    const handlers = registerHandlersForTest()
+    const commit = handlers.get('git:commit')!
+
+    await expect(
+      commit({}, '/workspace', ['missing.txt', 'ignored/generated.log'], 'fix: nothing')
+    ).rejects.toThrow('No Git changes to commit')
+
+    const gitCalls = execFileMock.mock.calls.map(([, args]) => args as string[])
+    expect(gitCalls).toEqual([
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', 'missing.txt', 'ignored/generated.log']
+    ])
+  })
+
+  it('git:commit rejects paths outside the active workspace', async () => {
+    const handlers = registerHandlersForTest()
+    const commit = handlers.get('git:commit')!
+
+    await expect(
+      commit({}, '/workspace', ['/outside/secret.txt'], 'fix: outside')
+    ).rejects.toThrow('Access denied')
+
+    expect(execFileMock).not.toHaveBeenCalled()
+  })
+
+  it('git:commit rejects requests for a different workspace path', async () => {
+    const handlers = registerHandlersForTest()
+    const commit = handlers.get('git:commit')!
+
+    await expect(
+      commit({}, '/other-workspace', ['src/valid.ts'], 'fix: mismatch')
+    ).rejects.toThrow('Workspace path mismatch')
+
+    expect(execFileMock).not.toHaveBeenCalled()
+  })
+
+  it('git:commit constrains the commit pathspec to requested commit files', async () => {
+    mockGitCommands((args) => {
+      if (args[0] === 'status') {
+        return { stdout: ' M src/valid.ts\0' }
+      }
+      if (args[0] === 'diff') {
+        return { error: gitError(1) }
+      }
+      if (args[0] === 'commit') {
+        return { stdout: '[main def456] fix: requested\n' }
+      }
+      return { stdout: '' }
+    })
+    const handlers = registerHandlersForTest()
+    const commit = handlers.get('git:commit')!
+
+    await commit({}, '/workspace', ['src/valid.ts'], 'fix: requested')
+
+    const commitCall = execFileMock.mock.calls.find(([, args]) => (args as string[])[0] === 'commit')
+    expect(commitCall?.[1]).toEqual(['commit', '-m', 'fix: requested', '--', 'src/valid.ts'])
+    expect(commitCall?.[1]).not.toContain('src/already-staged.ts')
   })
 
   it('registers editors:list and returns detected editor entries', async () => {

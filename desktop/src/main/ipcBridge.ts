@@ -122,10 +122,118 @@ interface ModulesRescanSummaryPayload {
   changedRunningModuleIds: string[]
 }
 
+interface GitCommandResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+}
+
+interface ExecFileError extends Error {
+  code?: number | string
+}
+
 export interface ServerRequestPayload {
   bridgeId: string
   method: string
   params: unknown
+}
+
+function runGitCommand(
+  cwd: string,
+  args: string[],
+  allowedExitCodes: number[] = [0]
+): Promise<GitCommandResult> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd }, (err, stdout, stderr) => {
+      const execError = err as ExecFileError | null
+      const exitCode = err ? (typeof execError?.code === 'number' ? execError.code : null) : 0
+      if (exitCode !== null && allowedExitCodes.includes(exitCode)) {
+        resolve({
+          stdout: String(stdout),
+          stderr: String(stderr),
+          exitCode
+        })
+        return
+      }
+      if (err) {
+        reject(new Error(String(stderr || err.message).trim()))
+        return
+      }
+      resolve({
+        stdout: String(stdout),
+        stderr: String(stderr),
+        exitCode
+      })
+    })
+  })
+}
+
+function isSameOrInsidePath(candidatePath: string, parentPath: string): boolean {
+  const relativePath = path.relative(parentPath, candidatePath)
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
+}
+
+function toGitRelativeWorkspacePath(
+  filePath: string,
+  workspacePath: string,
+  locale: AppLocale
+): string | null {
+  if (typeof filePath !== 'string' || filePath.trim() === '') return null
+  const wsResolved = path.resolve(workspacePath)
+  const resolved = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(wsResolved, filePath)
+
+  if (!isSameOrInsidePath(resolved, wsResolved)) {
+    throw new Error(
+      translate(locale, 'ipc.pathOutsideWorkspace', { path: filePath })
+    )
+  }
+
+  const relativePath = path.relative(wsResolved, resolved)
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) return null
+  return relativePath.split(path.sep).join('/')
+}
+
+function parseGitStatusPorcelainZ(stdout: string): string[] {
+  const paths: string[] = []
+  const entries = stdout.split('\0').filter(Boolean)
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    if (entry.length < 4) continue
+    const status = entry.slice(0, 2)
+    if (status === '!!') continue
+    const filePath = entry.slice(3)
+    if (!filePath) continue
+    paths.push(filePath.replace(/\\/g, '/'))
+    if (status[0] === 'R' || status[0] === 'C') {
+      i += 1
+    }
+  }
+  return paths
+}
+
+async function resolveCommitFilePaths(
+  workspacePath: string,
+  files: string[],
+  locale: AppLocale
+): Promise<string[]> {
+  const seen = new Set<string>()
+  const requestedPaths: string[] = []
+  for (const file of files) {
+    const relativePath = toGitRelativeWorkspacePath(file, workspacePath, locale)
+    if (!relativePath || seen.has(relativePath)) continue
+    seen.add(relativePath)
+    requestedPaths.push(relativePath)
+  }
+  if (requestedPaths.length === 0) return []
+
+  const status = await runGitCommand(
+    workspacePath,
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...requestedPaths]
+  )
+  const statusPaths = parseGitStatusPorcelainZ(status.stdout)
+  return requestedPaths.filter((filePath) => statusPaths.includes(filePath))
 }
 
 function assertPathWithinWorkspace(
@@ -948,32 +1056,35 @@ export function registerIpcHandlers(
   // Renderer -> Main: git add + commit
   handleSafe(
     'git:commit',
-    (_event, wsPath: string, files: string[], message: string): Promise<string> => {
-      return new Promise((resolve, reject) => {
-        execFile(
-          'git',
-          ['add', '--', ...files],
-          { cwd: wsPath },
-          (addErr, _addStdout, addStderr) => {
-            if (addErr) {
-              reject(new Error(addStderr || addErr.message))
-              return
-            }
-            execFile(
-              'git',
-              ['commit', '-m', message],
-              { cwd: wsPath },
-              (commitErr, commitStdout, commitStderr) => {
-                if (commitErr) {
-                  reject(new Error(commitStderr || commitErr.message))
-                  return
-                }
-                resolve(commitStdout.trim())
-              }
-            )
-          }
-        )
-      })
+    async (_event, wsPath: string, files: string[], message: string): Promise<string> => {
+      const locale = mainLocale(callbacks)
+      if (!workspacePath) {
+        throw new Error(translate(locale, 'ipc.noWorkspaceOpen'))
+      }
+      if (path.resolve(wsPath) !== path.resolve(workspacePath)) {
+        throw new Error(translate(locale, 'ipc.workspacePathMismatch'))
+      }
+      if (!Array.isArray(files)) {
+        throw new Error(translate(locale, 'ipc.noGitChangesToCommit'))
+      }
+
+      const commitFiles = await resolveCommitFilePaths(workspacePath, files, locale)
+      if (commitFiles.length === 0) {
+        throw new Error(translate(locale, 'ipc.noGitChangesToCommit'))
+      }
+
+      await runGitCommand(workspacePath, ['add', '--', ...commitFiles])
+      const stagedDiff = await runGitCommand(
+        workspacePath,
+        ['diff', '--cached', '--quiet', '--', ...commitFiles],
+        [0, 1]
+      )
+      if (stagedDiff.exitCode === 0) {
+        throw new Error(translate(locale, 'ipc.noGitChangesToCommit'))
+      }
+
+      const commit = await runGitCommand(workspacePath, ['commit', '-m', message, '--', ...commitFiles])
+      return commit.stdout.trim()
     }
   )
   handleSafe('git:branch', async (_event, wsPath: string): Promise<string | null> => {

@@ -1403,6 +1403,8 @@ const MESSAGES_EN = {
   'ipc.pathOutsideWorkspace': 'Access denied: path is outside workspace: {{path}}',
   'ipc.noWorkspaceOpen': 'No workspace open',
   'ipc.workspacePathMismatch': 'Workspace path mismatch',
+  'ipc.noGitChangesToCommit':
+    'No Git changes to commit. Some files may no longer exist or may be ignored by .gitignore.',
   'ipc.invalidImageDataUrl': 'Invalid image data URL',
   'ipc.imageTooLarge': 'Image too large ({{bytes}} bytes). Maximum {{max}} bytes.',
   'ipc.clipboardNotImage': 'Clipboard data is not an image',
@@ -3072,6 +3074,7 @@ const MESSAGES_ZH: Record<MessageId, string> = {
   'ipc.pathOutsideWorkspace': '拒绝访问：路径不在工作区内：{{path}}',
   'ipc.noWorkspaceOpen': '未打开工作区',
   'ipc.workspacePathMismatch': '工作区路径不匹配',
+  'ipc.noGitChangesToCommit': '没有可提交的 Git 变更。部分文件可能已不存在或被 .gitignore 忽略。',
   'ipc.invalidImageDataUrl': '无效的图片数据 URL',
   'ipc.imageTooLarge': '图片过大（{{bytes}} 字节）。最大 {{max}} 字节。',
   'ipc.clipboardNotImage': '剪贴板数据不是图片',
