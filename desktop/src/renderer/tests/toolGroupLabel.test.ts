@@ -99,4 +99,13 @@ describe('formatToolGroupLabel write dedup', () => {
 
     expect(label).toBe('Used web 2 times')
   })
+
+  it('formats spawned subagent groups', () => {
+    const label = formatToolGroupLabel('subagent', [
+      makeItem('SpawnAgent', '1'),
+      makeItem('SpawnAgent', '2')
+    ], 'en', new Map())
+
+    expect(label).toBe('Spawned 2 agents')
+  })
 })

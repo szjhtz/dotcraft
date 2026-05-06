@@ -4,6 +4,7 @@ import { translate, type AppLocale } from '../../../shared/locales'
 import type { ConversationItem } from '../../types/conversation'
 import { addToast } from '../../stores/toastStore'
 import { extractPartialJsonStringValue } from '../../utils/toolCallDisplay'
+import { parsePlanMarkdown } from '../../utils/planMarkdown'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { ActionTooltip } from '../ui/ActionTooltip'
 
@@ -284,15 +285,20 @@ function buildCopyContent(parsed: ParsedCreatePlan, fallbackTitle: string): stri
 }
 
 function parseCreatePlanData(item: ConversationItem): ParsedCreatePlan {
-  const title = typeof item.arguments?.title === 'string'
-    ? item.arguments.title
-    : (extractPartialJsonStringValue(item.argumentsPreview ?? '', 'title') ?? '')
-  const overview = typeof item.arguments?.overview === 'string'
-    ? item.arguments.overview
-    : (extractPartialJsonStringValue(item.argumentsPreview ?? '', 'overview') ?? '')
-  const content = typeof item.arguments?.plan === 'string'
+  const plan = typeof item.arguments?.plan === 'string'
     ? item.arguments.plan
     : (extractPartialJsonStringValue(item.argumentsPreview ?? '', 'plan') ?? '')
+  const markdown = parsePlanMarkdown(plan)
+  const fallbackTitle = typeof item.arguments?.title === 'string'
+    ? item.arguments.title
+    : (extractPartialJsonStringValue(item.argumentsPreview ?? '', 'title') ?? '')
+  const fallbackOverview = typeof item.arguments?.overview === 'string'
+    ? item.arguments.overview
+    : (extractPartialJsonStringValue(item.argumentsPreview ?? '', 'overview') ?? '')
+  const fallbackContent = typeof item.arguments?.content === 'string' ? item.arguments.content : ''
+  const title = markdown.title || fallbackTitle
+  const overview = markdown.overview || fallbackOverview
+  const content = markdown.content || fallbackContent
   const todos = Array.isArray(item.arguments?.todos)
     ? item.arguments.todos
       .filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry != null)

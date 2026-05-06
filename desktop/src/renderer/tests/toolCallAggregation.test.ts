@@ -146,10 +146,24 @@ describe('aggregateToolCalls', () => {
     }
   })
 
-  it('keeps non-aggregatable tools as individual cards', () => {
+  it('groups consecutive settled SpawnAgent calls', () => {
     const items = [
-      makeItem('SpawnAgent', '1'),
-      makeItem('SpawnAgent', '2')
+      makeItem('SpawnAgent', '1', { result: '{"status":"running"}', success: true }),
+      makeItem('SpawnAgent', '2', { result: '{"status":"running"}', success: true })
+    ]
+    const result = aggregateToolCalls(items)
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe('group')
+    if (result[0].kind === 'group') {
+      expect(result[0].category).toBe('subagent')
+      expect(result[0].items).toHaveLength(2)
+    }
+  })
+
+  it('keeps running SpawnAgent calls as individual cards', () => {
+    const items = [
+      makeItem('SpawnAgent', '1', { status: 'started' }),
+      makeItem('SpawnAgent', '2', { result: '{"status":"running"}', success: true })
     ]
     const result = aggregateToolCalls(items)
     expect(result).toHaveLength(2)

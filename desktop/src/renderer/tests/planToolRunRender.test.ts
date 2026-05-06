@@ -62,8 +62,8 @@ describe('planToolRunRender', () => {
 
   it('aggregates non-trailing run while still running', () => {
     const run = [
-      makeItem('ReadFile', '1'),
-      makeItem('FindFiles', '2')
+      makeItem('ReadFile', '1', { result: 'ok', success: true }),
+      makeItem('FindFiles', '2', { result: 'ok', success: true })
     ]
 
     const result = planToolRunRender(run, { isRunning: true, isTrailingRun: false })

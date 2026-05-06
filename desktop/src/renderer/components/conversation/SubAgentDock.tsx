@@ -12,6 +12,7 @@ import { useUIStore } from '../../stores/uiStore'
 import { addToast } from '../../stores/toastStore'
 import { RunningSpinner } from '../ui/RunningSpinner'
 import { ActionTooltip } from '../ui/ActionTooltip'
+import { getSubAgentAccent } from '../../utils/subAgentPresentation'
 
 interface SubAgentDockProps {
   parentThreadId: string
@@ -47,52 +48,52 @@ export function SubAgentDock({ parentThreadId }: SubAgentDockProps): JSX.Element
       addToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
+  const toggleCollapsed = (): void => setParentCollapsed(parentThreadId, !collapsed)
 
   return (
     <div data-testid="subagent-dock" style={dockFrameStyle}>
       <div style={dockHeaderStyle}>
-        <span style={titleStyle}>
-          <Bot size={13} aria-hidden="true" style={{ color: 'var(--text-dimmed)' }} />
-          <span>{t('subAgentDock.title', { count: children.length })}</span>
-          {collapsed && runningChildren.length > 0 && (
-            <span style={runningSummaryStyle}>
-              {t('subAgentDock.runningSummary', { count: runningChildren.length })}
-            </span>
-          )}
-        </span>
+        <button
+          type="button"
+          aria-label={collapsed ? t('subAgentDock.expand') : t('subAgentDock.collapse')}
+          onClick={toggleCollapsed}
+          style={headerToggleStyle}
+        >
+          <span style={titleStyle}>
+            <Bot size={13} aria-hidden="true" style={{ color: 'var(--text-dimmed)' }} />
+            <span>{t('subAgentDock.title', { count: children.length })}</span>
+            {collapsed && runningChildren.length > 0 && (
+              <span style={runningSummaryStyle}>
+                {t('subAgentDock.runningSummary', { count: runningChildren.length })}
+              </span>
+            )}
+          </span>
+          <ChevronDown
+            size={14}
+            aria-hidden="true"
+            style={{
+              transform: collapsed ? 'rotate(-90deg)' : 'none',
+              transition: 'transform 120ms ease',
+              flexShrink: 0
+            }}
+          />
+        </button>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
           {closeableRunning.length > 0 && (
             <ActionTooltip label={t('subAgentDock.stopAll')} placement="top">
               <button
                 type="button"
                 aria-label={t('subAgentDock.stopAll')}
-                onClick={() => { void stopAll() }}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void stopAll()
+                }}
                 style={iconButtonStyle}
               >
                 <Square size={12} fill="currentColor" aria-hidden="true" />
               </button>
             </ActionTooltip>
           )}
-          <ActionTooltip
-            label={collapsed ? t('subAgentDock.expand') : t('subAgentDock.collapse')}
-            placement="top"
-          >
-            <button
-              type="button"
-              aria-label={collapsed ? t('subAgentDock.expand') : t('subAgentDock.collapse')}
-              onClick={() => setParentCollapsed(parentThreadId, !collapsed)}
-              style={iconButtonStyle}
-            >
-              <ChevronDown
-                size={14}
-                aria-hidden="true"
-                style={{
-                  transform: collapsed ? 'rotate(-90deg)' : 'none',
-                  transition: 'transform 120ms ease'
-                }}
-              />
-            </button>
-          </ActionTooltip>
         </span>
       </div>
 
@@ -107,7 +108,7 @@ export function SubAgentDock({ parentThreadId }: SubAgentDockProps): JSX.Element
               key={child.childThreadId}
               child={child}
               parentThreadId={parentThreadId}
-              color={rowColors[index % rowColors.length]}
+              color={getSubAgentAccent(child.childThreadId || child.nickname || String(index))}
               onRefresh={() => { void fetchChildren(parentThreadId) }}
             />
           ))}
@@ -136,6 +137,7 @@ function SubAgentDockRow({
     ? child.lastToolDisplay?.trim() || t('subAgentDock.running')
     : formatSubAgentStatus(child, t)
   const canOpen = child.isPlaceholder !== true
+  const roleMeta = formatDockAgentRole(child.agentRole)
 
   const openThread = (): void => {
     useThreadStore.getState().setActiveThreadId(child.childThreadId)
@@ -163,7 +165,10 @@ function SubAgentDockRow({
           <span aria-hidden style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--text-dimmed)', opacity: 0.58 }} />
         )}
       </span>
-      <span style={{ ...nicknameStyle, color }} title={child.nickname}>{child.nickname}</span>
+      <span style={nameGroupStyle}>
+        <span style={{ ...nicknameStyle, color }} title={child.nickname}>{child.nickname}</span>
+        {roleMeta && <span style={metaStyle}>({roleMeta})</span>}
+      </span>
       <span
         className={running ? 'tool-running-gradient-text' : undefined}
         style={descriptionStyle}
@@ -214,15 +219,23 @@ async function closeSubAgent(parentThreadId: string, childThreadId: string): Pro
   })
 }
 
-const rowColors = ['#ff6b7a', '#0ea5ff', '#f59e0b', '#22c55e', '#a78bfa']
-
 const dockFrameStyle: CSSProperties = {
-  width: '100%',
-  margin: '0 0 -1px',
+  width: 'calc(100% - 40px)',
+  maxWidth: 'none',
+  margin: '0 auto -1px',
   border: '1px solid color-mix(in srgb, var(--border-default) 82%, transparent)',
   borderRadius: '14px 14px 0 0',
-  background: 'color-mix(in srgb, var(--bg-secondary) 94%, var(--bg-primary))',
-  overflow: 'hidden'
+  background: 'color-mix(in srgb, var(--bg-secondary) 84%, transparent)',
+  backdropFilter: 'blur(16px) saturate(1.25)',
+  WebkitBackdropFilter: 'blur(16px) saturate(1.25)',
+  overflow: 'hidden',
+  pointerEvents: 'auto'
+}
+
+function formatDockAgentRole(agentRole: string | null | undefined): string {
+  const role = agentRole?.trim()
+  if (!role || role.toLowerCase() === 'default') return ''
+  return role
 }
 
 const dockHeaderStyle: CSSProperties = {
@@ -231,9 +244,26 @@ const dockHeaderStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: '8px',
-  padding: '4px 10px 3px',
+  padding: '0 4px 0 10px',
   color: 'var(--text-secondary)',
   fontSize: '12px'
+}
+
+const headerToggleStyle: CSSProperties = {
+  minWidth: 0,
+  minHeight: '28px',
+  flex: '1 1 auto',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '8px',
+  padding: '4px 0 3px',
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: '12px',
+  textAlign: 'left',
+  cursor: 'pointer'
 }
 
 const titleStyle: CSSProperties = {
@@ -275,7 +305,7 @@ const rowsStyle: CSSProperties = {
 const rowStyle: CSSProperties = {
   minHeight: '24px',
   display: 'grid',
-  gridTemplateColumns: '16px minmax(54px, max-content) minmax(0, 1fr) auto auto',
+  gridTemplateColumns: '16px minmax(0, max-content) minmax(0, 1fr) auto auto',
   alignItems: 'center',
   gap: '6px',
   fontSize: '13px'
@@ -294,6 +324,21 @@ const nicknameStyle: CSSProperties = {
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
   fontWeight: 600
+}
+
+const nameGroupStyle: CSSProperties = {
+  minWidth: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '5px',
+  overflow: 'hidden',
+  whiteSpace: 'nowrap'
+}
+
+const metaStyle: CSSProperties = {
+  color: 'var(--text-dimmed)',
+  flexShrink: 0,
+  fontSize: '12px'
 }
 
 const descriptionStyle: CSSProperties = {

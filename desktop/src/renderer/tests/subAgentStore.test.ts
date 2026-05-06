@@ -70,6 +70,95 @@ describe('subAgentStore', () => {
     ])
   })
 
+  it('normalizes role aliases from child list wire data', async () => {
+    appServerSendRequest.mockResolvedValue({
+      data: [
+        {
+          edge: {
+            parentThreadId: 'parent-1',
+            childThreadId: 'child-agent-type',
+            agentNickname: 'Agent type child',
+            agentType: 'explorer',
+            status: 'open'
+          },
+          thread: {
+            id: 'child-agent-type',
+            displayName: 'Agent type child',
+            status: 'active',
+            originChannel: 'subagent',
+            createdAt: '2026-05-03T00:00:00.000Z',
+            lastActiveAt: '2026-05-03T00:01:00.000Z'
+          }
+        },
+        {
+          edge: {
+            parentThreadId: 'parent-1',
+            childThreadId: 'child-agent-snake',
+            agentNickname: 'Agent snake child',
+            agent_type: 'worker',
+            status: 'open'
+          },
+          thread: {
+            id: 'child-agent-snake',
+            displayName: 'Agent snake child',
+            status: 'active',
+            originChannel: 'subagent',
+            createdAt: '2026-05-03T00:00:00.000Z',
+            lastActiveAt: '2026-05-03T00:01:00.000Z'
+          }
+        },
+        {
+          edge: {
+            parentThreadId: 'parent-1',
+            childThreadId: 'child-role',
+            agentNickname: 'Role child',
+            role: 'reviewer',
+            status: 'open'
+          },
+          thread: {
+            id: 'child-role',
+            displayName: 'Role child',
+            status: 'active',
+            originChannel: 'subagent',
+            createdAt: '2026-05-03T00:00:00.000Z',
+            lastActiveAt: '2026-05-03T00:01:00.000Z'
+          }
+        },
+        {
+          edge: {
+            parentThreadId: 'parent-1',
+            childThreadId: 'child-source',
+            status: 'open'
+          },
+          thread: {
+            id: 'child-source',
+            displayName: 'Source child',
+            status: 'active',
+            originChannel: 'subagent',
+            source: {
+              kind: 'subagent',
+              subAgent: {
+                agentNickname: 'Source child',
+                agentType: 'explorer'
+              }
+            },
+            createdAt: '2026-05-03T00:00:00.000Z',
+            lastActiveAt: '2026-05-03T00:01:00.000Z'
+          }
+        }
+      ]
+    })
+
+    await useSubAgentStore.getState().fetchChildren('parent-1')
+
+    expect(useSubAgentStore.getState().childrenByParent.get('parent-1')).toEqual([
+      expect.objectContaining({ childThreadId: 'child-agent-type', agentRole: 'explorer' }),
+      expect.objectContaining({ childThreadId: 'child-agent-snake', agentRole: 'worker' }),
+      expect.objectContaining({ childThreadId: 'child-role', agentRole: 'reviewer' }),
+      expect.objectContaining({ childThreadId: 'child-source', agentRole: 'explorer' })
+    ])
+  })
+
   it('keeps completed child rows from closed child list results', async () => {
     useSubAgentStore.getState().setChildren('parent-1', [
       {
@@ -235,6 +324,7 @@ describe('subAgentStore', () => {
             parentThreadId: 'parent-1',
             childThreadId: 'child-1',
             agentNickname: 'Lovelace',
+            agentRole: 'explorer',
             profileName: 'native',
             runtimeType: 'native',
             supportsSendInput: true,
@@ -265,6 +355,7 @@ describe('subAgentStore', () => {
       expect.objectContaining({
         childThreadId: 'child-1',
         nickname: 'Lovelace',
+        agentRole: 'explorer',
         lastToolDisplay: 'Reading sprite atlas',
         currentTool: 'ReadFile',
         inputTokens: 12,

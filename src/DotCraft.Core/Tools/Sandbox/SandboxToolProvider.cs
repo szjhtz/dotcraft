@@ -84,7 +84,8 @@ public sealed class SandboxToolProvider : IAgentToolProvider
                 context,
                 subAgentCoordinator,
                 context.Config.SubAgent.Roles,
-                context.Config.SubAgent.MaxDepth);
+                context.Config.SubAgent.MaxDepth,
+                context.Config.SubAgent.Model);
         }
 
         // Web tools — no isolation needed, reuse as-is

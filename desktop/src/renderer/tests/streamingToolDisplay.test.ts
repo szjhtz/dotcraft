@@ -55,12 +55,12 @@ describe('getStreamingToolDisplay', () => {
   it('renders CreatePlan streaming label with title and exposes draft preview', () => {
     const display = getStreamingToolDisplay(
       'CreatePlan',
-      '{"title":"Ship feature X","overview":"Not yet',
+      '{"plan":"# Ship feature X\\n\\n## Summary\\n\\nNot yet',
       'en'
     )
     expect(display.label).toBe('Drafting plan: Ship feature X...')
     expect(display.parsedPreview?.planDraft?.title).toBe('Ship feature X')
-    expect(display.parsedPreview?.planDraft?.overview).toBe('Not yet')
+    expect(display.parsedPreview?.planDraft?.plan).toBe('# Ship feature X\n\n## Summary\n\nNot yet')
   })
 
   it('falls back to generic draft label when title is missing', () => {

@@ -97,6 +97,10 @@ export function formatToolGroupLabel(
     return translate(locale, 'toolCall.group.webUsed', { count })
   }
 
+  if (category === 'subagent') {
+    return translate(locale, 'toolCall.group.spawnedAgents', { count })
+  }
+
   const { createdCount, modifiedCount } = getWriteCounts(items, changedFiles)
   if (createdCount > 0 && modifiedCount > 0) {
     return translate(locale, 'toolCall.group.createdAndModified', {

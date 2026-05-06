@@ -12,7 +12,8 @@ namespace DotCraft.Tools;
 public sealed class AgentTools(
     SubAgentCoordinator? subAgentManager = null,
     IEnumerable<SubAgentRoleConfig>? subAgentRoles = null,
-    int maxSubAgentDepth = 1)
+    int maxSubAgentDepth = 1,
+    string? subAgentModel = null)
 {
     private static readonly JsonSerializerOptions ResultJsonOptions = new(JsonSerializerOptions.Web);
 
@@ -41,6 +42,7 @@ public sealed class AgentTools(
                 ProfileName = profile,
                 WorkingDirectory = workingDirectory,
                 RoleConfigs = subAgentRoles?.ToArray(),
+                SubAgentModel = subAgentModel,
                 MaxDepth = maxSubAgentDepth
             },
             waitForCompletion: false,

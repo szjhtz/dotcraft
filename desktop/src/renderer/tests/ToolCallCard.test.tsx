@@ -8,6 +8,7 @@ import { useUIStore } from '../stores/uiStore'
 import { useViewerTabStore } from '../stores/viewerTabStore'
 import { useSubAgentStore } from '../stores/subAgentStore'
 import { useThreadStore } from '../stores/threadStore'
+import { getSubAgentAccent } from '../utils/subAgentPresentation'
 import type { ConversationItem } from '../types/conversation'
 import type { FileDiff } from '../types/toolCall'
 
@@ -94,29 +95,38 @@ describe('ToolCallCard subagent result rendering', () => {
     })
   })
 
-  it('renders SpawnAgent result as a compact subagent row without raw JSON', () => {
+  it('renders SpawnAgent result with role, external profile, and prompt without raw JSON', () => {
     const item: ConversationItem = {
       id: 'subagent-tool-1',
       type: 'toolCall',
       status: 'completed',
       toolName: 'SpawnAgent',
       toolCallId: 'call-1',
-      arguments: { agentPrompt: 'Create hatch pet', agentNickname: 'Popper', profile: 'native' },
+      arguments: {
+        agentPrompt: 'Create hatch pet',
+        agentNickname: 'Popper',
+        agentRole: 'worker',
+        profile: 'cursor-cli'
+      },
       result: JSON.stringify({
         childThreadId: 'thread_child',
         agentNickname: 'Popper',
-        profileName: 'native',
-        runtimeType: 'native',
+        agentRole: 'worker',
+        profileName: 'cursor-cli',
+        runtimeType: 'cli-oneshot',
         status: 'running'
       }),
       success: true,
       createdAt: '2026-05-03T10:00:00.000Z'
     }
 
-    renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
+    const { container } = renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
-    expect(screen.getByText('Started Popper')).toBeInTheDocument()
-    expect(screen.getByText(/native/)).toBeInTheDocument()
+    expect(container).toHaveTextContent('Spawned Popper')
+    expect(screen.getByText('Popper')).toHaveStyle({ color: getSubAgentAccent('thread_child') })
+    expect(screen.getByText('(worker · cursor-cli)')).toBeInTheDocument()
+    expect(screen.getByText('Prompt: Create hatch pet')).toBeInTheDocument()
+    expect(container.querySelector('span[style*="width: 7px"]')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
     expect(screen.queryByText(/childThreadId/)).toBeNull()
     expect(screen.queryByText(/thread_child/)).toBeNull()
@@ -143,7 +153,7 @@ describe('ToolCallCard subagent result rendering', () => {
 
     const { container } = renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
-    expect(screen.getByText('Received result from Reviewer')).toBeInTheDocument()
+    expect(container).toHaveTextContent('Received result from Reviewer')
     expect(screen.queryByText('Reviewer completed')).toBeNull()
     expect(screen.queryByText(/thread_child/)).toBeNull()
     expect(screen.queryByText('Detailed child agent result')).toBeNull()
@@ -245,9 +255,9 @@ describe('ToolCallCard subagent result rendering', () => {
       createdAt: '2026-05-03T10:00:00.000Z'
     }
 
-    renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
+    const { container } = renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
-    expect(screen.getByText('Received result from Bench reviewer')).toBeInTheDocument()
+    expect(container).toHaveTextContent('Received result from Bench reviewer')
     expect(screen.queryByText(/thread_child/)).toBeNull()
   })
 
@@ -269,9 +279,9 @@ describe('ToolCallCard subagent result rendering', () => {
       createdAt: '2026-05-03T10:00:00.000Z'
     }
 
-    renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
+    const { container } = renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
-    expect(screen.getByText('Timed out waiting for Reviewer')).toBeInTheDocument()
+    expect(container).toHaveTextContent('Timed out waiting for Reviewer')
     expect(screen.queryByRole('button', { name: 'Open' })).toBeNull()
     expect(screen.queryByText(/failed/i)).toBeNull()
     expect(screen.queryByText(/thread_child/)).toBeNull()
@@ -1208,9 +1218,7 @@ describe('ToolCallCard CreatePlan rendering', () => {
       toolName: 'CreatePlan',
       toolCallId: 'create-plan-call-1',
       arguments: {
-        title: 'Release Plan',
-        overview: 'Ship the feature in two phases.',
-        plan: '# Final heading\n\n- add tests\n- run smoke checks',
+        plan: '# Release Plan\n\n## Summary\n\nShip the feature in two phases.\n\n## Implementation Changes\n\n- add tests\n- run smoke checks',
         todos: [
           { id: 'tests', content: 'Add tests', status: 'in_progress' },
           { id: 'smoke', content: 'Run smoke checks', status: 'pending' }
@@ -1227,7 +1235,7 @@ describe('ToolCallCard CreatePlan rendering', () => {
     expect(screen.getAllByRole('button', { name: /Expand plan/ }).length).toBeGreaterThan(0)
     fireEvent.click(screen.getAllByRole('button', { name: /Expand plan/ })[0])
 
-    expect(screen.getByText('Final heading')).toBeInTheDocument()
+    expect(screen.getAllByText('Ship the feature in two phases.').length).toBeGreaterThan(0)
     expect(screen.getByText('add tests')).toBeInTheDocument()
     expect(screen.getByText('Add tests')).toBeInTheDocument()
     expect(screen.getByText('Run smoke checks')).toBeInTheDocument()
@@ -1241,7 +1249,7 @@ describe('ToolCallCard CreatePlan rendering', () => {
       status: 'started',
       toolName: 'CreatePlan',
       toolCallId: 'create-plan-call-2',
-      argumentsPreview: '{"title":"Migration","overview":"Rolling update","plan":"# Draft heading\\n\\n- step 1"}',
+      argumentsPreview: '{"plan":"# Migration\\n\\n## Summary\\n\\nRolling update\\n\\n- step 1"}',
       createdAt: new Date().toISOString()
     }
 
@@ -1249,9 +1257,7 @@ describe('ToolCallCard CreatePlan rendering', () => {
       ...startedItem,
       status: 'completed',
       arguments: {
-        title: 'Migration',
-        overview: 'Rolling update',
-        plan: '# Done plan\n\nMove traffic in batches.',
+        plan: '# Migration\n\n## Summary\n\nDone plan\n\nMove traffic in batches.',
         todos: [{ id: 'rollout', content: 'Roll out by cluster', status: 'completed' }]
       },
       success: true,
@@ -1265,7 +1271,7 @@ describe('ToolCallCard CreatePlan rendering', () => {
     )
 
     expect(screen.getByText('Migration')).toBeInTheDocument()
-    expect(screen.getByText('Draft heading')).toBeInTheDocument()
+    expect(screen.getAllByText('Rolling update').length).toBeGreaterThan(0)
 
     rerender(
       <LocaleProvider>
@@ -1276,7 +1282,7 @@ describe('ToolCallCard CreatePlan rendering', () => {
     expect(screen.getByText('Migration')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Expand plan/ }).length).toBeGreaterThan(0)
     fireEvent.click(screen.getAllByRole('button', { name: /Expand plan/ })[0])
-    expect(screen.getByText('Done plan')).toBeInTheDocument()
+    expect(screen.getAllByText('Done plan').length).toBeGreaterThan(0)
     expect(screen.getByText('Roll out by cluster')).toBeInTheDocument()
   })
 })

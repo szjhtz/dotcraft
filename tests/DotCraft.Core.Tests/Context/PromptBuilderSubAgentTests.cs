@@ -34,6 +34,33 @@ public sealed class PromptBuilderSubAgentTests : IDisposable
     }
 
     [Fact]
+    public void MainPrompt_WhenSpawnAgentAvailable_IncludesLifecycleGuidance()
+    {
+        var prompt = CreateMainBuilder(
+                toolNames: ["SpawnAgent", "SendInput", "WaitAgent", "ResumeAgent", "CloseAgent"])
+            .BuildSystemPrompt();
+
+        Assert.Contains("## SubAgent Lifecycle", prompt, StringComparison.Ordinal);
+        Assert.Contains("Use `SpawnAgent` for concrete sidecar work", prompt, StringComparison.Ordinal);
+        Assert.Contains("Use `SendInput` to reuse an existing child thread", prompt, StringComparison.Ordinal);
+        Assert.Contains("Use `WaitAgent` sparingly", prompt, StringComparison.Ordinal);
+        Assert.Contains("Use `CloseAgent` when a child thread is no longer needed", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("### Designing Child Tasks", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("When you are not confident you can find what you need in 1-2 tool calls", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainPrompt_WhenSpawnAgentUnavailable_OmitsLifecycleGuidance()
+    {
+        var prompt = CreateMainBuilder(
+                toolNames: ["ReadFile", "GrepFiles", "FindFiles"])
+            .BuildSystemPrompt();
+
+        Assert.DoesNotContain("## SubAgent Lifecycle", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use `WaitAgent` sparingly", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SubAgentLightPrompt_KeepsEssentialContextAndRoleInstructions()
     {
         var prompt = CreateBuilder(
@@ -53,6 +80,19 @@ public sealed class PromptBuilderSubAgentTests : IDisposable
     }
 
     [Fact]
+    public void SubAgentLightPrompt_DoesNotIncludeParentLifecycleGuidance()
+    {
+        var prompt = CreateBuilder(
+                toolNames: ["SpawnAgent", "SendInput", "WaitAgent", "CloseAgent"],
+                roleInstructions: "Role-specific guidance.")
+            .BuildSystemPrompt();
+
+        Assert.Contains("## SubAgent Context", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("## SubAgent Lifecycle", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use `WaitAgent` sparingly", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SubAgentLightPrompt_OmitsHeavySections()
     {
         var prompt = CreateBuilder(
@@ -64,6 +104,16 @@ public sealed class PromptBuilderSubAgentTests : IDisposable
         Assert.DoesNotContain("# Memory", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("## Available Tool Sources", prompt, StringComparison.Ordinal);
     }
+
+    private PromptBuilder CreateMainBuilder(IReadOnlyList<string> toolNames) =>
+        new(
+            new MemoryStore(_craftDir),
+            new SkillsLoader(_craftDir),
+            _craftDir,
+            _tempDir,
+            sandboxEnabled: false,
+            deferredMcpServerNames: ["example"],
+            toolNamesProvider: () => toolNames);
 
     private PromptBuilder CreateBuilder(IReadOnlyList<string> toolNames, string roleInstructions) =>
         new(

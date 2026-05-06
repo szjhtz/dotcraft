@@ -10,6 +10,9 @@ export interface SubAgentEdgeWire {
   depth?: number
   agentNickname?: string | null
   agentRole?: string | null
+  agentType?: string | null
+  agent_type?: string | null
+  role?: string | null
   profileName?: string | null
   runtimeType?: string | null
   supportsSendInput?: boolean
@@ -74,6 +77,18 @@ function normalizeText(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
+function normalizeRole(source: {
+  agentRole?: unknown
+  agentType?: unknown
+  agent_type?: unknown
+  role?: unknown
+} | null | undefined): string | null {
+  return normalizeText(source?.agentRole)
+    ?? normalizeText(source?.agentType)
+    ?? normalizeText(source?.agent_type)
+    ?? normalizeText(source?.role)
+}
+
 export function isTerminalSubAgentStatus(status: string | null | undefined): boolean {
   const normalized = status?.trim().toLowerCase()
   return normalized === 'closed'
@@ -95,8 +110,10 @@ function childFromWire(parentThreadId: string, wire: SubAgentChildWire): SubAgen
   const edge = wire.edge ?? {}
   const childThreadId = normalizeText(edge.childThreadId) ?? normalizeText(wire.thread?.id)
   if (!childThreadId) return null
-  const source = wire.thread?.source?.subAgent
-  const runtime = wire.thread?.runtime
+  const cachedThread = useThreadStore.getState().threadList.find((thread) => thread.id === childThreadId)
+  const threadSummary = wire.thread ?? cachedThread ?? null
+  const source = threadSummary?.source?.subAgent
+  const runtime = threadSummary?.runtime
   const status = normalizeText(edge.status) ?? 'open'
   const isCompleted = runtime?.running === true
     ? false
@@ -110,7 +127,7 @@ function childFromWire(parentThreadId: string, wire: SubAgentChildWire): SubAgen
     childThreadId,
     parentThreadId: normalizeText(edge.parentThreadId) ?? parentThreadId,
     nickname,
-    agentRole: normalizeText(edge.agentRole) ?? normalizeText(source?.agentRole),
+    agentRole: normalizeRole(edge) ?? normalizeRole(source),
     profileName: normalizeText(edge.profileName) ?? normalizeText(source?.profileName),
     runtimeType: normalizeText(edge.runtimeType) ?? normalizeText(source?.runtimeType),
     supportsSendInput: edge.supportsSendInput ?? source?.supportsSendInput ?? true,
@@ -124,7 +141,7 @@ function childFromWire(parentThreadId: string, wire: SubAgentChildWire): SubAgen
     isCompleted,
     isPlaceholder: false,
     runtime,
-    threadSummary: wire.thread ?? null
+    threadSummary
   }
 }
 
@@ -144,6 +161,9 @@ function mergeExistingProgress(next: SubAgentChild, existing: SubAgentChild | un
       : existing.isCompleted
   return {
     ...next,
+    agentRole: next.agentRole ?? existing.agentRole,
+    profileName: next.profileName ?? existing.profileName,
+    runtimeType: next.runtimeType ?? existing.runtimeType,
     lastToolDisplay: existing.lastToolDisplay,
     currentTool: isCompleted ? null : existing.currentTool,
     inputTokens: existing.inputTokens,

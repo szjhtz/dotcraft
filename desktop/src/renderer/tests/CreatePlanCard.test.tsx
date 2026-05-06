@@ -36,7 +36,7 @@ describe('CreatePlanCard', () => {
       status: 'started',
       toolName: 'CreatePlan',
       toolCallId: 'call-1',
-      argumentsPreview: '{"title":"Streaming Plan","overview":"Live draft","plan":"# DraftTitle\\n\\n- item one"}',
+      argumentsPreview: '{"plan":"# Streaming Plan\\n\\n## Summary\\n\\nLive draft\\n\\n## Implementation Changes\\n\\n- item one"}',
       createdAt: new Date().toISOString()
     }
 
@@ -45,7 +45,7 @@ describe('CreatePlanCard', () => {
     const badge = screen.getByText('Planning')
     expect(badge).toHaveClass('tool-running-gradient-text')
     expect(screen.getByText('Streaming Plan')).toBeInTheDocument()
-    expect(screen.getByText('DraftTitle')).toBeInTheDocument()
+    expect(screen.getAllByText('Live draft').length).toBeGreaterThan(0)
     expect(screen.getByText('item one')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Expand plan' }).length).toBeGreaterThan(0)
   })
@@ -58,9 +58,7 @@ describe('CreatePlanCard', () => {
       toolName: 'CreatePlan',
       toolCallId: 'call-2',
       arguments: {
-        title: 'Ship Plan',
-        overview: 'Two stages',
-        plan: '# Heading\n\n- step a',
+        plan: '# Ship Plan\n\n## Summary\n\nTwo stages\n\n## Implementation Changes\n\n- step a',
         todos: [{ id: 'a', content: 'Stage A', status: 'pending' }]
       },
       success: true,
@@ -89,9 +87,7 @@ describe('CreatePlanCard', () => {
       toolName: 'CreatePlan',
       toolCallId: 'call-3',
       arguments: {
-        title: 'Toggle Plan',
-        overview: 'Preview first',
-        plan: '# Toggle\n\n- step'
+        plan: '# Toggle Plan\n\n## Summary\n\nPreview first\n\n- step'
       },
       success: true,
       createdAt: new Date().toISOString()
@@ -113,8 +109,7 @@ describe('CreatePlanCard', () => {
       toolName: 'CreatePlan',
       toolCallId: 'call-4',
       arguments: {
-        title: 'Copy Plan',
-        plan: '# Body\n\n- one'
+        plan: '# Copy Plan\n\n## Summary\n\nBody\n\n- one'
       },
       success: true,
       createdAt: new Date().toISOString()
@@ -145,7 +140,7 @@ describe('CreatePlanCard', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Copy plan' }))
       await Promise.resolve()
     })
-    expect(writeTextMock).toHaveBeenCalledWith('# Body\n\n- one')
+    expect(writeTextMock).toHaveBeenCalledWith('## Summary\n\nBody\n\n- one')
 
     rerender(
       <LocaleProvider>

@@ -1,8 +1,8 @@
-import { memo, useState } from 'react'
+import { memo, useState, type CSSProperties } from 'react'
 import type { ConversationItem, ConversationTurn } from '../../types/conversation'
 import { isToolLikeItemType } from '../../types/conversation'
 import { ThinkingIndicator } from './ThinkingIndicator'
-import { ToolCallCard } from './ToolCallCard'
+import { renderSubAgentTitle, ToolCallCard } from './ToolCallCard'
 import { AgentMessage } from './AgentMessage'
 import { ErrorBlock } from './ErrorBlock'
 import { CancelledNotice } from './CancelledNotice'
@@ -21,6 +21,8 @@ import { ToolCollapseChevron } from './ToolCollapseChevron'
 import { useLocale } from '../../contexts/LocaleContext'
 import { formatToolGroupLabel } from '../../utils/toolGroupLabel'
 import { TurnCollapsedSummary } from './TurnCollapsedSummary'
+import { translate, type AppLocale } from '../../../shared/locales'
+import { formatSubAgentMeta, getSubAgentAccent } from '../../utils/subAgentPresentation'
 
 interface AgentResponseBlockProps {
   turn: ConversationTurn
@@ -291,7 +293,7 @@ function GroupedToolCallRow({ category, items, turnId, turnRunning }: GroupedToo
   const changedFiles = useConversationStore((s) => s.changedFiles)
   const label = formatToolGroupLabel(category, items, locale, changedFiles)
   const hasFailedItems = items.some(isGroupedItemFailed)
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(category === 'subagent')
   const [hovered, setHovered] = useState(false)
   const rowColor = hovered || expanded ? 'var(--text-secondary)' : 'var(--text-dimmed)'
 
@@ -337,14 +339,201 @@ function GroupedToolCallRow({ category, items, turnId, turnRunning }: GroupedToo
         </span>
       </button>
       {expanded && (
-        <div style={{ paddingLeft: '16px' }}>
-          {items.map((item) => (
-            <ToolCallCard key={item.id} item={item} turnId={turnId} turnRunning={turnRunning} />
-          ))}
-        </div>
+        category === 'subagent'
+          ? <SpawnAgentGroupItems items={items} locale={locale} turnId={turnId} turnRunning={turnRunning} />
+          : (
+            <div style={{ paddingLeft: '16px' }}>
+              {items.map((item) => (
+                <ToolCallCard key={item.id} item={item} turnId={turnId} turnRunning={turnRunning} />
+              ))}
+            </div>
+          )
       )}
     </div>
   )
+}
+
+interface SpawnAgentGroupDisplay {
+  id: string
+  name: string
+  meta: string
+  prompt: string
+  accentColor: string
+}
+
+function SpawnAgentGroupItems({
+  items,
+  locale,
+  turnId,
+  turnRunning
+}: {
+  items: ConversationItem[]
+  locale: AppLocale
+  turnId: string
+  turnRunning: boolean
+}): JSX.Element {
+  const displays = items
+    .map((item) => getSpawnAgentGroupDisplay(item, locale))
+    .filter((display): display is SpawnAgentGroupDisplay => display != null)
+
+  if (displays.length === 0) {
+    return (
+      <div style={{ paddingLeft: '16px' }}>
+        {items.map((item) => (
+          <ToolCallCard key={item.id} item={item} turnId={turnId} turnRunning={turnRunning} />
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div style={spawnAgentGroupStyle}>
+      {displays.map((display) => (
+        <div key={display.id} style={spawnAgentGroupItemStyle}>
+          <div style={spawnAgentGroupTitleStyle}>
+            {renderGroupedSubAgentTitle(locale, display)}
+          </div>
+          {display.prompt && (
+            <div style={spawnAgentPromptPreviewStyle} title={display.prompt}>
+              {display.prompt}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function renderGroupedSubAgentTitle(
+  locale: AppLocale,
+  display: SpawnAgentGroupDisplay
+): JSX.Element {
+  const template = translate(locale, 'toolCall.subAgent.spawnedFromPrompt', {
+    name: '__DOTCRAFT_SUB_AGENT_NAME__'
+  })
+  const parts = template.split('__DOTCRAFT_SUB_AGENT_NAME__')
+  if (parts.length === 1) {
+    return (
+      <span>
+        {renderSubAgentTitle(locale, 'toolCall.subAgent.spawned', display.name, display.accentColor)}
+        {display.meta && <span style={spawnAgentMetaStyle}>({display.meta})</span>}
+      </span>
+    )
+  }
+
+  return (
+    <span>
+      {parts.map((part, index) => (
+        <span key={`${part}-${index}`}>
+          {part}
+          {index < parts.length - 1 && (
+            <>
+              <span style={{ color: display.accentColor, fontWeight: 600 }}>{display.name}</span>
+              {display.meta && <span style={spawnAgentMetaStyle}>({display.meta})</span>}
+            </>
+          )}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function getSpawnAgentGroupDisplay(
+  item: ConversationItem,
+  locale: AppLocale
+): SpawnAgentGroupDisplay | null {
+  if (item.toolName !== 'SpawnAgent') return null
+  const parsed = parseJsonObject(item.result)
+  const args = item.arguments
+  const childThreadId = getString(parsed, 'childThreadId')
+    ?? getString(parsed, 'agentId')
+    ?? getString(args, 'childThreadId')
+    ?? getString(args, 'agentId')
+  const name = getString(parsed, 'agentNickname')
+    ?? getString(parsed, 'nickname')
+    ?? getString(args, 'agentNickname')
+    ?? getString(args, 'nickname')
+    ?? translate(locale, 'toolCall.subAgent.agent')
+  const prompt = getString(args, 'agentPrompt')
+    ?? getString(args, 'message')
+    ?? getString(args, 'prompt')
+    ?? ''
+  const meta = formatSubAgentMeta({
+    agentRole: getString(parsed, 'agentRole') ?? getString(args, 'agentRole'),
+    profileName: getString(parsed, 'profileName') ?? getString(args, 'profile'),
+    runtimeType: getString(parsed, 'runtimeType')
+  })
+
+  return {
+    id: item.id,
+    name,
+    meta,
+    prompt: truncateGroupedPrompt(prompt, 180),
+    accentColor: getSubAgentAccent(childThreadId ?? name)
+  }
+}
+
+function truncateGroupedPrompt(value: string, maxChars: number): string {
+  const trimmed = value.trim().replace(/\s+/g, ' ')
+  const chars = Array.from(trimmed)
+  if (chars.length <= maxChars) return trimmed
+  return `${chars.slice(0, maxChars - 1).join('')}...`
+}
+
+function parseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (typeof parsed === 'string') {
+      const nested = JSON.parse(parsed) as unknown
+      return typeof nested === 'object' && nested != null ? nested as Record<string, unknown> : undefined
+    }
+    return typeof parsed === 'object' && parsed != null ? parsed as Record<string, unknown> : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function getString(source: Record<string, unknown> | undefined, key: string): string | null {
+  const value = source?.[key]
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+const spawnAgentGroupStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '3px',
+  padding: '1px 6px 2px 18px'
+}
+
+const spawnAgentGroupItemStyle: CSSProperties = {
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '1px',
+  fontSize: '12px',
+  lineHeight: 1.45
+}
+
+const spawnAgentGroupTitleStyle: CSSProperties = {
+  color: 'var(--text-secondary)',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+
+const spawnAgentMetaStyle: CSSProperties = {
+  color: 'var(--text-dimmed)',
+  marginLeft: 4
+}
+
+const spawnAgentPromptPreviewStyle: CSSProperties = {
+  color: 'var(--text-dimmed)',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
 }
 
 function isGroupedItemFailed(item: ConversationItem): boolean {

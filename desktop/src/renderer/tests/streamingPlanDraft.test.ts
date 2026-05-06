@@ -24,6 +24,8 @@ function StreamingPlanProbe() {
     createElement('span', { 'data-testid': 'streaming-item-id' }, streamingItemId ?? ''),
     createElement('span', { 'data-testid': 'streaming-title' }, streamingDraft?.title ?? ''),
     createElement('span', { 'data-testid': 'streaming-overview' }, streamingDraft?.overview ?? ''),
+    createElement('span', { 'data-testid': 'streaming-plan' }, streamingDraft?.plan ?? ''),
+    createElement('span', { 'data-testid': 'streaming-content' }, streamingDraft?.content ?? ''),
     createElement('span', { 'data-testid': 'streaming-todo-count' }, String(streamingDraft?.todos.length ?? 0))
   )
 }
@@ -37,7 +39,7 @@ describe('selectStreamingPlanDraft', () => {
     expect(selectStreamingPlanDraft(useConversationStore.getState())).toBeNull()
   })
 
-  it('returns a partial plan draft while CreatePlan arguments stream', () => {
+  it('returns a partial plan draft from single-field Markdown while CreatePlan arguments stream', () => {
     const store = useConversationStore.getState()
 
     store.setTurns([
@@ -54,14 +56,14 @@ describe('selectStreamingPlanDraft', () => {
     store.onToolCallArgumentsDelta({
       turnId: 'turn-1',
       itemId: 'item-plan-1',
-      delta: '{"title":"Ship feature X",',
+      delta: '{"plan":"# Ship feature X\\n\\n## 概览\\n\\nStep',
       toolName: 'CreatePlan',
       callId: 'call-1'
     })
     store.onToolCallArgumentsDelta({
       turnId: 'turn-1',
       itemId: 'item-plan-1',
-      delta: '"overview":"Step',
+      delta: ' one\\n\\n## Changes\\n\\n- Do it',
       toolName: 'CreatePlan',
       callId: 'call-1'
     })
@@ -70,7 +72,9 @@ describe('selectStreamingPlanDraft', () => {
     expect(draft).not.toBeNull()
     expect(draft?.itemId).toBe('item-plan-1')
     expect(draft?.title).toBe('Ship feature X')
-    expect(draft?.overview).toBe('Step')
+    expect(draft?.overview).toBe('Step one')
+    expect(draft?.plan).toContain('# Ship feature X')
+    expect(draft?.content).toContain('## 概览')
   })
 
   it('extracts closed todo objects from the streaming todos array', () => {
@@ -88,7 +92,7 @@ describe('selectStreamingPlanDraft', () => {
     store.onToolCallArgumentsDelta({
       turnId: 'turn-1',
       itemId: 'item-plan-2',
-      delta: '{"title":"X","todos":[{"id":"t1","content":"do A","status":"pending"},{"id":"t2","content":"do B",',
+      delta: '{"plan":"# X","todos":[{"id":"t1","content":"do A","status":"pending"},{"id":"t2","content":"do B",',
       toolName: 'CreatePlan',
       callId: 'call-2'
     })
@@ -113,7 +117,7 @@ describe('selectStreamingPlanDraft', () => {
     store.onToolCallArgumentsDelta({
       turnId: 'turn-1',
       itemId: 'item-plan-3',
-      delta: '{"title":"Y"',
+      delta: '{"plan":"# Y"',
       toolName: 'CreatePlan',
       callId: 'call-3'
     })
@@ -130,7 +134,7 @@ describe('selectStreamingPlanDraft', () => {
         turnId: 'turn-1',
         payload: {
           toolName: 'CreatePlan',
-          arguments: { title: 'Y' }
+          arguments: { plan: '# Y' }
         }
       }
     })
@@ -158,7 +162,7 @@ describe('selectStreamingPlanDraft', () => {
       store.onToolCallArgumentsDelta({
         turnId: 'turn-1',
         itemId: 'item-plan-4',
-        delta: '{"title":"Plan A","overview":"Part 1","todos":[{"id":"t1","content":"task 1","status":"pending"}',
+      delta: '{"plan":"# Plan A\\n\\n## 概览\\n\\nPart 1","todos":[{"id":"t1","content":"task 1","status":"pending"}',
         toolName: 'CreatePlan',
         callId: 'call-4'
       })
@@ -167,6 +171,8 @@ describe('selectStreamingPlanDraft', () => {
     expect(screen.getByTestId('streaming-item-id').textContent).toBe('item-plan-4')
     expect(screen.getByTestId('streaming-title').textContent).toBe('Plan A')
     expect(screen.getByTestId('streaming-overview').textContent).toBe('Part 1')
+    expect(screen.getByTestId('streaming-plan').textContent).toContain('# Plan A')
+    expect(screen.getByTestId('streaming-content').textContent).toContain('## 概览')
     expect(screen.getByTestId('streaming-todo-count').textContent).toBe('1')
 
     act(() => {
@@ -180,5 +186,17 @@ describe('selectStreamingPlanDraft', () => {
     })
 
     expect(screen.getByTestId('streaming-title').textContent).toBe('Plan A')
+  })
+
+  it('falls back to legacy title and overview fields when plan is absent', () => {
+    const draft = buildStreamingPlanDraft(
+      'item-legacy',
+      '{"title":"Legacy Plan","overview":"Legacy overview"'
+    )
+
+    expect(draft.title).toBe('Legacy Plan')
+    expect(draft.overview).toBe('Legacy overview')
+    expect(draft.plan).toBeNull()
+    expect(draft.content).toBeNull()
   })
 })

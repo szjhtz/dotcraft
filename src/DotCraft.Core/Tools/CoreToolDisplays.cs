@@ -479,7 +479,13 @@ public static class CoreToolDisplays
     }
 
     public static string CreatePlan(IDictionary<string, object?>? args)
-        => $"Created plan: {ToolDisplayHelpers.Truncate(ToolDisplayHelpers.GetString(args, "title") ?? "plan", 60)}";
+    {
+        var plan = ToolDisplayHelpers.GetString(args, "plan");
+        var title = string.IsNullOrWhiteSpace(plan)
+            ? ToolDisplayHelpers.GetString(args, "title")
+            : PlanMarkdownParser.Parse(plan).Title;
+        return $"Created plan: {ToolDisplayHelpers.Truncate(title ?? "plan", 60)}";
+    }
 
     public static string UpdateTodos(IDictionary<string, object?>? args)
         => "Updated plan tasks";

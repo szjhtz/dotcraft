@@ -52,6 +52,7 @@ public sealed class PromptBuilder(
             promptProfile,
             SubAgentPromptProfiles.Light,
             StringComparison.OrdinalIgnoreCase);
+        var availableToolNames = toolNamesProvider?.Invoke();
         var parts = new List<string>
         {
             // Core identity and built-in operating guidance
@@ -60,6 +61,9 @@ public sealed class PromptBuilder(
 
         if (!string.IsNullOrWhiteSpace(subAgentProfilesSection))
             parts.Add(subAgentProfilesSection);
+
+        if (!subAgentLight && IsToolAvailable(availableToolNames, "SpawnAgent"))
+            parts.Add(GetSubAgentLifecyclePrompt(availableToolNames));
 
         parts.Add(GetWorkingStylePrompt());
         parts.Add(GetEditingWorkflowPrompt());
@@ -82,7 +86,6 @@ public sealed class PromptBuilder(
 
         // Skills - Progressive loading approach:
         // 1. Always-loaded skills: include full content
-        var availableToolNames = toolNamesProvider?.Invoke();
         if (!subAgentLight && IsToolAvailable(availableToolNames, "SkillManage"))
             parts.Add(GetSelfLearningPrompt());
 
@@ -176,6 +179,41 @@ When you load a skill and find it stale, incomplete, wrong, using incorrect comm
 Prefer updating or generalizing an existing skill over creating a new one when the existing skill already covers the task class. Create new skills at the reusable task-class level, not for one exact session.
 
 Newly created or updated skills may not affect the current prompt immediately; they are available after the next turn or session refresh.
+""";
+    }
+
+    private static string GetSubAgentLifecyclePrompt(IReadOnlyList<string>? availableToolNames)
+    {
+        var hasSendInput = IsToolAvailable(availableToolNames, "SendInput");
+        var hasWaitAgent = IsToolAvailable(availableToolNames, "WaitAgent");
+        var hasResumeAgent = IsToolAvailable(availableToolNames, "ResumeAgent");
+        var hasCloseAgent = IsToolAvailable(availableToolNames, "CloseAgent");
+
+        var controls = new List<string>();
+        if (hasSendInput)
+            controls.Add("Use `SendInput` to reuse an existing child thread when the next ask depends on that child's context.");
+        if (hasWaitAgent)
+            controls.Add("Use `WaitAgent` sparingly, only when the parent is blocked on the child result or needs to synthesize completed work.");
+        if (hasResumeAgent)
+            controls.Add("Use `ResumeAgent` only when a previously closed child thread is the right context to continue.");
+        if (hasCloseAgent)
+            controls.Add("Use `CloseAgent` when a child thread is no longer needed; do not keep idle child agents open indefinitely.");
+
+        var controlsText = controls.Count == 0
+            ? "- Track spawned child thread ids and manage their results explicitly with the tools currently available."
+            : "- " + string.Join("\n- ", controls);
+
+        return
+$$"""
+## SubAgent Lifecycle
+
+Use `SpawnAgent` for concrete sidecar work that can run while the parent keeps the critical path moving.
+
+- Keep immediate blockers local; spawn parallel exploration, verification, or disjoint implementation work.
+- Make each child prompt specific and self-contained; use `agentRole: "explorer"` for read-only research and `agentRole: "worker"` for bounded execution.
+- Record each `childThreadId`, nickname, role/profile, and purpose.
+{{controlsText}}
+- When a child finishes, review and integrate its result without redoing the same work.
 """;
     }
 
@@ -292,10 +330,7 @@ This contains:
 {{envSection}}
 
 ## Tool Usage Policy
-- When doing open-ended file search or codebase exploration that requires multiple rounds of searching, prefer to use SpawnAgent to reduce context usage and keep the main conversation focused.
-- You should proactively use SpawnAgent when a research task requires many search rounds, or when independent investigations can run in parallel.
-- Launch multiple subagents concurrently whenever possible — include multiple SpawnAgent calls in a single response to maximize performance, and give each call a different self-contained `agentPrompt`.
-- When you are not confident you can find what you need in 1-2 tool calls, use SpawnAgent instead.
+Use the available tools deliberately to gather context, make changes, validate work, and manage long-running collaboration when those tools are exposed.
 """;
     }
 
@@ -509,13 +544,6 @@ Example (correct timing):
 - Only mark completed when fully done. If blocked, keep it in_progress and
   add a new task describing the blocker.
 - Remove items that are no longer relevant.
-
-## Subagent Exploration
-
-Before editing code in an unfamiliar part of the codebase, use SpawnAgent
-to research it first. When multiple independent areas need investigation,
-launch multiple SpawnAgent calls in a single response to run them in
-parallel rather than sequentially.
 </system-reminder>
 """;
 
@@ -555,9 +583,7 @@ Ask the user clarifying questions or ask for their opinion when weighing tradeof
 - Shell commands via Exec are allowed **for observation only**. NEVER use Exec to modify files, run builds, or execute commits.
 - Ask clarifying questions about ambiguities.
 
-**IMPORTANT — Parallel Exploration with SpawnAgent**: When the task touches multiple independent areas of the codebase, launch multiple SpawnAgent calls in a single response instead of exploring sequentially. This dramatically reduces planning time.
-
-Example: if the task involves both a data model and a UI component, send one response with two complete SpawnAgent calls — one with `agentPrompt` focused on the model layer and one with a different `agentPrompt` focused on the UI layer — rather than doing them one after the other.
+**SpawnAgent guidance**: When the task touches multiple independent areas and SpawnAgent is available, launch concrete sidecar investigations in parallel. Do not delegate the immediate blocker when the next planning step depends on that result.
 
 ### Subagent Result Synthesis
 - After subagents return, identify which findings can be used directly and
@@ -583,9 +609,12 @@ Example: if the task involves both a data model and a UI component, send one res
 
 ### Phase 4: Present Plan
 - When your plan is ready, call the `CreatePlan` tool.
-- Keep the `plan` content concise by default. Prefer 3-5 short sections such
-  as `Summary`, `Implementation Changes`, `Public Interfaces / Data Shape`,
-  `Test Plan`, and `Assumptions`; simple tasks may need only 2-3 sections.
+- Put the complete plan Markdown in the single `plan` parameter. Do not use or
+  invent separate `title`, `overview`, or `content` parameters.
+- The `plan` Markdown MUST start with one H1 title, followed by compact sections.
+  Prefer 3-5 short sections such as `Summary`, `Implementation Changes`,
+  `Public Interfaces / Data Shape`, `Test Plan`, and `Assumptions`; simple tasks
+  may need only 2-3 sections.
 - For typical tasks, aim for 8-15 total bullets. Complex tasks may use up to
   about 20 bullets. Expand beyond this only when the user asks for more detail
   or the extra detail prevents a likely implementation mistake.
@@ -593,7 +622,7 @@ Example: if the task involves both a data model and a UI component, send one res
   most 3 key paths; use up to 5 only when necessary. Do not include a full
   inventory of touched or inspected files.
 - The `todos` parameter is the execution tracker. Do not duplicate todos as a
-  second step-by-step checklist inside the `plan` content.
+  second step-by-step checklist inside the `plan` body.
 - You MUST include the `todos` parameter with at least one task item.
   Break the plan into concrete, trackable steps -- each with an `id`
   (short kebab-case) and `content` (task description). Prefer 3-7 high-level
@@ -602,9 +631,7 @@ Example: if the task involves both a data model and a UI component, send one res
 - The user will manually switch to agent mode when ready to proceed.
 
 Example:
-  title: "Add dark mode support"
-  overview: "Implement theme switching with a dark mode toggle."
-  plan: "## Summary\n\nAdd theme state and wire the existing settings UI.\n\n## Implementation Changes\n\n- Create ThemeContext and persist the selected mode.\n- Apply theme classes at the app root.\n\n## Test Plan\n\n- Verify light/dark selection persists across reloads."
+  plan: "# Add dark mode support\n\n## Summary\n\nAdd theme state and wire the existing settings UI.\n\n## Implementation Changes\n\n- Create ThemeContext and persist the selected mode.\n- Apply theme classes at the app root.\n\n## Test Plan\n\n- Verify light/dark selection persists across reloads."
   todos: [{id: "add-context", content: "Create ThemeContext"},
           {id: "update-ui", content: "Add toggle to Settings page"}]
 

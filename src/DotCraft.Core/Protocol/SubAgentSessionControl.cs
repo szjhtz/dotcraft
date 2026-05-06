@@ -53,6 +53,8 @@ public sealed class SubAgentSpawnOptions
 
     public IReadOnlyList<SubAgentRoleConfig>? RoleConfigs { get; set; }
 
+    public string? SubAgentModel { get; set; }
+
     public int MaxDepth { get; set; } = 1;
 }
 
@@ -153,6 +155,9 @@ public static class SubAgentSessionControl
         var childConfiguration = ApplyRoleToChildConfiguration(
             context.ParentThread.Configuration,
             roleConfig,
+            string.Equals(runtimeType, NativeSubAgentRuntime.RuntimeTypeName, StringComparison.OrdinalIgnoreCase)
+                ? options.SubAgentModel
+                : null,
             depth,
             maxDepth);
 
@@ -650,6 +655,7 @@ public static class SubAgentSessionControl
     private static ThreadConfiguration ApplyRoleToChildConfiguration(
         ThreadConfiguration? parentConfiguration,
         SubAgentRoleConfig role,
+        string? nativeSubAgentModel,
         int childDepth,
         int maxDepth)
     {
@@ -658,6 +664,8 @@ public static class SubAgentSessionControl
             child.Mode = role.Mode.Trim();
         if (!string.IsNullOrWhiteSpace(role.Model))
             child.Model = role.Model.Trim();
+        else if (!string.IsNullOrWhiteSpace(nativeSubAgentModel))
+            child.Model = nativeSubAgentModel.Trim();
 
         child.ToolAllowList = MergeAllowLists(parentConfiguration?.ToolAllowList, role.ToolAllowList);
         child.ToolDenyList = MergeDenyLists(parentConfiguration?.ToolDenyList, role.ToolDenyList);

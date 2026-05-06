@@ -5,6 +5,7 @@ import { SubAgentDock } from '../components/conversation/SubAgentDock'
 import { useSubAgentStore } from '../stores/subAgentStore'
 import { useThreadStore } from '../stores/threadStore'
 import { useUIStore } from '../stores/uiStore'
+import { getSubAgentAccent } from '../utils/subAgentPresentation'
 
 const settingsGet = vi.fn()
 const appServerSendRequest = vi.fn()
@@ -71,7 +72,7 @@ describe('SubAgentDock', () => {
         childThreadId: 'child-1',
         parentThreadId: 'parent-1',
         nickname: 'Lovelace',
-        agentRole: null,
+        agentRole: 'explorer',
         profileName: 'codex-cli',
         runtimeType: 'cli-oneshot',
         supportsSendInput: false,
@@ -96,8 +97,19 @@ describe('SubAgentDock', () => {
     renderDock()
 
     expect(screen.getByText('1 background agents')).toBeInTheDocument()
-    expect(screen.getByText('Lovelace')).toBeInTheDocument()
-    expect(screen.getByTestId('subagent-dock').getAttribute('style')).not.toContain('box-shadow')
+    const nickname = screen.getByText('Lovelace')
+    expect(nickname).toBeInTheDocument()
+    expect(nickname.getAttribute('style')).toContain('color:')
+    expect(nickname).toHaveStyle({ color: getSubAgentAccent('child-1') })
+    expect(nickname.parentElement?.querySelector('span[aria-hidden]')).toBeNull()
+    expect(screen.getByText('(explorer)')).toBeInTheDocument()
+    expect(screen.queryByText(/codex-cli/)).toBeNull()
+    const dockStyle = screen.getByTestId('subagent-dock').getAttribute('style') ?? ''
+    expect(dockStyle).toContain('width: calc(100% - 40px)')
+    expect(dockStyle).toContain('max-width: none')
+    expect(dockStyle).toContain('margin: 0px auto -1px')
+    expect(dockStyle).toContain('backdrop-filter: blur(16px) saturate(1.25)')
+    expect(dockStyle).not.toContain('box-shadow')
     expect(screen.getByTestId('subagent-dock-rows').getAttribute('style')).toContain('transition:')
     expect(screen.getByTestId('subagent-dock-rows').getAttribute('style')).toContain('max-height:')
     const description = screen.getByText('Reading sprite atlas')
@@ -143,10 +155,85 @@ describe('SubAgentDock', () => {
     expect(screen.queryByRole('button', { name: 'Stop Lovelace' })).not.toBeInTheDocument()
   })
 
+  it('hydrates role aliases into the dock role badge', async () => {
+    useSubAgentStore.getState().reset()
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'subagent/children/list') {
+        return {
+          data: [
+            {
+              edge: {
+                parentThreadId: 'parent-1',
+                childThreadId: 'child-alias',
+                agentNickname: 'Alias child',
+                agentType: 'explorer',
+                status: 'open'
+              },
+              thread: {
+                id: 'child-alias',
+                displayName: 'Alias child',
+                status: 'active',
+                originChannel: 'subagent',
+                createdAt: '2026-05-03T00:00:00.000Z',
+                lastActiveAt: '2026-05-03T00:01:00.000Z',
+                runtime: {
+                  running: false,
+                  waitingOnApproval: false,
+                  waitingOnPlanConfirmation: false
+                }
+              }
+            }
+          ]
+        }
+      }
+      return {}
+    })
+
+    renderDock()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alias child')).toBeInTheDocument()
+      expect(screen.getByText('(explorer)')).toBeInTheDocument()
+    })
+  })
+
+  it('does not render a role badge for default or empty roles', () => {
+    useSubAgentStore.getState().setChildren('parent-1', [
+      {
+        childThreadId: 'child-default',
+        parentThreadId: 'parent-1',
+        nickname: 'Default child',
+        agentRole: 'default',
+        profileName: 'codex-cli',
+        runtimeType: 'cli-oneshot',
+        supportsSendInput: true,
+        supportsResume: true,
+        supportsClose: true,
+        status: 'completed',
+        lastToolDisplay: null,
+        currentTool: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        isCompleted: true,
+        runtime: {
+          running: false,
+          waitingOnApproval: false,
+          waitingOnPlanConfirmation: false
+        }
+      }
+    ])
+
+    renderDock()
+
+    expect(screen.getByText('Default child')).toBeInTheDocument()
+    expect(screen.queryByText('(default)')).toBeNull()
+    expect(screen.queryByText(/codex-cli/)).toBeNull()
+  })
+
   it('keeps rows collapsed after a user collapse even while a child is running', async () => {
     renderDock()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse background agents' }))
+    fireEvent.click(screen.getByText('1 background agents'))
 
     await waitFor(() => {
       expect(useSubAgentStore.getState().collapsedByParent.get('parent-1')).toBe(true)
@@ -170,6 +257,7 @@ describe('SubAgentDock', () => {
   it('stops closeable running children through subagent/close', async () => {
     renderDock()
 
+    expect(useSubAgentStore.getState().collapsedByParent.get('parent-1')).not.toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Stop all background agents' }))
 
     await waitFor(() => {
@@ -183,6 +271,7 @@ describe('SubAgentDock', () => {
         includeThreads: true
       })
     })
+    expect(useSubAgentStore.getState().collapsedByParent.get('parent-1')).not.toBe(true)
   })
 
   it('keeps completed child rows visible as openable history entries', () => {

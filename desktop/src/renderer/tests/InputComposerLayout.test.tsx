@@ -133,7 +133,7 @@ describe('InputComposer layout', () => {
     expect(sendButton.getAttribute('style')).toContain('var(--text-dimmed)')
   })
 
-  it('attaches the SubAgent dock directly to the composer surface when children exist', () => {
+  it('renders the SubAgent dock as a responsive attached accessory above the composer surface', () => {
     useSubAgentStore.getState().setChildren('thread-1', [
       {
         childThreadId: 'child-1',
@@ -201,13 +201,16 @@ describe('InputComposer layout', () => {
     const composerSurface = findComposerSurface(textbox)
     const shell = dock.parentElement
 
-    expect(dock.getAttribute('style')).toContain('width: 100%')
-    expect(dock.getAttribute('style')).toContain('margin: 0px 0px -1px')
+    expect(dock.getAttribute('style')).toContain('width: calc(100% - 40px)')
+    expect(dock.getAttribute('style')).toContain('max-width: none')
+    expect(dock.getAttribute('style')).toContain('margin: 0px auto -1px')
+    expect(dock.getAttribute('style')).toContain('backdrop-filter: blur(16px) saturate(1.25)')
+    expect(dock.getAttribute('style')).not.toContain('box-shadow:')
     expect(dock.getAttribute('style')).not.toContain('min(1080px')
     expect(composerSurface).not.toBeNull()
-    expect(composerSurface?.getAttribute('style')).toContain('border-radius: 0 0 20px 20px')
-    expect(shell?.getAttribute('style')).toContain('padding: 0px 14px 14px')
+    expect(composerSurface?.getAttribute('style')).toContain('border-radius: 20px')
     expect(shell?.getAttribute('style')).toContain('gap: 0px')
+    expect(composerSurface?.previousElementSibling).toBe(dock)
   })
 
   it('keeps the context usage ring aligned to the model picker height with a smaller donut', () => {

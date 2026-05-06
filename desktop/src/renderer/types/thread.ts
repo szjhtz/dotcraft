@@ -23,6 +23,9 @@ export interface SubAgentThreadSourceWire {
   depth?: number
   agentNickname?: string
   agentRole?: string
+  agentType?: string
+  agent_type?: string
+  role?: string
   profileName?: string
   runtimeType?: string
   supportsSendInput?: boolean

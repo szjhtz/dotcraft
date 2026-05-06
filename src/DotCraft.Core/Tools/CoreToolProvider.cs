@@ -57,7 +57,8 @@ public sealed class CoreToolProvider : IAgentToolProvider
                 context,
                 subAgentCoordinator,
                 context.Config.SubAgent.Roles,
-                context.Config.SubAgent.MaxDepth);
+                context.Config.SubAgent.MaxDepth,
+                context.Config.SubAgent.Model);
         }
 
         // File tools

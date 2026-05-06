@@ -4,6 +4,7 @@ import { LocaleProvider } from '../contexts/LocaleContext'
 import { AgentResponseBlock } from '../components/conversation/AgentResponseBlock'
 import { useUIStore } from '../stores/uiStore'
 import type { ConversationItem, ConversationTurn } from '../types/conversation'
+import { getSubAgentAccent } from '../utils/subAgentPresentation'
 
 function makeToolCallItem(
   id: string,
@@ -37,7 +38,7 @@ function makeCreatePlanItem(
     arguments: {
       title,
       overview: `${title} overview`,
-      plan: '- keep visible'
+      plan: `# ${title}\n\n- keep visible`
     },
     success: true,
     createdAt
@@ -103,7 +104,7 @@ describe('AgentResponseBlock subagent transcript rendering', () => {
     }
 
     const text = renderBlock(turn)
-    const spawnIndex = text.indexOf('Started agent')
+    const spawnIndex = text.indexOf('Spawned agent')
     const followupIndex = text.indexOf('Called FollowupTool')
 
     expect(spawnIndex).toBeGreaterThan(-1)
@@ -134,8 +135,73 @@ describe('AgentResponseBlock subagent transcript rendering', () => {
     }
 
     const text = renderBlock(turn)
-    expect(text).toContain('Started agent')
+    expect(text).toContain('Spawned agent')
     expect(text).not.toContain('SubAgent completed')
+  })
+
+  it('renders grouped SpawnAgent calls as an expanded instruction list with colored names', () => {
+    const turn: ConversationTurn = {
+      id: 'turn-spawn-group',
+      threadId: 'thread-1',
+      status: 'completed',
+      startedAt: '2026-04-18T10:01:00.000Z',
+      items: [
+        {
+          id: 'spawn-1',
+          type: 'toolCall',
+          status: 'completed',
+          toolCallId: 'spawn-call-1',
+          toolName: 'SpawnAgent',
+          arguments: {
+            agentPrompt: 'Inspect Settings diagnostics output',
+            agentNickname: 'Kepler',
+            agentRole: 'explorer'
+          },
+          result: JSON.stringify({
+            childThreadId: 'thread_kepler',
+            agentNickname: 'Kepler',
+            agentRole: 'explorer',
+            status: 'running'
+          }),
+          success: true,
+          createdAt: '2026-04-18T10:01:01.000Z'
+        },
+        {
+          id: 'spawn-2',
+          type: 'toolCall',
+          status: 'completed',
+          toolCallId: 'spawn-call-2',
+          toolName: 'SpawnAgent',
+          arguments: {
+            agentPrompt: 'Review AppServer credential redaction',
+            agentNickname: 'Lagrange',
+            agentRole: 'explorer'
+          },
+          result: JSON.stringify({
+            childThreadId: 'thread_lagrange',
+            agentNickname: 'Lagrange',
+            agentRole: 'explorer',
+            status: 'running'
+          }),
+          success: true,
+          createdAt: '2026-04-18T10:01:02.000Z'
+        }
+      ]
+    }
+
+    render(
+      <LocaleProvider>
+        <AgentResponseBlock turn={turn} />
+      </LocaleProvider>
+    )
+
+    expect(screen.getByText('Spawned 2 agents')).toBeInTheDocument()
+    expect(screen.getByText('Kepler')).toHaveStyle({ color: getSubAgentAccent('thread_kepler') })
+    expect(screen.getByText('Lagrange')).toHaveStyle({ color: getSubAgentAccent('thread_lagrange') })
+    expect(screen.getAllByText('(explorer)')).toHaveLength(2)
+    expect(screen.getByText('Inspect Settings diagnostics output')).toBeInTheDocument()
+    expect(screen.getByText('Review AppServer credential redaction')).toBeInTheDocument()
+    expect(screen.queryByText(/childThreadId/)).toBeNull()
   })
 
   it('keeps WaitAgent in running state after toolCall completion while waiting for toolResult', () => {

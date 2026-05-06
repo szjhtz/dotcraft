@@ -55,12 +55,12 @@ export function ComposerShell({
         opacity
       }}
     >
-      {topAccessory}
+      {topAccessoryVisible && topAccessory}
       <div
         style={{
           position: 'relative',
           border: focused ? '1px solid var(--border-active)' : '1px solid var(--border-default)',
-          borderRadius: topAccessoryVisible ? '0 0 20px 20px' : '20px',
+          borderRadius: '20px',
           background: 'color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-primary))',
           padding: '10px 10px 8px',
           boxShadow: focused
@@ -78,7 +78,7 @@ export function ComposerShell({
               inset: 0,
               zIndex: 20,
               border: '2px dashed var(--accent)',
-              borderRadius: topAccessoryVisible ? '0 0 18px 18px' : '18px',
+              borderRadius: '18px',
               background: 'rgba(124, 58, 237, 0.08)',
               display: 'flex',
               alignItems: 'center',

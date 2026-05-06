@@ -18,9 +18,10 @@ public static class AgentControlToolRegistrar
         ToolProviderContext context,
         SubAgentCoordinator subAgentCoordinator,
         IEnumerable<SubAgentRoleConfig>? subAgentRoles = null,
-        int maxSubAgentDepth = 1)
+        int maxSubAgentDepth = 1,
+        string? subAgentModel = null)
     {
-        var agentTools = new AgentTools(subAgentCoordinator, subAgentRoles, maxSubAgentDepth);
+        var agentTools = new AgentTools(subAgentCoordinator, subAgentRoles, maxSubAgentDepth, subAgentModel);
         AddIfAllowed(tools, context, nameof(AgentTools.SpawnAgent), () => AIFunctionFactory.Create(agentTools.SpawnAgent));
         AddIfAllowed(tools, context, nameof(AgentTools.SendInput), () => AIFunctionFactory.Create(agentTools.SendInput));
         AddIfAllowed(tools, context, nameof(AgentTools.WaitAgent), () => AIFunctionFactory.Create(agentTools.WaitAgent));

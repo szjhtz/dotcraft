@@ -249,6 +249,56 @@ public sealed class SubAgentSessionControlTests : IDisposable
     }
 
     [Fact]
+    public async Task SpawnAgent_NativeProfile_UsesConfiguredSubAgentModel()
+    {
+        var context = await CreateContextAsync(new ThreadConfiguration { Model = "parent-model" });
+
+        var result = await SubAgentSessionControl.SpawnAgentAsync(
+            context,
+            new SubAgentSpawnOptions
+            {
+                AgentPrompt = "inspect code",
+                SubAgentModel = "subagent-model"
+            },
+            waitForCompletion: false,
+            coordinator: null,
+            CancellationToken.None);
+
+        var child = await _sessionService.GetThreadAsync(result.ChildThreadId);
+
+        Assert.Equal("subagent-model", child.Configuration?.Model);
+    }
+
+    [Fact]
+    public async Task SpawnAgent_NativeProfile_RoleModelOverridesConfiguredSubAgentModel()
+    {
+        var context = await CreateContextAsync(new ThreadConfiguration { Model = "parent-model" });
+
+        var result = await SubAgentSessionControl.SpawnAgentAsync(
+            context,
+            new SubAgentSpawnOptions
+            {
+                AgentPrompt = "inspect code",
+                RoleConfigs =
+                [
+                    new SubAgentRoleConfig
+                    {
+                        Name = SubAgentRoleNames.Default,
+                        Model = "role-model"
+                    }
+                ],
+                SubAgentModel = "subagent-model"
+            },
+            waitForCompletion: false,
+            coordinator: null,
+            CancellationToken.None);
+
+        var child = await _sessionService.GetThreadAsync(result.ChildThreadId);
+
+        Assert.Equal("role-model", child.Configuration?.Model);
+    }
+
+    [Fact]
     public async Task SpawnAgent_WorkerRole_DefaultMaxDepth_RemovesSpawnAgent()
     {
         var context = await CreateContextAsync();
@@ -364,14 +414,14 @@ public sealed class SubAgentSessionControlTests : IDisposable
         Assert.Contains("Subagent depth limit reached", ex.Message, StringComparison.Ordinal);
     }
 
-    private async Task<SubAgentSessionContext> CreateContextAsync(int depth = 0)
+    private async Task<SubAgentSessionContext> CreateContextAsync(ThreadConfiguration? config = null, int depth = 0)
     {
         var parent = await _sessionService.CreateThreadAsync(new SessionIdentity
         {
             WorkspacePath = _tempDir,
             UserId = "user",
             ChannelName = "desktop"
-        });
+        }, config);
 
         return new SubAgentSessionContext
         {

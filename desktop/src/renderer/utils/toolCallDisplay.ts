@@ -118,6 +118,20 @@ function getFilename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
 }
 
+function extractPlanTitle(markdown: string | null | undefined): string {
+  if (!markdown) return ''
+  const h1 = markdown
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .find((line) => /^#\s+/.test(line.trimStart()))
+  return h1 ? stripMarkdownHeading(h1) : ''
+}
+
+function stripMarkdownHeading(line: string): string {
+  return line.trim().replace(/^#+\s*/, '').replace(/\s*#+\s*$/, '').trim()
+}
+
 function toPositiveInt(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return Math.floor(value)
@@ -272,7 +286,9 @@ export function formatCollapsedToolLabel(
   if (todoLabel) return todoLabel
 
   if (toolName === 'CreatePlan') {
-    const title = typeof args?.title === 'string' ? args.title.trim() : ''
+    const planTitle = typeof args?.plan === 'string' ? extractPlanTitle(args.plan) : ''
+    const fallbackTitle = typeof args?.title === 'string' ? args.title.trim() : ''
+    const title = planTitle || fallbackTitle
     if (title) {
       return translate(locale, 'toolCall.plan.collapsedLabel', { title })
     }
@@ -344,7 +360,6 @@ export interface StreamingParsedPreview {
   /** Partial CreatePlan draft, populated progressively while streaming. */
   planDraft?: {
     title?: string | null
-    overview?: string | null
     plan?: string | null
   }
 }
@@ -577,9 +592,8 @@ export function getStreamingToolDisplay(
       return { label: translate(locale, 'toolCall.streaming.commitSuggest') }
     }
     case 'CreatePlan': {
-      const title = extractPartialJsonStringValue(rawArgs, 'title')
-      const overview = extractPartialJsonStringValue(rawArgs, 'overview')
       const plan = extractPartialJsonStringValue(rawArgs, 'plan')
+      const title = extractPlanTitle(plan)
       return {
         label: title
           ? translate(locale, 'toolCall.streaming.draftingPlanTitled', {
@@ -587,7 +601,7 @@ export function getStreamingToolDisplay(
             })
           : translate(locale, 'toolCall.streaming.draftingPlan'),
         parsedPreview: {
-          planDraft: { title, overview, plan }
+          planDraft: { title, plan }
         }
       }
     }

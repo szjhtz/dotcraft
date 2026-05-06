@@ -12,12 +12,10 @@ public sealed class PlanTools(
     Func<string?> sessionIdProvider,
     Action<StructuredPlan>? onPlanUpdated = null)
 {
-    [Description("Create or replace the structured plan for the current session. Call this tool to present your finalized plan to the user. The plan should include a title, a brief overview, compact decision-complete Markdown, and a list of actionable task items.")]
+    [Description("Create or replace the structured plan for the current session. Call this tool to present your finalized plan to the user. The plan parameter must be one complete, compact decision-complete Markdown document.")]
     [Tool(Icon = "📋", DisplayType = typeof(CoreToolDisplays), DisplayMethod = nameof(CoreToolDisplays.CreatePlan))]
     public async Task<string> CreatePlan(
-        [Description("A concise title for the plan.")] string title,
-        [Description("A 1-2 sentence summary of what the plan accomplishes.")] string overview,
-        [Description("The plan content in Markdown. Include only implementation details needed to remove ambiguity; mention key files only when needed; keep verification in a short test section.")] string plan,
+        [Description("Complete Markdown plan. Start with one H1 title, then concise sections such as Summary, Implementation Changes, Test Plan, and Assumptions. Do not split the body into separate overview/content fields.")] string plan,
         [Description("3-7 high-level actionable implementation tasks. Each item has 'id' (short kebab-case) and 'content' (task description). Do not include search, reading, or explanation-only steps.")] List<PlanTodoInput> todos)
     {
         try
@@ -29,6 +27,13 @@ public sealed class PlanTools(
                 return "Error: No active session.";
             }
 
+            if (string.IsNullOrWhiteSpace(plan))
+            {
+                DebugModeService.LogIfEnabled("[PlanTools] CreatePlan: plan is null or empty");
+                return "Error: CreatePlan.plan must contain the complete Markdown plan.";
+            }
+
+            var parsedPlan = PlanMarkdownParser.Parse(plan);
             var todoList = todos
                 .Where(t => !string.IsNullOrWhiteSpace(t.Id) && !string.IsNullOrWhiteSpace(t.Content))
                 .Select(t => new PlanTodo
@@ -45,9 +50,9 @@ public sealed class PlanTools(
 
             var structured = new StructuredPlan
             {
-                Title = title,
-                Overview = overview,
-                Content = plan,
+                Title = parsedPlan.Title,
+                Overview = parsedPlan.Overview,
+                Content = parsedPlan.Content,
                 Todos = todoList,
                 CreatedAt = existing?.CreatedAt ?? now,
                 UpdatedAt = now
@@ -59,7 +64,7 @@ public sealed class PlanTools(
             var taskSummary = todoList.Count > 0
                 ? $" with {todoList.Count} task(s)"
                 : "";
-            return $"Plan \"{title}\" saved successfully{taskSummary}. Switch to agent mode to execute.";
+            return $"Plan \"{parsedPlan.Title}\" saved successfully{taskSummary}. Switch to agent mode to execute.";
         }
         catch (Exception ex)
         {
@@ -278,6 +283,139 @@ public sealed class PlanTools(
         return s is PlanTodoStatus.Pending or PlanTodoStatus.InProgress
             or PlanTodoStatus.Completed or PlanTodoStatus.Cancelled
             ? s : "";
+    }
+}
+
+public sealed record ParsedPlanMarkdown(string Title, string Overview, string Content);
+
+public static class PlanMarkdownParser
+{
+    public static ParsedPlanMarkdown Parse(string markdown)
+    {
+        var normalized = (markdown ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return new ParsedPlanMarkdown("Plan", string.Empty, string.Empty);
+
+        var lines = normalized.Split('\n').ToList();
+        var titleIndex = lines.FindIndex(IsH1);
+        var fallbackTitleIndex = lines.FindIndex(line => !string.IsNullOrWhiteSpace(line));
+        var title = titleIndex >= 0
+            ? StripHeading(lines[titleIndex])
+            : ResolveFallbackTitle(lines, fallbackTitleIndex);
+        var content = RemoveTitleLine(lines, titleIndex);
+        var overview = titleIndex >= 0
+            ? ExtractFirstSectionOverview(content)
+            : ExtractFirstParagraphAfterTitle(lines, fallbackTitleIndex);
+        if (string.IsNullOrWhiteSpace(overview))
+        {
+            overview = titleIndex >= 0
+                ? ExtractFirstParagraphAfterTitle(lines, titleIndex)
+                : ExtractFirstSectionOverview(content);
+        }
+
+        return new ParsedPlanMarkdown(
+            string.IsNullOrWhiteSpace(title) ? "Plan" : title.Trim(),
+            overview.Trim(),
+            content.Trim());
+    }
+
+    private static bool IsH1(string line)
+        => line.TrimStart().StartsWith("# ", StringComparison.Ordinal);
+
+    private static bool IsHeading(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("# ", StringComparison.Ordinal)
+            || trimmed.StartsWith("## ", StringComparison.Ordinal)
+            || trimmed.StartsWith("### ", StringComparison.Ordinal)
+            || trimmed.StartsWith("#### ", StringComparison.Ordinal)
+            || trimmed.StartsWith("##### ", StringComparison.Ordinal)
+            || trimmed.StartsWith("###### ", StringComparison.Ordinal);
+    }
+
+    private static string StripHeading(string line)
+    {
+        var trimmed = line.Trim();
+        while (trimmed.StartsWith('#'))
+            trimmed = trimmed[1..].TrimStart();
+        return trimmed.Trim().TrimEnd('#').Trim();
+    }
+
+    private static string ResolveFallbackTitle(IReadOnlyList<string> lines, int fallbackTitleIndex)
+    {
+        var first = fallbackTitleIndex >= 0 ? lines[fallbackTitleIndex] : null;
+        return string.IsNullOrWhiteSpace(first) ? "Plan" : StripInlineMarkdown(first);
+    }
+
+    private static string RemoveTitleLine(IReadOnlyList<string> lines, int titleIndex)
+    {
+        if (titleIndex < 0)
+            return string.Join('\n', lines).Trim();
+
+        var contentLines = lines.Where((_, index) => index != titleIndex).ToList();
+        while (contentLines.Count > 0 && string.IsNullOrWhiteSpace(contentLines[0]))
+            contentLines.RemoveAt(0);
+        return string.Join('\n', contentLines).Trim();
+    }
+
+    private static string ExtractFirstSectionOverview(string content)
+    {
+        var lines = content.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!IsHeading(lines[i]))
+                continue;
+
+            var paragraph = ReadFirstParagraph(lines, i + 1, stopAtHeading: true);
+            if (!string.IsNullOrWhiteSpace(paragraph))
+                return paragraph;
+        }
+
+        return string.Empty;
+    }
+
+    private static string ExtractFirstParagraphAfterTitle(IReadOnlyList<string> lines, int titleIndex)
+    {
+        var start = titleIndex >= 0 ? titleIndex + 1 : 0;
+        return ReadFirstParagraph(lines, start, stopAtHeading: false);
+    }
+
+    private static string ReadFirstParagraph(IReadOnlyList<string> lines, int start, bool stopAtHeading)
+    {
+        var paragraph = new List<string>();
+        for (var i = start; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                if (paragraph.Count > 0)
+                    break;
+                continue;
+            }
+
+            if (IsHeading(line))
+            {
+                if (paragraph.Count > 0)
+                    break;
+                if (stopAtHeading)
+                    break;
+                continue;
+            }
+
+            paragraph.Add(StripInlineMarkdown(line));
+        }
+
+        return string.Join(' ', paragraph).Trim();
+    }
+
+    private static string StripInlineMarkdown(string line)
+    {
+        var trimmed = line.Trim();
+        while (trimmed.StartsWith('>'))
+            trimmed = trimmed[1..].TrimStart();
+        if (trimmed.StartsWith("- ", StringComparison.Ordinal) || trimmed.StartsWith("* ", StringComparison.Ordinal))
+            trimmed = trimmed[2..].TrimStart();
+        return trimmed.Trim();
     }
 }
 

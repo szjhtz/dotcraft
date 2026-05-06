@@ -29,6 +29,7 @@ import {
   computeStreamingFileDiff,
   extractStreamingFilePath
 } from '../utils/streamingDiff'
+import { parsePlanMarkdown } from '../utils/planMarkdown'
 
 // ---------------------------------------------------------------------------
 // Plan types
@@ -1815,6 +1816,7 @@ export interface StreamingPlanDraft {
   title: string | null
   overview: string | null
   plan: string | null
+  content: string | null
   todos: Array<{ id?: string; content?: string; status?: PlanTodoStatus | string }>
 }
 
@@ -1920,11 +1922,14 @@ export function selectStreamingPlanRawArgs(state: ConversationState): string | n
 }
 
 export function buildStreamingPlanDraft(itemId: string, rawArgs: string): StreamingPlanDraft {
+  const plan = extractPartialJsonStringValue(rawArgs, 'plan')
+  const parsed = parsePlanMarkdown(plan ?? '')
   return {
     itemId,
-    title: extractPartialJsonStringValue(rawArgs, 'title'),
-    overview: extractPartialJsonStringValue(rawArgs, 'overview'),
-    plan: extractPartialJsonStringValue(rawArgs, 'plan'),
+    title: parsed.title || extractPartialJsonStringValue(rawArgs, 'title'),
+    overview: parsed.overview || extractPartialJsonStringValue(rawArgs, 'overview'),
+    plan,
+    content: parsed.content || null,
     todos: extractPartialTodos(rawArgs)
   }
 }

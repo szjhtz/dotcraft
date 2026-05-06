@@ -58,6 +58,7 @@ import {
 import { useThreadStore } from '../../stores/threadStore'
 import { useSubAgentStore, type SubAgentChild } from '../../stores/subAgentStore'
 import { isToolItemLive } from '../../utils/toolCallAggregation'
+import { formatSubAgentMeta, getSubAgentAccent } from '../../utils/subAgentPresentation'
 
 interface ToolCallCardProps {
   item: ConversationItem
@@ -862,8 +863,12 @@ function WebSearchResultCell({
 }
 
 interface SubAgentToolDisplay {
-  title: string
+  titleKey: string
+  name: string
   subtitle: string
+  meta: string
+  prompt: string | null
+  accentColor: string
   childThreadId: string | null
   message: string | null
   success: boolean
@@ -880,6 +885,7 @@ function SubAgentToolResultCard({
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
   const hasMessage = !!display.message
+  const hasPrompt = !!display.prompt
   const normalTextColor = hovered || expanded ? 'var(--text-secondary)' : 'var(--text-dimmed)'
   const textColor = display.tone === 'error'
     ? 'var(--error)'
@@ -899,10 +905,9 @@ function SubAgentToolResultCard({
       }}
     >
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {display.title}
-        {display.subtitle && (
-          <span style={{ color: 'var(--text-dimmed)', marginLeft: 6 }}>{display.subtitle}</span>
-        )}
+        {renderSubAgentTitle(locale, display.titleKey, display.name, display.accentColor)}
+        {display.meta && <span style={subAgentMetaStyle}>({display.meta})</span>}
+        {display.subtitle && <span style={subAgentMetaStyle}>{display.subtitle}</span>}
       </span>
       {hasMessage && (
         <ToolCollapseChevron expanded={expanded} visible={hovered || expanded} />
@@ -943,7 +948,14 @@ function SubAgentToolResultCard({
           style={{ ...rowStyle, cursor: 'pointer' }}
           aria-label={expanded ? translate(locale, 'toolCall.subAgent.collapse') : translate(locale, 'toolCall.subAgent.expand')}
         >
-          {rowContent}
+          <span style={subAgentResultContentStyle}>
+            {rowContent}
+            {hasPrompt && (
+              <span style={subAgentPromptStyle} title={display.prompt ?? undefined}>
+                {translate(locale, 'toolCall.subAgent.prompt', { prompt: display.prompt ?? '' })}
+              </span>
+            )}
+          </span>
         </button>
       ) : (
         <div
@@ -951,7 +963,14 @@ function SubAgentToolResultCard({
           onMouseLeave={() => setHovered(false)}
           style={rowStyle}
         >
-          {rowContent}
+          <span style={subAgentResultContentStyle}>
+            {rowContent}
+            {hasPrompt && (
+              <span style={subAgentPromptStyle} title={display.prompt ?? undefined}>
+                {translate(locale, 'toolCall.subAgent.prompt', { prompt: display.prompt ?? '' })}
+              </span>
+            )}
+          </span>
         </div>
       )}
       {expanded && hasMessage && (
@@ -974,6 +993,54 @@ function SubAgentToolResultCard({
   )
 }
 
+const subAgentResultContentStyle: CSSProperties = {
+  display: 'inline-flex',
+  flexDirection: 'column',
+  gap: '2px',
+  minWidth: 0,
+  maxWidth: '100%'
+}
+
+const subAgentMetaStyle: CSSProperties = {
+  color: 'var(--text-dimmed)',
+  marginLeft: 6
+}
+
+const subAgentPromptStyle: CSSProperties = {
+  color: 'var(--text-dimmed)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+
+const SUB_AGENT_NAME_TOKEN = '__DOTCRAFT_SUB_AGENT_NAME__'
+
+export function renderSubAgentTitle(
+  locale: AppLocale,
+  titleKey: string,
+  name: string,
+  accentColor: string
+): JSX.Element {
+  const template = translate(locale, titleKey, { name: SUB_AGENT_NAME_TOKEN })
+  const parts = template.split(SUB_AGENT_NAME_TOKEN)
+  if (parts.length === 1) {
+    return <span>{translate(locale, titleKey, { name })}</span>
+  }
+
+  return (
+    <span>
+      {parts.map((part, index) => (
+        <span key={`${part}-${index}`}>
+          {part}
+          {index < parts.length - 1 && (
+            <span style={{ color: accentColor, fontWeight: 600 }}>{name}</span>
+          )}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 function getSubAgentToolDisplay(
   toolName: string,
   args: Record<string, unknown> | undefined,
@@ -987,6 +1054,7 @@ function getSubAgentToolDisplay(
   const parsed = parseJsonObject(result)
   const profile = getString(parsed, 'profileName') ?? getString(args, 'profile')
   const runtimeType = getString(parsed, 'runtimeType')
+  const agentRole = getString(parsed, 'agentRole') ?? getString(args, 'agentRole')
   const childThreadId = getString(parsed, 'childThreadId')
     ?? getString(parsed, 'agentId')
     ?? getString(args, 'agentId')
@@ -997,9 +1065,9 @@ function getSubAgentToolDisplay(
     ? getString(parsed, 'message') ?? getString(parsed, 'result')
     : null
   const label = resolveSubAgentDisplayName(parsed, args, childThreadId, locale, lookup)
-  const subtitleParts = [profile, runtimeType]
-    .filter((part): part is string => !!part)
-    .filter((part, index, parts) => parts.indexOf(part) === index)
+  const prompt = toolName === 'SpawnAgent'
+    ? getString(args, 'agentPrompt')
+    : null
   const isTimeout = toolName === 'WaitAgent'
     && (status === 'timeout' || isTimeoutMessage(error) || isTimeoutMessage(message))
   const tone: SubAgentToolDisplay['tone'] = isTimeout
@@ -1021,8 +1089,12 @@ function getSubAgentToolDisplay(
               ? 'toolCall.subAgent.resumed'
               : 'toolCall.subAgent.closed'
   return {
-    title: translate(locale, titleKey, { name: label }),
-    subtitle: subtitleParts.length > 0 ? subtitleParts.join(' · ') : '',
+    titleKey,
+    name: label,
+    subtitle: '',
+    meta: formatSubAgentMeta({ agentRole, profileName: profile, runtimeType }),
+    prompt: prompt ? truncateSubAgentPrompt(prompt, 120) : null,
+    accentColor: getSubAgentAccent(childThreadId ?? label),
     childThreadId,
     message: isTimeout
       ? (message ?? translate(locale, 'toolCall.subAgent.timeoutMessage'))
@@ -1032,6 +1104,13 @@ function getSubAgentToolDisplay(
     success: tone !== 'error',
     tone
   }
+}
+
+function truncateSubAgentPrompt(value: string, maxChars: number): string {
+  const trimmed = value.trim().replace(/\s+/g, ' ')
+  const chars = Array.from(trimmed)
+  if (chars.length <= maxChars) return trimmed
+  return `${chars.slice(0, maxChars - 1).join('')}…`
 }
 
 function formatSubAgentRunningLabel(
