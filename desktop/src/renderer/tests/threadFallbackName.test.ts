@@ -62,4 +62,15 @@ describe('getFallbackThreadName', () => {
       })
     ).toBe('Message')
   })
+
+  it('does not use leaked system reminders as fallback names', () => {
+    expect(
+      getFallbackThreadName({
+        visibleText: '<system-reminder>\n## Runtime Context\nCurrentMode: Plan\n</system-reminder>',
+        imagesCount: 0,
+        filesCount: 0,
+        ...fallbackNames
+      })
+    ).toBe('Message')
+  })
 })

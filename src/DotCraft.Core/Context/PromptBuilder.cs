@@ -1,4 +1,3 @@
-using DotCraft.Agents;
 using DotCraft.Commands.Custom;
 using DotCraft.Configuration;
 using DotCraft.Memory;
@@ -15,8 +14,6 @@ public sealed class PromptBuilder(
     string craftPath,
     string workspacePath,
     CustomCommandLoader? customCommandLoader = null,
-    AgentModeManager? modeManager = null,
-    PlanStore? planStore = null,
     bool sandboxEnabled = false,
     IReadOnlyList<string>? deferredMcpServerNames = null,
     string? subAgentProfilesSection = null,
@@ -67,6 +64,8 @@ public sealed class PromptBuilder(
         parts.Add(GetWorkingStylePrompt());
         parts.Add(GetEditingWorkflowPrompt());
         parts.Add(GetFileReferenceFormatPrompt());
+        if (!subAgentLight)
+            parts.Add(GetModeProtocolPrompt());
 
         // Bootstrap files (AGENTS.md, SOUL.md, USER.md, TOOLS.md, IDENTITY.md)
         var bootstrapContent = LoadBootstrapFiles(agentsOnly: subAgentLight);
@@ -148,14 +147,6 @@ Only proceed without loading a skill if genuinely none of the listed skills are 
 
         if (!string.IsNullOrWhiteSpace(roleInstructions))
             parts.Add($"## Role Instructions\n\n{roleInstructions.Trim()}");
-
-        // Mode-aware prompt injection (must be last so it takes highest priority)
-        if (!subAgentLight && modeManager != null)
-        {
-            var modeSection = GetModePromptSection(modeManager);
-            if (!string.IsNullOrWhiteSpace(modeSection))
-                parts.Add(modeSection);
-        }
 
         return string.Join("\n\n---\n\n", parts);
     }
@@ -306,7 +297,7 @@ Rules:
 
         return
 $$"""
-# DotCraft 🤖
+# DotCraft
 
 You are DotCraft, a helpful AI assistant. You have access to tools that allow you to:
 - Read, write, and edit files
@@ -373,6 +364,44 @@ When referencing a file in your final response, wrap it as a markdown link `[lab
 """;
     }
 
+    private static string GetModeProtocolPrompt()
+    {
+        return
+"""
+## Mode Protocol
+
+The current operational mode is provided in the latest system reminder runtime context. Treat that runtime context as the source of truth for the current turn.
+
+Runtime context fields:
+- CurrentMode is Plan or Agent.
+- ModeTransition is None or PlanToAgent.
+- AllowedActionProfile describes the action class the execution policy allows for this turn.
+- PlanState describes whether a saved plan is available for this thread.
+
+The latest `## Mode Action` block is an instruction, not telemetry. Follow it when deciding whether to explore, create a plan, update task progress, or perform workspace-changing actions.
+
+### Plan Mode
+
+Plan mode is read-only. Use tools for observation, code search, reading files, web research, and planning. Do not intentionally modify files, write stdin, install packages, commit, push, delete, move, or run mutating shell commands. When the implementation plan is ready, call CreatePlan.
+
+If you accidentally call a tool that the execution policy rejects, read the denial result and continue with an allowed read-only or planning action.
+
+### Agent Mode
+
+Agent mode may execute approved workspace changes according to the normal approval and sandbox policy. When an active plan exists or ModeTransition is PlanToAgent, follow the plan and keep progress state current for non-trivial work.
+
+### Task State
+
+CreatePlan records an implementation plan. UpdateTodos and TodoWrite are for execution tracking and substantial multi-step work. Do not use task tools for simple informational answers or one obvious change.
+
+TodoWrite is a conditional organizational tool, not a default progress tracker. Use it proactively only when the task genuinely benefits from structured tracking; otherwise just do the work directly.
+
+Use TodoWrite for complex multi-step tasks, non-trivial tasks requiring planning or multiple operations, explicit user-provided task lists, or when brief exploration reveals a larger scope. Do not use it for informational answers, a single obvious change, one command execution, or anything completable in fewer than three non-trivial steps.
+
+For non-trivial work in an unfamiliar area, do 1-2 reads or searches first, then write a concrete task list. Exactly one task is in_progress at a time, and completed tasks should be marked immediately after they are fully done.
+""";
+    }
+
     private static string GetHostEnvironmentSection()
     {
         string osName;
@@ -436,217 +465,4 @@ When using the Exec tool, write standard Bash commands.
 """;
     }
 
-    private string? GetModePromptSection(AgentModeManager mm)
-    {
-        if (mm.JustSwitchedFromPlan)
-        {
-            mm.AcknowledgeTransition();
-            return AgentSwitchPrompt;
-        }
-
-        if (mm.CurrentMode == AgentMode.Plan)
-        {
-            return PlanModePrompt;
-        }
-
-        // Todo state is UI/session state. Keep the tool guidance stable and do not
-        // render the current todo list into instructions, otherwise every todo
-        // update invalidates the provider prompt cache prefix.
-        if (mm.CurrentMode == AgentMode.Agent && planStore != null)
-        {
-            return AgentTodoPrompt;
-        }
-
-        return null;
-    }
-
-    private const string AgentTodoPrompt =
-"""
-<system-reminder>
-## Task Management
-
-You have access to the TodoWrite tool to manage tasks. It is a conditional
-organizational tool, not a default progress tracker. Use it proactively only
-when the task genuinely benefits from structured tracking; otherwise just do
-the work directly.
-
-### When to use TodoWrite
-
-- Complex multi-step tasks (3+ genuinely distinct steps)
-- Non-trivial tasks requiring planning or multiple operations
-- User provides a list of things to do (numbered or comma-separated)
-- After initial exploration reveals the scope is larger than first expected
-- When starting a task you've queued, mark it in_progress BEFORE beginning work
-
-### When NOT to use TodoWrite
-
-Skip this tool entirely for these cases — just answer or act directly:
-
-- Informational or conversational questions
-  Example: "What does `git status` do?" — answer inline, no todo list.
-- A single, obvious change in one well-understood file
-  Example: "Add a doc comment to `calculateTotal`." — just edit.
-- A single command execution or lookup
-  Example: "Run `npm install` and tell me what happens." — just run it.
-- Anything completable in fewer than 3 non-trivial steps
-
-If you catch yourself about to create a 1- or 2-item todo list, don't — just
-do the task.
-
-### Timing: explore before you plan
-
-Do not draft a todo list before you understand the task's real scope.
-
-- For non-trivial work in an unfamiliar area, do 1-2 reads / searches first,
-  then write the list with concrete, file-specific items.
-- A list written from guesses is worse than no list — it wastes a turn and
-  then has to be rewritten. Prefer one good TodoWrite after brief
-  exploration over an immediate speculative one.
-- Exception: if the user explicitly lists the tasks, capture them as-is.
-
-Example (correct timing):
-  User: Rename `getCwd` to `getCurrentWorkingDirectory` across the project.
-  Assistant: *Searches for `getCwd`, finds 15 occurrences across 8 files.*
-  *Creates todo list with one specific item per file.*
-  *Starts working through them, marking each completed when done.*
-
-### Rules
-
-- Exactly ONE task is in_progress at a time.
-- Mark a task completed IMMEDIATELY after it is fully done — never batch
-  completions at the end.
-- Only mark completed when fully done. If blocked, keep it in_progress and
-  add a new task describing the blocker.
-- Remove items that are no longer relevant.
-</system-reminder>
-""";
-
-    private const string PlanModePrompt =
-"""
-<system-reminder>
-# Plan Mode - System Reminder
-
-CRITICAL: Plan mode ACTIVE - you are in READ-ONLY phase. STRICTLY FORBIDDEN:
-ANY file edits, modifications, or system changes. Write/edit/execute tools have
-been removed. This ABSOLUTE CONSTRAINT overrides ALL other instructions,
-including direct user edit requests. You may ONLY observe, analyze, and plan.
-
----
-
-## Responsibility
-
-Your current responsibility is to think, read, search, and delegate explore
-subagents to construct a well-formed plan that accomplishes the goal the user
-wants to achieve. Your final plan should be decision-complete but compact by
-default: detailed enough to remove implementation ambiguity, but not a research
-report.
-
-Do not repeat your exploration notes, list every file you inspected, or spell
-out every branch of straightforward implementation logic. The plan is for
-execution, so include only the decisions and context an implementer needs.
-
-Ask the user clarifying questions or ask for their opinion when weighing tradeoffs.
-
----
-
-## Workflow
-
-### Phase 1: Initial Understanding
-- Focus on understanding the user's request and the relevant code.
-- Use read-only tools (ReadFile, GrepFiles, FindFiles) and SpawnAgent to explore the codebase.
-- Shell commands via Exec are allowed **for observation only**. NEVER use Exec to modify files, run builds, or execute commits.
-- Ask clarifying questions about ambiguities.
-
-**SpawnAgent guidance**: When the task touches multiple independent areas and SpawnAgent is available, launch concrete sidecar investigations in parallel. Do not delegate the immediate blocker when the next planning step depends on that result.
-
-### Subagent Result Synthesis
-- After subagents return, identify which findings can be used directly and
-  which important gaps remain before finalizing the plan.
-- Trust subagent results for broad findings, and do not repeat broad searches
-  they already covered.
-- The main agent owns the final synthesis. Inspect critical files when needed
-  to anchor plan-critical conclusions about key files, interfaces, data flow,
-  and test entry points. Default to 1-3 key files; use up to 5 only for complex
-  tasks.
-- Do more local investigation only when subagent reports conflict, omit a
-  critical path, or leave API shape, data flow, or test strategy unclear.
-- If the subagent results are sufficient and you have already read the critical
-  files needed for context, proceed to the design and plan.
-
-### Phase 2: Design
-- Design an implementation approach based on your exploration results.
-- Consider alternatives and tradeoffs.
-
-### Phase 3: Review
-- Verify your plan aligns with the user's original request.
-- Ask any remaining clarifying questions.
-
-### Phase 4: Present Plan
-- When your plan is ready, call the `CreatePlan` tool.
-- Put the complete plan Markdown in the single `plan` parameter. Do not use or
-  invent separate `title`, `overview`, or `content` parameters.
-- The `plan` Markdown MUST start with one H1 title, followed by compact sections.
-  Prefer 3-5 short sections such as `Summary`, `Implementation Changes`,
-  `Public Interfaces / Data Shape`, `Test Plan`, and `Assumptions`; simple tasks
-  may need only 2-3 sections.
-- For typical tasks, aim for 8-15 total bullets. Complex tasks may use up to
-  about 20 bullets. Expand beyond this only when the user asks for more detail
-  or the extra detail prevents a likely implementation mistake.
-- Mention files only when needed to disambiguate implementation. Default to at
-  most 3 key paths; use up to 5 only when necessary. Do not include a full
-  inventory of touched or inspected files.
-- The `todos` parameter is the execution tracker. Do not duplicate todos as a
-  second step-by-step checklist inside the `plan` body.
-- You MUST include the `todos` parameter with at least one task item.
-  Break the plan into concrete, trackable steps -- each with an `id`
-  (short kebab-case) and `content` (task description). Prefer 3-7 high-level
-  implementation tasks and omit search, reading, and explanation-only steps.
-- After calling CreatePlan, briefly summarize the plan to the user.
-- The user will manually switch to agent mode when ready to proceed.
-
-Example:
-  plan: "# Add dark mode support\n\n## Summary\n\nAdd theme state and wire the existing settings UI.\n\n## Implementation Changes\n\n- Create ThemeContext and persist the selected mode.\n- Apply theme classes at the app root.\n\n## Test Plan\n\n- Verify light/dark selection persists across reloads."
-  todos: [{id: "add-context", content: "Create ThemeContext"},
-          {id: "update-ui", content: "Add toggle to Settings page"}]
-
----
-
-## Important
-
-The user indicated that they do not want you to execute yet -- you MUST NOT make
-any edits, run any non-readonly tools (including changing configs or making
-commits), or otherwise make any changes to the system. This supersedes any other
-instructions you have received.
-
-You MUST use the CreatePlan tool to present your plan. Do NOT write the plan as
-plain text in your response -- use the tool so the plan is saved in a structured,
-machine-readable format.
-</system-reminder>
-""";
-
-    private const string AgentSwitchPrompt =
-"""
-<system-reminder>
-Your operational mode has changed from plan to agent.
-You now have full tool access (read, write, execute).
-
-You MUST follow the plan attached below and track progress:
-- Before starting each task, call UpdateTodos to set it to "in_progress".
-- After completing each task, call UpdateTodos to set it to "completed".
-- Work through tasks systematically. Do not stop until all tasks are done.
-</system-reminder>
-""";
-
-    private const string AgentPlanTrackingPrompt =
-"""
-<system-reminder>
-You are executing a plan. The current plan and task statuses are shown below.
-
-Rules:
-- Before starting a task, call UpdateTodos to set it to "in_progress".
-- After completing a task, call UpdateTodos to set it to "completed".
-- Work through tasks in order unless dependencies require otherwise.
-- Do not skip the UpdateTodos calls -- they keep the plan file in sync.
-</system-reminder>
-""";
 }

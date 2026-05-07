@@ -87,9 +87,57 @@ public sealed class ModelContextWindowCatalogTests : IDisposable
     [Fact]
     public void Resolve_UsesFinalModelSegmentWhenProviderPrefixDoesNotMatch()
     {
-        var contextWindow = ModelContextWindowCatalog.Resolve("some-cloud/glm-5.1");
+        var contextWindow = ModelContextWindowCatalog.Resolve("provider/glm-5.1");
 
         Assert.Equal(200_000, contextWindow);
+    }
+
+    [Fact]
+    public void ResolveCompactionConfig_UsesEffectiveModel_WhenContextWindowIsInferred()
+    {
+        var config = new AppConfig
+        {
+            Model = "mimo-v2.5-pro"
+        };
+        ModelContextWindowCatalog.ApplyToConfig(
+            config,
+            System.Text.Json.Nodes.JsonNode.Parse("""{ "Model": "mimo-v2.5-pro" }""")!,
+            globalConfigPath: null,
+            workspaceConfigPath: null);
+
+        var compaction = ModelContextWindowCatalog.ResolveCompactionConfig(config, "provider/glm-5.1");
+
+        Assert.Equal(200_000, compaction.ContextWindow);
+        Assert.Equal(180_000, compaction.EffectiveContextWindow());
+    }
+
+    [Fact]
+    public void ResolveCompactionConfig_PreservesExplicitContextWindow()
+    {
+        var config = new AppConfig
+        {
+            Model = "mimo-v2.5-pro",
+            Compaction = new DotCraft.Context.Compaction.CompactionConfig
+            {
+                ContextWindow = 123_000
+            }
+        };
+        ModelContextWindowCatalog.ApplyToConfig(
+            config,
+            System.Text.Json.Nodes.JsonNode.Parse("""
+                {
+                  "Model": "mimo-v2.5-pro",
+                  "Compaction": {
+                    "ContextWindow": 123000
+                  }
+                }
+                """)!,
+            globalConfigPath: null,
+            workspaceConfigPath: null);
+
+        var compaction = ModelContextWindowCatalog.ResolveCompactionConfig(config, "provider/glm-5.1");
+
+        Assert.Equal(123_000, compaction.ContextWindow);
     }
 
     [Fact]

@@ -68,6 +68,40 @@ describe('wireItemToConversationItem — nested payload format (thread/read)', (
     expect(item.type).toBe('userMessage')
   })
 
+  it('strips trailing system reminders from userMessage payload text', () => {
+    const item = wireItemToConversationItem({
+      id: 'i2-runtime',
+      type: 'userMessage',
+      payload: {
+        text: 'user typed this\n<system-reminder>\n## Runtime Context\nCurrentMode: Plan\n</system-reminder>'
+      },
+      createdAt: '2025-01-01T00:00:00Z'
+    })
+    expect(item.text).toBe('user typed this')
+  })
+
+  it('drops malformed system reminder tails from userMessage text', () => {
+    const item = wireItemToConversationItem({
+      id: 'i2-runtime-open',
+      type: 'userMessage',
+      payload: {
+        text: 'user typed this\n<system-reminder>\n## Runtime Context'
+      },
+      createdAt: '2025-01-01T00:00:00Z'
+    })
+    expect(item.text).toBe('user typed this')
+  })
+
+  it('keeps literal legacy runtime headings when not wrapped', () => {
+    const item = wireItemToConversationItem({
+      id: 'i2-legacy-heading',
+      type: 'userMessage',
+      payload: { text: 'please explain [Runtime Context]' },
+      createdAt: '2025-01-01T00:00:00Z'
+    })
+    expect(item.text).toBe('please explain [Runtime Context]')
+  })
+
   it('extracts deliveryMode from userMessage payload', () => {
     const item = wireItemToConversationItem({
       id: 'i2-guidance',

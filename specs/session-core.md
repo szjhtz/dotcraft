@@ -872,6 +872,8 @@ SessionEvent
     }
     ```
 
+    The effective context window is evaluated for the thread's effective model when `Compaction.ContextWindow` is inferred from the model catalog; a thread-level model override therefore changes compaction thresholds for that thread.
+
   - **Defined `kind` values**:
 
     | Kind | Meaning | Timing |

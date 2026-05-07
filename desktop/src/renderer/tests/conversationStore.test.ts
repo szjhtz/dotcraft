@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { ConversationTurn } from '../types/conversation'
 import { useConversationStore } from '../stores/conversationStore'
+import { getStreamingToolDisplay } from '../utils/toolCallDisplay'
 
 // Helper to get latest state without subscribing
 const s = () => useConversationStore.getState()
@@ -289,6 +290,30 @@ describe('turn lifecycle', () => {
     expect(toolItem?.duration).toBe(1200)
     expect(toolItem?.resultPreview).toBe('agent done')
     expect(toolItem?.result).toBe('agent done')
+  })
+
+  it('keeps SubAgent streaming argument previews bounded for large prompts', () => {
+    const largePrompt = 'x'.repeat(20000)
+    s().onTurnStarted(makeTurn())
+
+    s().onToolCallArgumentsDelta({
+      turnId: 'turn-1',
+      itemId: 'spawn-stream',
+      toolName: 'SpawnAgent',
+      callId: 'call-spawn',
+      delta: `{"agentPrompt":"${largePrompt}`
+    })
+
+    const item = s().turns[0].items.find((i) => i.id === 'spawn-stream')
+    expect(item?.type).toBe('toolCall')
+    expect(item?.toolName).toBe('SpawnAgent')
+    expect(item?.status).toBe('streaming')
+    expect(item?.argumentsPreview?.length).toBeLessThan(1200)
+
+    const display = getStreamingToolDisplay('SpawnAgent', item?.argumentsPreview, 'en')
+    expect(display.label).toMatch(/^Spawning agent for: x+/)
+    expect(display.label.length).toBeLessThan(90)
+    expect(item?.argumentsPreview).not.toContain(largePrompt)
   })
 
   it('merges an existing command execution into Exec when toolCall starts later', () => {

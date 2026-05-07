@@ -132,6 +132,24 @@ describe('ToolCallCard subagent result rendering', () => {
     expect(screen.queryByText(/thread_child/)).toBeNull()
   })
 
+  it('renders streaming SpawnAgent from argument preview without raw JSON', () => {
+    const item: ConversationItem = {
+      id: 'subagent-tool-streaming',
+      type: 'toolCall',
+      status: 'streaming',
+      toolName: 'SpawnAgent',
+      toolCallId: 'call-streaming',
+      argumentsPreview: '{"agentPrompt":"Review the API surface","agentNickname":"Reviewer"}',
+      createdAt: '2026-05-03T10:00:00.000Z'
+    }
+
+    const { container } = renderWithLocale(<ToolCallCard item={item} turnId="turn-1" turnRunning />)
+
+    expectRunningGradientText('Spawning agent: Reviewer...')
+    expect(container).not.toHaveTextContent('agentPrompt')
+    expect(container).not.toHaveTextContent('Review the API surface')
+  })
+
   it('folds WaitAgent message behind an expandable result body', () => {
     const item: ConversationItem = {
       id: 'subagent-tool-2',

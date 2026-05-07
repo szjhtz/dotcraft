@@ -26,6 +26,7 @@ public sealed class AgentFactory : IAsyncDisposable
     private readonly AppConfig _config;
     private readonly ChatClient _chatClient;
     private readonly ConcurrentDictionary<string, TokenTracker> _tokenTrackers = new();
+    private readonly ConcurrentDictionary<CompactionPipelineKey, CompactionPipeline> _compactionPipelines = new();
     private readonly TraceCollector? _traceCollector;
     private readonly HashSet<string> _globalEnabledToolNames;
     private readonly ToolProviderContext _toolProviderContext;
@@ -69,14 +70,20 @@ public sealed class AgentFactory : IAsyncDisposable
 
         var mainModel = _openAIClientProvider.ResolveMainModel(config);
         _chatClient = _openAIClientProvider.GetChatClient(config, mainModel);
+        var legacyConsolidator = new MemoryConsolidator(
+            _openAIClientProvider.GetConsolidationChatClient(config),
+            memoryStore,
+            onConsolidatorStatus);
         Consolidator = memoryConsolidator
-            ?? new MemoryConsolidator(
-                _openAIClientProvider.GetConsolidationChatClient(config),
+            ?? new MemoryForkConsolidator(
+                new MaintenanceForkRunner(_chatClient.AsIChatClient()),
+                legacyConsolidator,
                 memoryStore,
-                onConsolidatorStatus);
+                mainModel,
+                _openAIClientProvider.ResolveConsolidationModel(config));
 
         CompactionPipeline = new CompactionPipeline(
-            config.Compaction,
+            ModelContextWindowCatalog.ResolveCompactionConfig(config, mainModel),
             _chatClient.AsIChatClient());
 
         // Build tool provider context
@@ -121,6 +128,32 @@ public sealed class AgentFactory : IAsyncDisposable
     public CompactionPipeline CompactionPipeline { get; }
 
     /// <summary>
+    /// Gets the context-compaction pipeline for a thread's effective main model.
+    /// </summary>
+    public CompactionPipeline GetCompactionPipeline(string sessionKey, string? modelOverride = null)
+    {
+        var effectiveMainModel = _openAIClientProvider.ResolveMainModel(_config, modelOverride);
+        var compactionConfig = ModelContextWindowCatalog.ResolveCompactionConfig(_config, effectiveMainModel);
+        var key = CompactionPipelineKey.From(
+            string.IsNullOrWhiteSpace(sessionKey) ? string.Empty : sessionKey.Trim(),
+            effectiveMainModel,
+            _config,
+            compactionConfig);
+
+        return _compactionPipelines.GetOrAdd(key, static (pipelineKey, state) =>
+        {
+            var (factory, resolvedConfig) = state;
+            var chatClient = factory._openAIClientProvider.TryGetChatClient(
+                factory._config,
+                pipelineKey.Model,
+                out var resolvedChatClient)
+                ? resolvedChatClient!
+                : factory._chatClient;
+            return new CompactionPipeline(resolvedConfig, chatClient.AsIChatClient());
+        }, (this, compactionConfig));
+    }
+
+    /// <summary>
     /// Gets the memory consolidator for persisting conversation knowledge.
     /// Session Core drives consolidation independently from context
     /// compaction, using completed thread history as input.
@@ -150,16 +183,13 @@ public sealed class AgentFactory : IAsyncDisposable
     {
         _tokenTrackers.TryRemove(sessionKey, out _);
         CompactionPipeline.Forget(sessionKey);
+        foreach (var pair in _compactionPipelines.Where(pair =>
+                     string.Equals(pair.Key.SessionKey, sessionKey, StringComparison.Ordinal)).ToArray())
+        {
+            pair.Value.Forget(sessionKey);
+            _compactionPipelines.TryRemove(pair.Key, out _);
+        }
     }
-
-    /// <summary>
-    /// Tool names that are forbidden in Plan mode.
-    /// The system prompt is responsible for restricting Exec to observation-only use.
-    /// </summary>
-    private static readonly HashSet<string> PlanModeDeniedTools = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "WriteFile", "EditFile"
-    };
 
     /// <summary>
     /// Creates default tools by aggregating all registered tool providers.
@@ -228,8 +258,8 @@ public sealed class AgentFactory : IAsyncDisposable
     }
 
     /// <summary>
-    /// Creates tools filtered for the given <see cref="AgentMode"/>.
-    /// Plan mode strips write/execute tools.
+    /// Creates a schema-stable tool list for the given <see cref="AgentMode"/>.
+    /// Mode restrictions are enforced at invocation time.
     /// </summary>
     public List<AITool> CreateToolsForMode(AgentMode mode) => CreateToolsForMode(mode, _toolProviderContext);
 
@@ -240,21 +270,11 @@ public sealed class AgentFactory : IAsyncDisposable
     {
         var tools = CreateDefaultTools(toolContext);
 
-        if (mode == AgentMode.Plan)
-        {
-            tools.RemoveAll(t => PlanModeDeniedTools.Contains(t.Name));
-
-            if (_planStore != null)
-            {
-                // Use GetActiveSessionKey for reliable session key retrieval across async boundaries
-                var planTools = new PlanTools(_planStore, TracingChatClient.GetActiveSessionKey, _onPlanUpdated);
-                tools.Add(AIFunctionFactory.Create(planTools.CreatePlan));
-            }
-        }
-        else if (mode == AgentMode.Agent && _planStore != null)
+        if (_planStore != null)
         {
             // Use GetActiveSessionKey for reliable session key retrieval across async boundaries
             var planTools = new PlanTools(_planStore, TracingChatClient.GetActiveSessionKey, _onPlanUpdated);
+            tools.Add(AIFunctionFactory.Create(planTools.CreatePlan));
             tools.Add(AIFunctionFactory.Create(planTools.UpdateTodos));
             tools.Add(AIFunctionFactory.Create(planTools.TodoWrite));
         }
@@ -332,6 +352,7 @@ public sealed class AgentFactory : IAsyncDisposable
                 MaximumIterationsPerRequest = _config.MaxToolCallRounds,
                 AllowConcurrentInvocation = true,
                 EnableToolCallArgumentPreviews = true,
+                ModeToolPolicy = modeManager == null ? null : new ModeToolPolicy(modeManager).Evaluate,
                 IsStreamableTool = name => !streamOptOutTools.Contains(name)
             };
             if (deferredRegistry != null)
@@ -399,8 +420,6 @@ public sealed class AgentFactory : IAsyncDisposable
                     _traceCollector,
                     () => tools.Select(t => t.Name).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(),
                     _customCommandLoader,
-                    modeManager,
-                    _planStore,
                     sandboxEnabled: _config.Tools.Sandbox.Enabled,
                     deferredMcpServerNames: deferredServerNames,
                     subAgentProfilesSection: subAgentProfilesSection,
@@ -619,6 +638,56 @@ public sealed class AgentFactory : IAsyncDisposable
             chatOptions.Instructions = instructions;
 
         return chatOptions;
+    }
+
+    private readonly record struct CompactionPipelineKey(
+        string SessionKey,
+        string Model,
+        string EndPoint,
+        string ApiKey,
+        bool AutoCompactEnabled,
+        bool ReactiveCompactEnabled,
+        int ContextWindow,
+        int SummaryReserveTokens,
+        int AutoCompactBufferTokens,
+        int WarningBufferTokens,
+        int ErrorBufferTokens,
+        int ManualCompactBufferTokens,
+        int KeepRecentMinTokens,
+        int KeepRecentMinGroups,
+        int KeepRecentMaxTokens,
+        bool MicrocompactEnabled,
+        int MicrocompactTriggerCount,
+        int MicrocompactKeepRecent,
+        int MicrocompactGapMinutes,
+        int MaxConsecutiveFailures)
+    {
+        public static CompactionPipelineKey From(
+            string sessionKey,
+            string model,
+            AppConfig appConfig,
+            CompactionConfig compaction) =>
+            new(
+                sessionKey,
+                model,
+                appConfig.EndPoint,
+                appConfig.ApiKey,
+                compaction.AutoCompactEnabled,
+                compaction.ReactiveCompactEnabled,
+                compaction.ContextWindow,
+                compaction.SummaryReserveTokens,
+                compaction.AutoCompactBufferTokens,
+                compaction.WarningBufferTokens,
+                compaction.ErrorBufferTokens,
+                compaction.ManualCompactBufferTokens,
+                compaction.KeepRecentMinTokens,
+                compaction.KeepRecentMinGroups,
+                compaction.KeepRecentMaxTokens,
+                compaction.MicrocompactEnabled,
+                compaction.MicrocompactTriggerCount,
+                compaction.MicrocompactKeepRecent,
+                compaction.MicrocompactGapMinutes,
+                compaction.MaxConsecutiveFailures);
     }
 
     /// <summary>

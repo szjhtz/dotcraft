@@ -110,6 +110,57 @@ public sealed class StateBackedStoreTests : IDisposable
     }
 
     [Fact]
+    public void TraceStore_RoundTrips_PromptCacheDiagnosticFields_Via_StateDb()
+    {
+        var writer = new TraceStore(_tracingPath, 5000, false, _stateRuntime);
+        writer.Record(new TraceEvent
+        {
+            SessionKey = "prompt-cache-session",
+            Type = TraceEventType.SessionMetadata,
+            FinalSystemPrompt = "system",
+            ToolNames = ["ReadFile"],
+            SystemPromptHash = "aaa",
+            ToolSchemaHash = "bbb",
+            PromptCacheEventKind = PromptCacheEventKinds.Baseline,
+            CurrentSystemPromptHash = "aaa",
+            CurrentToolSchemaHash = "bbb"
+        });
+        writer.Record(new TraceEvent
+        {
+            SessionKey = "prompt-cache-session",
+            Type = TraceEventType.SessionMetadata,
+            FinalSystemPrompt = "system changed",
+            ToolNames = ["ReadFile"],
+            SystemPromptHash = "ccc",
+            ToolSchemaHash = "bbb",
+            PromptDriftDetected = true,
+            PromptCacheEventKind = PromptCacheEventKinds.Drift,
+            PromptCacheChangedFields = [PromptCacheChangedFields.Prompt],
+            PreviousSystemPromptHash = "aaa",
+            PreviousToolSchemaHash = "bbb",
+            CurrentSystemPromptHash = "ccc",
+            CurrentToolSchemaHash = "bbb"
+        });
+        writer.WaitForPendingPersistence();
+
+        var reader = new TraceStore(_tracingPath, 5000, false, _stateRuntime);
+        reader.LoadFromDisk();
+
+        var drift = reader.GetEvents("prompt-cache-session")
+            .Single(e => e.PromptCacheEventKind == PromptCacheEventKinds.Drift);
+        Assert.NotNull(drift.PromptCacheChangedFields);
+        Assert.Equal([PromptCacheChangedFields.Prompt], drift.PromptCacheChangedFields);
+        Assert.Equal("aaa", drift.PreviousSystemPromptHash);
+        Assert.Equal("ccc", drift.CurrentSystemPromptHash);
+
+        var session = reader.GetSession("prompt-cache-session");
+        Assert.NotNull(session);
+        Assert.Equal(1, session.PromptDriftCount);
+        Assert.Equal(PromptCacheEventKinds.Drift, session.LastPromptCacheChangeKind);
+        Assert.Equal([PromptCacheChangedFields.Prompt], session.LastPromptCacheChangedFields);
+    }
+
+    [Fact]
     public void TraceStore_RefreshFromDisk_Rebuilds_From_Shared_StateDb()
     {
         var reader = new TraceStore(_tracingPath, 5000, false, _stateRuntime);

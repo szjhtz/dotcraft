@@ -1,4 +1,3 @@
-using DotCraft.Agents;
 using DotCraft.Configuration;
 using DotCraft.Context;
 using DotCraft.Memory;
@@ -139,20 +138,44 @@ public sealed class PromptBuilderSubAgentTests : IDisposable
             UpdatedAt = DateTimeOffset.UtcNow
         });
 
-        var modeManager = new AgentModeManager();
         var prompt = new PromptBuilder(
                 new MemoryStore(_craftDir),
                 new SkillsLoader(_craftDir),
                 _craftDir,
                 _tempDir,
-                modeManager: modeManager,
-                planStore: planStore,
                 toolNamesProvider: () => ["TodoWrite"])
             .BuildSystemPrompt();
 
-        Assert.Contains("## Task Management", prompt, StringComparison.Ordinal);
+        Assert.Contains("## Mode Protocol", prompt, StringComparison.Ordinal);
+        Assert.Contains("### Task State", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("<system-reminder>", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("This todo must stay out of the system prompt", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("## Current Plan", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainPrompt_IsStableAcrossPlanAndAgentModes()
+    {
+        var agentPrompt = new PromptBuilder(
+                new MemoryStore(_craftDir),
+                new SkillsLoader(_craftDir),
+                _craftDir,
+                _tempDir,
+                toolNamesProvider: () => ["ReadFile", "CreatePlan", "UpdateTodos", "TodoWrite"])
+            .BuildSystemPrompt();
+
+        var planPrompt = new PromptBuilder(
+                new MemoryStore(_craftDir),
+                new SkillsLoader(_craftDir),
+                _craftDir,
+                _tempDir,
+                toolNamesProvider: () => ["ReadFile", "CreatePlan", "UpdateTodos", "TodoWrite"])
+            .BuildSystemPrompt();
+
+        Assert.Equal(agentPrompt, planPrompt);
+        Assert.Contains("## Mode Protocol", agentPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Plan mode ACTIVE", agentPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Your operational mode has changed", agentPrompt, StringComparison.Ordinal);
     }
 
     private PromptBuilder CreateMainBuilder(IReadOnlyList<string> toolNames) =>

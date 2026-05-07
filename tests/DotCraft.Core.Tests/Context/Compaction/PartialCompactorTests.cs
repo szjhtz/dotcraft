@@ -1,3 +1,4 @@
+using DotCraft.Context;
 using DotCraft.Context.Compaction;
 using Microsoft.Extensions.AI;
 
@@ -85,6 +86,48 @@ public sealed class PartialCompactorTests
     }
 
     [Fact]
+    public async Task CompactAsync_WithSnapshotRunsMaintenanceFork()
+    {
+        var cfg = new CompactionConfig
+        {
+            KeepRecentMinTokens = 1,
+            KeepRecentMinGroups = 1,
+            KeepRecentMaxTokens = 100_000,
+        };
+        var client = new StubChatClient("<analysis>thinking</analysis><summary>important bits</summary>");
+        var tool = AIFunctionFactory.Create(() => "ok", name: "ReadFile", description: "Read a file.");
+        var partial = new PartialCompactor(client, cfg, new MaintenanceForkRunner(client));
+
+        var messages = new List<ChatMessage>();
+        for (var round = 0; round < 4; round++)
+        {
+            messages.Add(new ChatMessage(ChatRole.User, $"user turn {round}"));
+            messages.Add(new ChatMessage(ChatRole.Assistant, $"assistant turn {round}"));
+        }
+        var snapshot = PromptRequestSnapshot.Capture(
+            messages,
+            new ChatOptions
+            {
+                Instructions = "stable base",
+                ModelId = "gpt-test",
+                Tools = [tool]
+            });
+
+        var result = await partial.CompactAsync(messages, snapshot);
+
+        Assert.NotNull(result);
+        Assert.Contains("important bits", result!.FormattedSummary);
+        Assert.Equal(["user:user turn 0", "assistant:assistant turn 0"], client.Messages.Take(2).Select(m => $"{m.Role}:{m.Text}"));
+        Assert.Equal(ChatRole.User, client.Messages[^1].Role);
+        Assert.Contains("## Maintenance Task", client.Messages[^1].Text);
+        Assert.Contains("Task: context_compaction", client.Messages[^1].Text);
+        Assert.Equal("stable base", client.Options?.Instructions);
+        Assert.Equal("gpt-test", client.Options?.ModelId);
+        var capturedTool = Assert.Single(client.Options?.Tools ?? []);
+        Assert.Equal("ReadFile", capturedTool.Name);
+    }
+
+    [Fact]
     public async Task CompactAsync_NullOnChatClientFailure()
     {
         var cfg = new CompactionConfig
@@ -111,6 +154,9 @@ public sealed class PartialCompactorTests
         private readonly string _responseText;
         private readonly bool _throwOnCall;
 
+        public IReadOnlyList<ChatMessage> Messages { get; private set; } = [];
+        public ChatOptions? Options { get; private set; }
+
         public StubChatClient(string responseText, bool throwOnCall = false)
         {
             _responseText = responseText;
@@ -125,6 +171,8 @@ public sealed class PartialCompactorTests
             if (_throwOnCall)
                 throw new InvalidOperationException("boom");
 
+            Messages = messages.ToArray();
+            Options = options;
             var response = new ChatResponse(new ChatMessage(ChatRole.Assistant, _responseText));
             return Task.FromResult(response);
         }

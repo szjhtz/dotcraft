@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DotCraft.Context.Compaction;
 
 namespace DotCraft.Configuration;
 
@@ -18,13 +19,33 @@ internal static class ModelContextWindowCatalog
         string? globalConfigPath,
         string? workspaceConfigPath)
     {
-        if (HasExplicitCompactionContextWindow(mergedConfig))
+        var hasExplicitContextWindow = HasExplicitCompactionContextWindow(mergedConfig);
+        config.CompactionContextWindowExplicit = hasExplicitContextWindow;
+        config.GlobalConfigPath = globalConfigPath;
+        config.WorkspaceConfigPath = workspaceConfigPath;
+
+        if (hasExplicitContextWindow)
             return;
 
         config.Compaction.ContextWindow = Resolve(
             config.Model,
             CatalogPathForConfig(globalConfigPath),
             CatalogPathForConfig(workspaceConfigPath));
+    }
+
+    public static CompactionConfig ResolveCompactionConfig(AppConfig config, string? model)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var compaction = config.Compaction.Clone();
+        if (config.CompactionContextWindowExplicit)
+            return compaction;
+
+        compaction.ContextWindow = Resolve(
+            model,
+            CatalogPathForConfig(config.GlobalConfigPath),
+            CatalogPathForConfig(config.WorkspaceConfigPath));
+        return compaction;
     }
 
     public static int Resolve(string? model, string? globalCatalogPath = null, string? workspaceCatalogPath = null)

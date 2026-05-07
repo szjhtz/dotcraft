@@ -1,4 +1,5 @@
 import type { SubAgentEntry } from './toolCall'
+import { stripSystemReminderBlocks } from '../utils/systemReminderText'
 
 /**
  * Conversation-level types.
@@ -414,6 +415,11 @@ export function wireItemToConversationItem(raw: Record<string, unknown>): Conver
     : undefined
   const createdAt = (raw.createdAt as string | undefined) ?? new Date().toISOString()
   const completedAt = raw.completedAt as string | undefined
+  const text = (raw.text as string | undefined)
+    ?? (payload.text as string | undefined)
+    ?? (raw.content as string | undefined)
+    ?? (payload.message as string | undefined)
+
   return {
     id: (raw.id as string) ?? '',
     type,
@@ -421,10 +427,9 @@ export function wireItemToConversationItem(raw: Record<string, unknown>): Conver
     deliveryMode: normalizeDeliveryMode(
       (raw.deliveryMode as unknown) ?? (payload.deliveryMode as unknown)
     ),
-    text: (raw.text as string | undefined)
-      ?? (payload.text as string | undefined)
-      ?? (raw.content as string | undefined)
-      ?? (payload.message as string | undefined),
+    text: type === 'userMessage' && typeof text === 'string'
+      ? stripSystemReminderBlocks(text)
+      : text,
     nativeInputParts: payloadNativeInputParts,
     materializedInputParts: payloadMaterializedInputParts,
     reasoning: (raw.reasoning as string | undefined)

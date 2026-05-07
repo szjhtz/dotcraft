@@ -4,6 +4,7 @@
 
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using DotCraft.Context;
 using DotCraft.Protocol;
 using Microsoft.Extensions.AI;
 using OpenAiStreamingUpdate = OpenAI.Chat.StreamingChatCompletionUpdate;
@@ -120,6 +121,11 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
     /// </summary>
     public Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>>? FunctionInvoker { get; set; }
 
+    /// <summary>
+    /// Optional runtime policy hook that may deny a tool call without changing the visible tool schema.
+    /// </summary>
+    public Func<FunctionInvocationContext, ModeToolPolicyDecision>? ModeToolPolicy { get; set; }
+
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -149,6 +155,7 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
 
             var preparedMessages = await PrepareMessagesForSamplingAsync(
                 currentMessages,
+                options,
                 cancellationToken);
             if (!ReferenceEquals(preparedMessages, currentMessages))
             {
@@ -271,6 +278,7 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
 
     private static async Task<IReadOnlyList<ChatMessage>> PrepareMessagesForSamplingAsync(
         IEnumerable<ChatMessage> currentMessages,
+        ChatOptions? options,
         CancellationToken cancellationToken)
     {
         var messages = currentMessages as IReadOnlyList<ChatMessage> ?? currentMessages.ToList();
@@ -278,8 +286,32 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
         if (compaction == null)
             return messages;
 
-        var replacement = await compaction.TryCompactAsync(messages, cancellationToken);
-        return replacement ?? messages;
+        var snapshotBeforeCompaction = PromptRequestSnapshot.Capture(
+            messages,
+            options,
+            compaction.ProviderId,
+            compaction.Mode,
+            compaction.ThreadId,
+            compaction.TurnId,
+            compaction.EstimatedInputTokens);
+        var replacement = compaction.TryCompactWithSnapshotAsync is { } compactWithSnapshot
+            ? await compactWithSnapshot(messages, snapshotBeforeCompaction, cancellationToken)
+            : await compaction.TryCompactAsync(messages, cancellationToken);
+        var preparedMessages = replacement ?? messages;
+        if (compaction.CaptureSnapshotAsync is { } capture)
+        {
+            var snapshot = PromptRequestSnapshot.Capture(
+                preparedMessages,
+                options,
+                compaction.ProviderId,
+                compaction.Mode,
+                compaction.ThreadId,
+                compaction.TurnId,
+                compaction.EstimatedInputTokens);
+            await capture(snapshot, cancellationToken);
+        }
+
+        return preparedMessages;
     }
 
     private static void FixupHistories(
@@ -616,6 +648,14 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
         try
         {
             CurrentInvocationContext.Value = context;
+            var policyDecision = ModeToolPolicy?.Invoke(context);
+            if (policyDecision is { Kind: not ModeToolPolicyDecisionKind.Allow })
+            {
+                var message = policyDecision.Message ?? "MODE_POLICY_DENIED";
+                toolExecution?.CompleteFailure(message);
+                return new FunctionInvocationOutcome(call, FunctionInvocationStatus.RanToCompletion, message, null, context.Terminate);
+            }
+
             var value = FunctionInvoker == null
                 ? await function.InvokeAsync(arguments, cancellationToken)
                 : await FunctionInvoker(context, cancellationToken);

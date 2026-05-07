@@ -82,6 +82,16 @@ describe('getStreamingToolDisplay', () => {
     expect(display.label).toBe('Spawning agent: tester...')
   })
 
+  it('truncates large SpawnAgent task previews while streaming', () => {
+    const display = getStreamingToolDisplay(
+      'SpawnAgent',
+      `{"agentPrompt":"${'x'.repeat(1000)}`,
+      'en'
+    )
+    expect(display.label).toMatch(/^Spawning agent for: x+/)
+    expect(display.label.length).toBeLessThan(90)
+  })
+
   it('renders WaitAgent streaming label without exposing child thread ids', () => {
     const display = getStreamingToolDisplay(
       'WaitAgent',

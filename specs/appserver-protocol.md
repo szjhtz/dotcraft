@@ -677,7 +677,7 @@ The `Thread` wire object includes `queuedInputs?: QueuedTurnInput[]`. This queue
 ```
 "contextUsage": {
   "tokens": number,                // Approximate input tokens currently occupying context
-  "contextWindow": number,         // Configured effective context window (denominator)
+  "contextWindow": number,         // Effective context window for the thread's effective model (denominator)
   "autoCompactThreshold": number,  // Token count at which auto-compact runs
   "warningThreshold": number,      // Token count at which compactWarning starts firing
   "errorThreshold": number,        // Token count at which compactError starts firing
@@ -685,7 +685,7 @@ The `Thread` wire object includes `queuedInputs?: QueuedTurnInput[]`. This queue
 }
 ```
 
-The same snapshot is also embedded on `thread/start` and `thread/resume` responses (and their matching `thread/started` / `thread/resumed` notifications) so clients can seed the token ring without an extra round-trip. Freshly-created threads initialize persisted context usage to `tokens = 0`; the field is omitted only for older threads or hosts that have no persisted context usage state yet.
+The same snapshot is also embedded on `thread/start` and `thread/resume` responses (and their matching `thread/started` / `thread/resumed` notifications) so clients can seed the token ring without an extra round-trip. When `Compaction.ContextWindow` is inferred from the model catalog, `contextWindow` is computed from the thread's effective model, including `Thread.configuration.model` overrides. Freshly-created threads initialize persisted context usage to `tokens = 0`; the field is omitted only for older threads or hosts that have no persisted context usage state yet.
 
 ### 4.5 `thread/rollback`
 

@@ -11,6 +11,7 @@ import { MessageCopyButton } from './MessageCopyButton'
 import { parseUserMessageSegments, segmentsFromNativeInputParts } from './parseUserMessageSegments'
 import type { ConversationItem, InputPart, UserMessageImageRef } from '../../types/conversation'
 import { openImagePathInViewer } from '../../utils/conversationDeepLink'
+import { stripSystemReminderBlocks } from '../../utils/systemReminderText'
 import { ActionTooltip } from '../ui/ActionTooltip'
 
 const imageDataUrlCache = new Map<string, string>()
@@ -71,10 +72,11 @@ export function UserMessageBlock({
   const workspacePath = useConversationStore((s) => s.workspacePath)
   const activeThreadId = useThreadStore((s) => s.activeThreadId)
   const hasImages = hydratedImages.length > 0
+  const displayText = stripSystemReminderBlocks(text)
   const segments = nativeInputParts != null && nativeInputParts.length > 0
     ? segmentsFromNativeInputParts(nativeInputParts)
-    : text.length > 0
-      ? parseUserMessageSegments(text)
+    : displayText.length > 0
+      ? parseUserMessageSegments(displayText)
       : []
   const attachedFiles = segments.filter(
     (seg): seg is Extract<(typeof segments)[number], { type: 'attachedFile' }> => seg.type === 'attachedFile'
@@ -187,7 +189,7 @@ export function UserMessageBlock({
             <>
               <textarea
                 ref={editAreaRef}
-                value={editText ?? text}
+                value={editText ?? displayText}
                 aria-label={t('conversation.editTextarea')}
                 disabled={editSubmitting}
                 onChange={(e) => onEditTextChange?.(e.currentTarget.value)}
@@ -340,7 +342,7 @@ export function UserMessageBlock({
             ))}
           </div>
         )}
-        {text.length > 0 && (
+        {displayText.length > 0 && (
           <span>
             {textSegments.map((seg, idx) =>
               seg.type === 'text' ? (
@@ -430,14 +432,14 @@ export function UserMessageBlock({
               </ActionTooltip>
             )}
             <MessageCopyButton
-              getText={() => text}
-              visible={actionsVisible && text.length > 0}
-              disabled={text.length === 0}
+              getText={() => displayText}
+              visible={actionsVisible && displayText.length > 0}
+              disabled={displayText.length === 0}
               wrapperStyle={{
                 position: 'static',
                 display: 'inline-flex',
-                opacity: actionsVisible && text.length > 0 ? 1 : 0,
-                pointerEvents: actionsVisible && text.length > 0 ? 'auto' : 'none',
+                opacity: actionsVisible && displayText.length > 0 ? 1 : 0,
+                pointerEvents: actionsVisible && displayText.length > 0 ? 'auto' : 'none',
                 transition: 'opacity 120ms ease'
               }}
             />

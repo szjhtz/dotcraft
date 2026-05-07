@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DotCraft.Agents;
 using DotCraft.Tools;
+using DotCraft.Tracing;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Tests.Tools;
@@ -152,6 +153,48 @@ public sealed class ToolSchemaSanitizerTests
         var options = Assert.Single(inner.Options);
         var tool = Assert.IsType<ToolSchemaSanitizingFunction>(Assert.Single(options?.Tools ?? []));
         Assert.Equal("string", GetPropertySchema(tool.JsonSchema, "optional").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task DynamicToolInjection_RecordsToolExtensionDiagnostic()
+    {
+        const string sessionKey = "dynamic-tool-injection-session";
+        var rawTool = AIFunctionFactory.Create(NullableStringTool, name: "NullableStringTool");
+        var registry = new DeferredToolRegistry(ToolSchemaSanitizer.SanitizeTools([rawTool]));
+        registry.SearchAndActivate("NullableStringTool");
+
+        var store = new TraceStore();
+        var collector = new TraceCollector(store);
+        var inner = new CapturingChatClient();
+        var client = new DynamicToolInjectionChatClient(inner, registry, traceCollector: collector);
+
+        TracingChatClient.CurrentSessionKey = sessionKey;
+        try
+        {
+            await foreach (var _ in client.GetStreamingResponseAsync(
+                               [new ChatMessage(ChatRole.User, "hello")],
+                               new ChatOptions()))
+            {
+            }
+        }
+        finally
+        {
+            TracingChatClient.ResetCallState(sessionKey);
+            TracingChatClient.CurrentSessionKey = null;
+        }
+
+        var evt = Assert.Single(store.GetEvents(sessionKey), e => e.Type == TraceEventType.ToolInjection);
+        Assert.Equal(PromptCacheEventKinds.ToolExtension, evt.PromptCacheEventKind);
+        Assert.NotNull(evt.PromptCacheChangedFields);
+        Assert.NotNull(evt.ChangedToolNames);
+        Assert.Equal([PromptCacheChangedFields.Tools], evt.PromptCacheChangedFields);
+        Assert.Equal(["NullableStringTool"], evt.ChangedToolNames);
+
+        var session = store.GetSession(sessionKey);
+        Assert.NotNull(session);
+        Assert.Equal(0, session.PromptDriftCount);
+        Assert.Equal(PromptCacheEventKinds.ToolExtension, session.LastPromptCacheChangeKind);
+        Assert.Equal([PromptCacheChangedFields.Tools], session.LastPromptCacheChangedFields);
     }
 
     private static string NullableStringTool(

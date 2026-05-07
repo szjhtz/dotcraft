@@ -2,6 +2,7 @@ using System.Text.Json;
 using DotCraft.Abstractions;
 using DotCraft.Agents;
 using DotCraft.Configuration;
+using DotCraft.Context;
 using DotCraft.Memory;
 using DotCraft.Protocol;
 using DotCraft.Security;
@@ -77,6 +78,43 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
     }
 
     [Fact]
+    public async Task SubmitInputAsync_PassesCapturedPromptRequestSnapshotToMemoryForkConsolidator()
+    {
+        IChatClient chatClient = new FakeChatClient([new ChatResponseUpdate(ChatRole.Assistant, [new TextContent("ok")])]);
+        var consolidator = new CapturingForkConsolidator();
+        await using var agentFactory = CreateAgentFactory(
+            chatClient,
+            configureConfig: config => config.Memory.ConsolidateEveryNTurns = 1,
+            memoryConsolidator: consolidator);
+        var defaultAgent = new StreamingFunctionInvokingChatClient(chatClient).AsAIAgent(
+            new ChatClientAgentOptions
+            {
+                UseProvidedChatClientAsIs = true,
+                ChatOptions = new ChatOptions
+                {
+                    Instructions = "stable base",
+                    ModelId = "gpt-test"
+                }
+            });
+        var svc = new SessionService(
+            agentFactory,
+            defaultAgent,
+            new SessionPersistenceService(new ThreadStore(_tempDir)),
+            new SessionGate());
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+
+        await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("hello")]));
+        var snapshot = await consolidator.WaitForSnapshotAsync();
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(thread.Id, snapshot.ThreadId);
+        Assert.Equal("agent", snapshot.Mode);
+        Assert.Equal("stable base", snapshot.BaseInstructions);
+        Assert.Equal("gpt-test", snapshot.ModelId);
+        Assert.Contains(snapshot.Messages, message => message.Role == ChatRole.User && message.Text.Contains("hello", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task SubmitInputAsync_SubAgentJsonStringResult_PersistsSuccessfulToolResult()
     {
         const string resultJson = "{\"childThreadId\":\"thread_child\",\"status\":\"running\",\"profileName\":\"native\"}";
@@ -98,6 +136,49 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         Assert.Equal(resultJson, payload.Result);
         using var doc = JsonDocument.Parse(payload.Result);
         Assert.Equal("thread_child", doc.RootElement.GetProperty("childThreadId").GetString());
+    }
+
+    [Fact]
+    public async Task SubmitInputAsync_SpawnAgentArgumentsDelta_CompletesSameToolCallItem()
+    {
+        IChatClient chatClient = new FakeChatClient([
+            new ChatResponseUpdate(ChatRole.Assistant, [new ToolCallArgumentsDeltaContent
+            {
+                ToolCallIndex = 0,
+                ToolName = "SpawnAgent",
+                CallId = "call-spawn",
+                ArgumentsDelta = "{\"agentPrompt\":\"Inspect tests"
+            }]),
+            new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent(
+                callId: "call-spawn",
+                name: "SpawnAgent",
+                arguments: new Dictionary<string, object?>
+                {
+                    ["agentPrompt"] = "Inspect tests",
+                    ["agentNickname"] = "tester"
+                })]),
+            new ChatResponseUpdate(ChatRole.Assistant, [new FunctionResultContent(
+                "call-spawn",
+                "{\"childThreadId\":\"thread_child\",\"status\":\"running\"}")])
+        ]);
+        await using var agentFactory = CreateAgentFactory(chatClient);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+
+        var events = await CollectAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("hello")]));
+
+        var deltaEvent = Assert.Single(events, e => e.ToolCallArgumentsDeltaPayload != null);
+        Assert.Equal("SpawnAgent", deltaEvent.ToolCallArgumentsDeltaPayload!.ToolName);
+        Assert.Equal("call-spawn", deltaEvent.ToolCallArgumentsDeltaPayload.CallId);
+
+        var completedToolCall = Assert.Single(
+            events,
+            e => e.EventType == SessionEventType.ItemCompleted
+                && e.ItemPayload?.Type == ItemType.ToolCall
+                && e.ItemPayload.Payload is ToolCallPayload { ToolName: "SpawnAgent" });
+        Assert.Equal(deltaEvent.ItemId, completedToolCall.ItemId);
+        var payload = Assert.IsType<ToolCallPayload>(completedToolCall.ItemPayload!.Payload);
+        Assert.Equal("tester", payload.Arguments?["agentNickname"]?.ToString());
     }
 
     [Fact]
@@ -341,10 +422,12 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
 
         var userMessage = Assert.Single(chatClient.LastMessages, message => message.Role == ChatRole.User);
         var modelInput = string.Concat(userMessage.Contents.OfType<TextContent>().Select(content => content.Text));
-        Assert.Contains("[Runtime Context]", modelInput);
+        Assert.Contains("<system-reminder>", modelInput);
+        Assert.Contains("## Runtime Context", modelInput);
+        Assert.Contains("CurrentMode: Agent", modelInput);
         Assert.Contains("Channel: qq", modelInput);
-        Assert.Contains("Channel Context: group:123456", modelInput);
-        Assert.Contains("Sender Name: Alice", modelInput);
+        Assert.Contains("ChannelContext: group:123456", modelInput);
+        Assert.Contains("SenderName: Alice", modelInput);
 
         var persistedThread = await svc.GetThreadAsync(thread.Id);
         var turn = Assert.Single(persistedThread.Turns);
@@ -536,13 +619,16 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
 
     private AgentFactory CreateAgentFactory(
         IChatClient chatClientFactory,
-        IReadOnlyList<IAgentToolProvider>? toolProviders = null)
+        IReadOnlyList<IAgentToolProvider>? toolProviders = null,
+        Action<AppConfig>? configureConfig = null,
+        IMemoryConsolidator? memoryConsolidator = null)
     {
         var config = new AppConfig
         {
             ApiKey = "sk-test-not-used-for-network",
             EndPoint = "https://127.0.0.1:9/v1"
         };
+        configureConfig?.Invoke(config);
         var memory = new MemoryStore(_tempDir);
         var skills = new SkillsLoader(_tempDir);
         return new AgentFactory(
@@ -553,7 +639,8 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
             skillsLoader: skills,
             approvalService: new AutoApproveApprovalService(),
             blacklist: null,
-            toolProviders: toolProviders ?? Array.Empty<IAgentToolProvider>());
+            toolProviders: toolProviders ?? Array.Empty<IAgentToolProvider>(),
+            memoryConsolidator: memoryConsolidator);
     }
 
     private SessionIdentity MakeIdentity() => new()
@@ -570,13 +657,41 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         }
     }
 
+    private static async Task<List<SessionEvent>> CollectAsync(IAsyncEnumerable<SessionEvent> events)
+    {
+        var collected = new List<SessionEvent>();
+        await foreach (var evt in events)
+            collected.Add(evt);
+        return collected;
+    }
+
     private static string FormatMessage(ChatMessage message)
     {
         var text = string.Concat(message.Contents.OfType<TextContent>().Select(content => content.Text));
         var runtimeContextIndex = text.IndexOf("\n[Runtime Context]", StringComparison.Ordinal);
         if (runtimeContextIndex >= 0)
             text = text[..runtimeContextIndex];
+        text = StripSystemReminderBlocks(text);
         return $"{message.Role}:{text.Trim()}";
+    }
+
+    private static string StripSystemReminderBlocks(string input)
+    {
+        const string openTag = "<system-reminder>";
+        const string closeTag = "</system-reminder>";
+        var text = input;
+        while (true)
+        {
+            var open = text.IndexOf(openTag, StringComparison.Ordinal);
+            if (open < 0)
+                return text.TrimEnd();
+
+            var close = text.IndexOf(closeTag, open + openTag.Length, StringComparison.Ordinal);
+            if (close < 0)
+                return text[..open].TrimEnd();
+
+            text = (text[..open] + text[(close + closeTag.Length)..]).TrimEnd();
+        }
     }
 
     private bool ThreadRowExists(string threadId)
@@ -724,6 +839,38 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         {
             Contexts.Add(context);
             return [];
+        }
+    }
+
+    private sealed class CapturingForkConsolidator : IMemoryForkConsolidator
+    {
+        private readonly TaskCompletionSource<PromptRequestSnapshot?> _snapshotSource =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<MemoryConsolidationResult> ConsolidateAsync(
+            IReadOnlyList<ChatMessage> messagesToArchive,
+            CancellationToken cancellationToken = default)
+        {
+            _snapshotSource.TrySetResult(null);
+            return Task.FromResult(MemoryConsolidationResult.Skipped("legacy_path"));
+        }
+
+        public Task<MemoryConsolidationResult> ConsolidateAsync(
+            IReadOnlyList<ChatMessage> messagesToArchive,
+            PromptRequestSnapshot? snapshot,
+            CancellationToken cancellationToken = default)
+        {
+            _snapshotSource.TrySetResult(snapshot);
+            return Task.FromResult(MemoryConsolidationResult.Skipped("captured"));
+        }
+
+        public async Task<PromptRequestSnapshot?> WaitForSnapshotAsync()
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var registration = cts.Token.Register(
+                static state => ((TaskCompletionSource<PromptRequestSnapshot?>)state!).TrySetCanceled(),
+                _snapshotSource);
+            return await _snapshotSource.Task;
         }
     }
 }

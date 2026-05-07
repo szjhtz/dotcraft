@@ -16,6 +16,20 @@ public interface IMemoryConsolidator
 }
 
 /// <summary>
+/// Consolidates memory from a captured prompt request snapshot when one is available.
+/// </summary>
+public interface IMemoryForkConsolidator : IMemoryConsolidator
+{
+    /// <summary>
+    /// Consolidates using a cache-safe prompt fork when possible, otherwise falls back.
+    /// </summary>
+    Task<MemoryConsolidationResult> ConsolidateAsync(
+        IReadOnlyList<ChatMessage> messagesToArchive,
+        PromptRequestSnapshot? snapshot,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// The high-level outcome of a memory consolidation attempt.
 /// </summary>
 public enum MemoryConsolidationOutcome

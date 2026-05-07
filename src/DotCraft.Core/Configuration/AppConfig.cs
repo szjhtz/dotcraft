@@ -69,6 +69,24 @@ public sealed class AppConfig
     public CompactionConfig Compaction { get; set; } = new();
 
     /// <summary>
+    /// True when the loaded configuration explicitly set <see cref="CompactionConfig.ContextWindow"/>.
+    /// </summary>
+    [JsonIgnore]
+    internal bool CompactionContextWindowExplicit { get; set; }
+
+    /// <summary>
+    /// Global config path used to locate sibling model context-window catalogs.
+    /// </summary>
+    [JsonIgnore]
+    internal string? GlobalConfigPath { get; set; }
+
+    /// <summary>
+    /// Workspace config path used to locate sibling model context-window catalogs.
+    /// </summary>
+    [JsonIgnore]
+    internal string? WorkspaceConfigPath { get; set; }
+
+    /// <summary>
     /// Long-term memory consolidation settings. These settings are independent
     /// from context compaction.
     /// </summary>

@@ -101,6 +101,18 @@ interface StreamingFileBaseline {
   originalContent: string
 }
 
+const SUB_AGENT_STREAMING_TOOLS = new Set([
+  'SpawnAgent',
+  'SendInput',
+  'WaitAgent',
+  'ResumeAgent',
+  'CloseAgent'
+])
+
+const SUB_AGENT_ARGUMENT_BUFFER_MAX_CHARS = 12000
+const SUB_AGENT_ARGUMENT_FIELD_MAX_CHARS = 800
+const subAgentStreamingArgumentBuffers = new Map<string, string>()
+
 interface ConversationState {
   turns: ConversationTurn[]
   turnStatus: 'idle' | 'running' | 'waitingApproval'
@@ -587,6 +599,55 @@ function extractPartialJsonStringValue(json: string, key: string): string | null
   return out
 }
 
+function appendStreamingArgumentsPreview(
+  bufferKey: string,
+  toolName: string,
+  currentPreview: string | undefined,
+  delta: string
+): string {
+  if (!SUB_AGENT_STREAMING_TOOLS.has(toolName)) {
+    return (currentPreview ?? '') + delta
+  }
+
+  const existing = subAgentStreamingArgumentBuffers.get(bufferKey) ?? ''
+  let buffer = existing + delta
+  if (buffer.length > SUB_AGENT_ARGUMENT_BUFFER_MAX_CHARS) {
+    buffer = buffer.slice(0, SUB_AGENT_ARGUMENT_BUFFER_MAX_CHARS)
+  }
+  subAgentStreamingArgumentBuffers.set(bufferKey, buffer)
+  return buildSubAgentArgumentsPreview(buffer)
+}
+
+function buildSubAgentArgumentsPreview(rawArgs: string): string {
+  const preview: Record<string, string> = {}
+  for (const key of [
+    'agentNickname',
+    'agentPrompt',
+    'agentRole',
+    'profile',
+    'workingDirectory',
+    'childThreadId',
+    'message'
+  ]) {
+    const value = extractPartialJsonStringValue(rawArgs, key)
+    if (value != null) {
+      preview[key] = truncatePreviewField(value)
+    }
+  }
+
+  if (Object.keys(preview).length === 0) {
+    return rawArgs.slice(0, Math.min(rawArgs.length, SUB_AGENT_ARGUMENT_FIELD_MAX_CHARS))
+  }
+
+  return JSON.stringify(preview)
+}
+
+function truncatePreviewField(value: string): string {
+  const chars = Array.from(value)
+  if (chars.length <= SUB_AGENT_ARGUMENT_FIELD_MAX_CHARS) return value
+  return `${chars.slice(0, SUB_AGENT_ARGUMENT_FIELD_MAX_CHARS - 1).join('')}…`
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -968,6 +1029,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     const itemId = params.itemId ?? ''
     const delta = params.delta ?? ''
     if (!turnId || !itemId || !delta) return
+    const streamingBufferKey = `${turnId}:${itemId}`
 
     set((state) => ({
       turns: state.turns.map((t) =>
@@ -999,6 +1061,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     const itemId = params.itemId ?? ''
     const delta = params.delta ?? ''
     if (!turnId || !itemId || !delta) return
+    const streamingBufferKey = `${turnId}:${itemId}`
     let shouldLoadBaseline = false
     let baselinePath = ''
     let nextArgumentsPreviewForLoad = ''
@@ -1013,8 +1076,13 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         const nextItems = existing
           ? t.items.map((i) => {
               if (i.id !== itemId) return i
-              const nextArgumentsPreview = (i.argumentsPreview ?? '') + delta
               const nextToolName = params.toolName ?? i.toolName ?? 'tool'
+              const nextArgumentsPreview = appendStreamingArgumentsPreview(
+                streamingBufferKey,
+                nextToolName,
+                i.argumentsPreview,
+                delta
+              )
               capturedToolName = nextToolName
               capturedPreview = nextArgumentsPreview
               return {
@@ -1031,18 +1099,27 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
             })
           : [
               ...t.items,
-              {
-                id: itemId,
-                type: 'toolCall' as const,
-                status: 'streaming' as const,
-                toolName: params.toolName ?? 'tool',
-                toolCallId: params.callId ?? itemId,
-                createdAt: new Date().toISOString(),
-                argumentsPreview: delta,
-                streamingFileContent: extractPartialJsonStringValue(delta, 'content')
-                  ?? extractPartialJsonStringValue(delta, 'newText')
-                  ?? undefined
-              }
+              (() => {
+                const toolName = params.toolName ?? 'tool'
+                const argumentsPreview = appendStreamingArgumentsPreview(
+                  streamingBufferKey,
+                  toolName,
+                  undefined,
+                  delta
+                )
+                return {
+                  id: itemId,
+                  type: 'toolCall' as const,
+                  status: 'streaming' as const,
+                  toolName,
+                  toolCallId: params.callId ?? itemId,
+                  createdAt: new Date().toISOString(),
+                  argumentsPreview,
+                  streamingFileContent: extractPartialJsonStringValue(argumentsPreview, 'content')
+                    ?? extractPartialJsonStringValue(argumentsPreview, 'newText')
+                    ?? undefined
+                }
+              })()
             ]
         if (!capturedToolName) {
           const created = nextItems.find((i) => i.id === itemId)
@@ -1298,6 +1375,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       // Mark the tool call item itself as completed and merge finalized payload fields.
       const itemPayload = (item?.payload ?? {}) as Record<string, unknown>
       const itemId = (item?.id as string) ?? ''
+      if (itemId) subAgentStreamingArgumentBuffers.delete(`${turnId}:${itemId}`)
       const completedArgs = (item?.arguments as Record<string, unknown> | undefined)
         ?? (itemPayload.arguments as Record<string, unknown> | undefined)
       const completedToolName = (item?.toolName as string | undefined)
@@ -1785,6 +1863,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   reset() {
+    subAgentStreamingArgumentBuffers.clear()
     set((state) => ({
       ...initialState,
       workspacePath: state.workspacePath,

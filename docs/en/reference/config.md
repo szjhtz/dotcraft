@@ -31,7 +31,7 @@ This page collects configuration fields in one place. For first-time setup, read
 |-------|-------------|---------|
 | `Compaction.AutoCompactEnabled` | Enables threshold-based auto compaction | `true` |
 | `Compaction.ReactiveCompactEnabled` | Enables reactive compaction for `prompt_too_long` errors | `true` |
-| `Compaction.ContextWindow` | Model context window in tokens. When unset, DotCraft infers it from `Model` using the model context-window catalog; unknown models use `256000` | Model catalog value / `256000` |
+| `Compaction.ContextWindow` | Model context window in tokens. When unset, DotCraft infers it from the current effective model, including per-thread model overrides, using the model context-window catalog; unknown models use `256000` | Model catalog value / `256000` |
 | `Compaction.SummaryReserveTokens` | Tokens reserved for summary output | `20000` |
 | `Compaction.AutoCompactBufferTokens` | Token buffer below the hard limit that triggers auto compaction | `13000` |
 | `Compaction.WarningBufferTokens` | Token buffer before auto threshold that emits warning | `20000` |
@@ -48,7 +48,7 @@ This page collects configuration fields in one place. For first-time setup, read
 
 ### Model Context-Window Catalog
 
-DotCraft ships a built-in context-window catalog for common models and uses it when `Compaction.ContextWindow` is not explicitly configured. You can extend or override the catalog with JSON files:
+DotCraft ships a built-in context-window catalog for common models and uses it when `Compaction.ContextWindow` is not explicitly configured. The lookup uses the current effective model, so a per-thread model override takes precedence over the workspace default. You can extend or override the catalog with JSON files:
 
 - Global: `~/.craft/model-context-windows.json`
 - Workspace: `.craft/model-context-windows.json`

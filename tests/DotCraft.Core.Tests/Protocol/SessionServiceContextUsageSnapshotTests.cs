@@ -92,6 +92,42 @@ public sealed class SessionServiceContextUsageSnapshotTests : IDisposable
     }
 
     [Fact]
+    public async Task TryGetContextUsageSnapshot_UsesThreadModelOverrideWindow_WhenContextWindowIsInferred()
+    {
+        const string threadId = "thread-model-override";
+        var config = new AppConfig
+        {
+            ApiKey = "sk-test-not-used-for-network",
+            EndPoint = "https://127.0.0.1:9/v1",
+            Model = "mimo-v2.5-pro"
+        };
+        ModelContextWindowCatalog.ApplyToConfig(
+            config,
+            System.Text.Json.Nodes.JsonNode.Parse("""{ "Model": "mimo-v2.5-pro" }""")!,
+            globalConfigPath: null,
+            workspaceConfigPath: null);
+
+        await using var agentFactory = CreateAgentFactory(config);
+        var service = CreateSessionService(agentFactory);
+        var identity = new SessionIdentity
+        {
+            WorkspacePath = _tempDir,
+            ChannelName = "desktop",
+            UserId = "user"
+        };
+        await service.CreateThreadAsync(
+            identity,
+            new ThreadConfiguration { Model = "provider/glm-5.1" },
+            threadId: threadId);
+
+        var snapshot = service.TryGetContextUsageSnapshot(threadId);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(180_000, snapshot!.ContextWindow);
+        Assert.Equal(167_000, snapshot.AutoCompactThreshold);
+    }
+
+    [Fact]
     public async Task TryGetContextUsageSnapshot_UsesPersistedUsage_WhenTrackerExists()
     {
         const string threadId = "thread-active";
@@ -270,9 +306,9 @@ public sealed class SessionServiceContextUsageSnapshotTests : IDisposable
         return new SessionService(agentFactory, defaultAgent, persistence, new SessionGate());
     }
 
-    private AgentFactory CreateAgentFactory()
+    private AgentFactory CreateAgentFactory(AppConfig? config = null)
     {
-        var config = new AppConfig
+        config ??= new AppConfig
         {
             ApiKey = "sk-test-not-used-for-network",
             EndPoint = "https://127.0.0.1:9/v1"

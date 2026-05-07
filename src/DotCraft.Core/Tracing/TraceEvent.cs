@@ -18,6 +18,25 @@ public enum TraceEventType
     Thinking
 }
 
+/// <summary>
+/// Prompt-cache diagnostic event kinds recorded in trace metadata.
+/// </summary>
+public static class PromptCacheEventKinds
+{
+    public const string Baseline = "baseline";
+    public const string Drift = "drift";
+    public const string ToolExtension = "toolExtension";
+}
+
+/// <summary>
+/// Stable prompt-cache fingerprint fields that can change during a session.
+/// </summary>
+public static class PromptCacheChangedFields
+{
+    public const string Prompt = "prompt";
+    public const string Tools = "tools";
+}
+
 public sealed class TraceEvent
 {
     public string Id { get; init; } = Guid.NewGuid().ToString("N")[..12];
@@ -61,6 +80,20 @@ public sealed class TraceEvent
     public string? ToolSchemaHash { get; init; }
 
     public bool? PromptDriftDetected { get; init; }
+
+    public string? PromptCacheEventKind { get; init; }
+
+    public string[]? PromptCacheChangedFields { get; init; }
+
+    public string? PreviousSystemPromptHash { get; init; }
+
+    public string? PreviousToolSchemaHash { get; init; }
+
+    public string? CurrentSystemPromptHash { get; init; }
+
+    public string? CurrentToolSchemaHash { get; init; }
+
+    public string[]? ChangedToolNames { get; init; }
 
     public long? InputTokens { get; init; }
 
@@ -174,6 +207,12 @@ public sealed class TraceSession
     public string? LastFinishReason { get; set; }
 
     public DateTimeOffset? SessionMetadataCapturedAt { get; set; }
+
+    public DateTimeOffset? LastPromptCacheChangeAt { get; set; }
+
+    public string? LastPromptCacheChangeKind { get; set; }
+
+    public string[] LastPromptCacheChangedFields { get; set; } = [];
 
     private string[] _toolNames = [];
 

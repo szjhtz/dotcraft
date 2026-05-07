@@ -73,6 +73,7 @@ public sealed class CompactionPipeline
     private readonly MicroCompactor _micro;
     private readonly PartialCompactor _partial;
     private readonly CompactionFailureTracker _failures;
+    private readonly MaintenanceForkRunner _maintenanceForkRunner;
 
     public CompactionPipeline(
         CompactionConfig config,
@@ -80,7 +81,8 @@ public sealed class CompactionPipeline
     {
         _config = config;
         _micro = new MicroCompactor(config);
-        _partial = new PartialCompactor(summaryChatClient, config);
+        _maintenanceForkRunner = new MaintenanceForkRunner(summaryChatClient);
+        _partial = new PartialCompactor(summaryChatClient, config, _maintenanceForkRunner);
         _failures = new CompactionFailureTracker(config.MaxConsecutiveFailures);
     }
 
@@ -130,7 +132,8 @@ public sealed class CompactionPipeline
         string threadId,
         long inputTokenHint,
         DateTimeOffset? lastAssistantTimestampUtc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PromptRequestSnapshot? snapshot = null)
     {
         int BeforeFromHintOrZero() => inputTokenHint > 0
             ? (int)Math.Min(int.MaxValue, inputTokenHint)
@@ -186,7 +189,8 @@ public sealed class CompactionPipeline
             beforeThreshold,
             threadId,
             lastAssistantTimestampUtc,
-            cancellationToken);
+            cancellationToken,
+            snapshot: snapshot);
 
         ApplyHistoryReplacement(session, provider, result.Messages);
         return result.Status;
@@ -202,7 +206,8 @@ public sealed class CompactionPipeline
         string threadId,
         long inputTokenHint,
         DateTimeOffset? lastAssistantTimestampUtc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PromptRequestSnapshot? snapshot = null)
     {
         var before = inputTokenHint > 0
             ? (int)Math.Min(int.MaxValue, inputTokenHint)
@@ -247,7 +252,8 @@ public sealed class CompactionPipeline
             beforeThreshold,
             threadId,
             lastAssistantTimestampUtc,
-            cancellationToken);
+            cancellationToken,
+            snapshot: snapshot);
     }
 
     /// <summary>
@@ -351,6 +357,7 @@ public sealed class CompactionPipeline
         string threadId,
         DateTimeOffset? lastAssistantTimestampUtc,
         CancellationToken cancellationToken,
+        PromptRequestSnapshot? snapshot = null,
         bool forcePartial = false)
     {
         var microResult = _micro.Run(history, lastAssistantTimestampUtc);
@@ -382,7 +389,7 @@ public sealed class CompactionPipeline
         PartialCompactResult? partial;
         try
         {
-            partial = await _partial.CompactAsync(historyForPartial, cancellationToken);
+            partial = await _partial.CompactAsync(historyForPartial, snapshot, cancellationToken);
         }
         catch (OperationCanceledException)
         {

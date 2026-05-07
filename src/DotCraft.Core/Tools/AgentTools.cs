@@ -20,7 +20,6 @@ public sealed class AgentTools(
     [Description("Spawn a subagent as a child thread. Use this for collaborative background work when the parent agent can continue while the child thread runs." +
                  "Returned childThreadId can be passed to SendInput, WaitAgent, ResumeAgent, and CloseAgent.")]
     [Tool(Icon = "🐧", DisplayType = typeof(CoreToolDisplays), DisplayMethod = nameof(CoreToolDisplays.SpawnAgent))]
-    [StreamArguments(false)]
     public async Task<string> SpawnAgent(
         [Description("Task prompt for the child agent thread.")] string agentPrompt,
         [Description("Optional short name shown in UI for this child agent.")] string? agentNickname = null,
@@ -54,7 +53,6 @@ public sealed class AgentTools(
     [Description("Send another user message to a session-backed child agent thread. " +
                  "Work for native profiles and for external CLI profiles only when the profile supports resume and workspace resume is enabled.")]
     [Tool(Icon = "💬")]
-    [StreamArguments(false)]
     public async Task<string> SendInput(
         [Description("Child agent thread id returned by SpawnAgent.")] string childThreadId,
         [Description("Message to send to the child agent.")] string message,
@@ -73,7 +71,6 @@ public sealed class AgentTools(
 
     [Description("Wait for a session-backed child agent thread to finish its current turn and return its final message.")]
     [Tool(Icon = "⏱️")]
-    [StreamArguments(false)]
     public async Task<string> WaitAgent(
         [Description("Child agent thread id returned by SpawnAgent.")] string childThreadId,
         [Description("Optional timeout in seconds. Omit or pass 0 to wait without a timeout.")] int? timeoutSeconds = null,
@@ -91,7 +88,6 @@ public sealed class AgentTools(
 
     [Description("Resume a paused or closed child agent thread and reopen its parent-child edge.")]
     [Tool(Icon = "▶️")]
-    [StreamArguments(false)]
     public async Task<string> ResumeAgent(
         [Description("Child agent thread id returned by SpawnAgent.")] string childThreadId,
         CancellationToken cancellationToken = default)
@@ -107,7 +103,6 @@ public sealed class AgentTools(
 
     [Description("Close a child agent thread edge and cancel its active turn if one is running.")]
     [Tool(Icon = "⏹️")]
-    [StreamArguments(false)]
     public async Task<string> CloseAgent(
         [Description("Child agent thread id returned by SpawnAgent.")] string childThreadId,
         CancellationToken cancellationToken = default)

@@ -98,43 +98,70 @@ public sealed class TraceStore
         IEnumerable<string>? toolNames,
         string? systemPromptHash = null,
         string? toolSchemaHash = null,
-        DateTimeOffset? capturedAt = null)
+        DateTimeOffset? capturedAt = null,
+        string? promptCacheEventKind = null,
+        IEnumerable<string>? promptCacheChangedFields = null)
     {
         var session = _sessions.GetOrAdd(sessionKey, key => new TraceSession
         {
             SessionKey = key
         });
 
-        if (!string.IsNullOrWhiteSpace(finalSystemPrompt) && string.IsNullOrWhiteSpace(session.FinalSystemPrompt))
+        var effectivePromptCacheEventKind = promptCacheEventKind;
+        var effectivePromptCacheChangedFields = promptCacheChangedFields?.ToArray();
+        if (string.IsNullOrWhiteSpace(effectivePromptCacheEventKind))
+        {
+            var legacyChangedFields = new List<string>(capacity: 2);
+            if (!string.IsNullOrWhiteSpace(systemPromptHash)
+                && !string.IsNullOrWhiteSpace(session.SystemPromptHash)
+                && !string.Equals(session.SystemPromptHash, systemPromptHash, StringComparison.Ordinal))
+            {
+                legacyChangedFields.Add(PromptCacheChangedFields.Prompt);
+            }
+
+            if (!string.IsNullOrWhiteSpace(toolSchemaHash)
+                && !string.IsNullOrWhiteSpace(session.ToolSchemaHash)
+                && !string.Equals(session.ToolSchemaHash, toolSchemaHash, StringComparison.Ordinal))
+            {
+                legacyChangedFields.Add(PromptCacheChangedFields.Tools);
+            }
+
+            if (legacyChangedFields.Count > 0)
+            {
+                effectivePromptCacheEventKind = PromptCacheEventKinds.Drift;
+                effectivePromptCacheChangedFields = legacyChangedFields.ToArray();
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(finalSystemPrompt))
             session.FinalSystemPrompt = finalSystemPrompt;
 
         if (!string.IsNullOrWhiteSpace(systemPromptHash))
-        {
-            if (!string.IsNullOrWhiteSpace(session.SystemPromptHash)
-                && !string.Equals(session.SystemPromptHash, systemPromptHash, StringComparison.Ordinal))
-            {
-                session.PromptDriftCount++;
-            }
-
             session.SystemPromptHash = systemPromptHash;
-        }
 
         if (!string.IsNullOrWhiteSpace(toolSchemaHash))
-        {
-            if (!string.IsNullOrWhiteSpace(session.ToolSchemaHash)
-                && !string.Equals(session.ToolSchemaHash, toolSchemaHash, StringComparison.Ordinal))
-            {
-                session.PromptDriftCount++;
-            }
-
             session.ToolSchemaHash = toolSchemaHash;
-        }
 
         session.SetToolNames(toolNames);
 
         var at = capturedAt ?? DateTimeOffset.UtcNow;
         if (!session.SessionMetadataCapturedAt.HasValue || at > session.SessionMetadataCapturedAt.Value)
             session.SessionMetadataCapturedAt = at;
+
+        if (string.Equals(effectivePromptCacheEventKind, PromptCacheEventKinds.Drift, StringComparison.Ordinal))
+            session.PromptDriftCount++;
+
+        if (string.Equals(effectivePromptCacheEventKind, PromptCacheEventKinds.Drift, StringComparison.Ordinal)
+            || string.Equals(effectivePromptCacheEventKind, PromptCacheEventKinds.ToolExtension, StringComparison.Ordinal))
+        {
+            session.LastPromptCacheChangeAt = at;
+            session.LastPromptCacheChangeKind = effectivePromptCacheEventKind;
+            session.LastPromptCacheChangedFields = effectivePromptCacheChangedFields?
+                .Where(field => !string.IsNullOrWhiteSpace(field))
+                .Select(field => field.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray() ?? [];
+        }
     }
 
     public IReadOnlyList<TraceSession> GetSessions()
@@ -398,7 +425,9 @@ public sealed class TraceStore
                     evt.ToolNames,
                     evt.SystemPromptHash,
                     evt.ToolSchemaHash,
-                    evt.Timestamp);
+                    evt.Timestamp,
+                    evt.PromptCacheEventKind,
+                    evt.PromptCacheChangedFields);
                 break;
             case TraceEventType.Request:
                 session.RequestCount++;
@@ -414,6 +443,9 @@ public sealed class TraceStore
                 session.ToolCallCount++;
                 if (evt.DurationMs.HasValue)
                     session.AddToolDuration((long)Math.Round(evt.DurationMs.Value));
+                break;
+            case TraceEventType.ToolInjection:
+                ApplyPromptCacheChangeSummary(session, evt);
                 break;
             case TraceEventType.TokenUsage:
                 if (evt.InputTokens.HasValue)
@@ -441,6 +473,26 @@ public sealed class TraceStore
 
         if (writeToSse)
             _sseChannel.Writer.TryWrite(evt);
+    }
+
+    private static void ApplyPromptCacheChangeSummary(TraceSession session, TraceEvent evt)
+    {
+        if (string.Equals(evt.PromptCacheEventKind, PromptCacheEventKinds.Drift, StringComparison.Ordinal))
+            session.PromptDriftCount++;
+
+        if (!string.Equals(evt.PromptCacheEventKind, PromptCacheEventKinds.Drift, StringComparison.Ordinal)
+            && !string.Equals(evt.PromptCacheEventKind, PromptCacheEventKinds.ToolExtension, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        session.LastPromptCacheChangeAt = evt.Timestamp;
+        session.LastPromptCacheChangeKind = evt.PromptCacheEventKind;
+        session.LastPromptCacheChangedFields = evt.PromptCacheChangedFields?
+            .Where(field => !string.IsNullOrWhiteSpace(field))
+            .Select(field => field.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray() ?? [];
     }
 
     private void PersistEvent(TraceEvent evt)
@@ -695,7 +747,10 @@ public sealed class TraceStore
             PromptDriftCount = session.PromptDriftCount,
             FirstUserRequest = session.FirstUserRequest,
             LastFinishReason = session.LastFinishReason,
-            SessionMetadataCapturedAt = session.SessionMetadataCapturedAt
+            SessionMetadataCapturedAt = session.SessionMetadataCapturedAt,
+            LastPromptCacheChangeAt = session.LastPromptCacheChangeAt,
+            LastPromptCacheChangeKind = session.LastPromptCacheChangeKind,
+            LastPromptCacheChangedFields = session.LastPromptCacheChangedFields
         };
         clone.SetToolNames(session.ToolNames);
         clone.LoadAggregateSnapshot(

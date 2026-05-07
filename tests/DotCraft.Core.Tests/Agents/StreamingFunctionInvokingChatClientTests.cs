@@ -1,4 +1,5 @@
 using DotCraft.Agents;
+using DotCraft.Context;
 using DotCraft.Protocol;
 using Microsoft.Extensions.AI;
 
@@ -69,6 +70,108 @@ public sealed partial class StreamingFunctionInvokingChatClientTests
         Assert.Equal(1, callbackCalls);
         var call = Assert.Single(inner.Calls);
         Assert.Equal(["assistant:compacted summary", "user:latest user"], call.Select(m => $"{m.Role}:{m.Text}"));
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_CapturesPromptRequestSnapshotAfterPreSamplingCompaction()
+    {
+        var inner = new SingleReplyFakeChatClient();
+        var client = new StreamingFunctionInvokingChatClient(inner);
+        var tool = AIFunctionFactory.Create(() => "ok", name: "ReadFile", description: "Read a file.");
+        var replacement = new List<ChatMessage>
+        {
+            new(ChatRole.Assistant, "compacted summary"),
+            new(ChatRole.User, "latest user")
+        };
+        PromptRequestSnapshot? snapshot = null;
+
+        using var scope = PreSamplingCompactionRuntimeScope.Set(new PreSamplingCompactionRuntimeContext
+        {
+            ThreadId = "thread_1",
+            TurnId = "turn_1",
+            Mode = "agent",
+            TryCompactAsync = (_, _) => Task.FromResult<IReadOnlyList<ChatMessage>?>(replacement),
+            CaptureSnapshotAsync = (value, _) =>
+            {
+                snapshot = value;
+                return Task.CompletedTask;
+            }
+        });
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "start")],
+            new ChatOptions
+            {
+                Instructions = "stable base instructions",
+                ModelId = "gpt-test",
+                Tools = [tool],
+                AllowMultipleToolCalls = false
+            }))
+        {
+        }
+
+        var captured = Assert.IsType<PromptRequestSnapshot>(snapshot);
+        Assert.Equal("thread_1", captured.ThreadId);
+        Assert.Equal("turn_1", captured.TurnId);
+        Assert.Equal("agent", captured.Mode);
+        Assert.Equal("gpt-test", captured.ModelId);
+        Assert.Equal("stable base instructions", captured.BaseInstructions);
+        Assert.Equal(
+            PromptRequestFingerprints.ComputeTextFingerprint("stable base instructions"),
+            captured.BaseInstructionsFingerprint);
+        Assert.Equal(["assistant:compacted summary", "user:latest user"], captured.Messages.Select(m => $"{m.Role}:{m.Text}"));
+        var capturedTool = Assert.Single(captured.Tools);
+        Assert.Equal("ReadFile", capturedTool.Name);
+        Assert.Equal(PromptRequestFingerprints.ComputeToolFingerprint([tool]), captured.ToolFingerprint);
+        Assert.False(captured.AllowMultipleToolCalls);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_PassesPromptRequestSnapshotToPreSamplingCompaction()
+    {
+        var inner = new SingleReplyFakeChatClient();
+        var client = new StreamingFunctionInvokingChatClient(inner);
+        var tool = AIFunctionFactory.Create(() => "ok", name: "ReadFile", description: "Read a file.");
+        PromptRequestSnapshot? compactionSnapshot = null;
+        var replacement = new List<ChatMessage>
+        {
+            new(ChatRole.Assistant, "compacted summary"),
+            new(ChatRole.User, "latest user")
+        };
+
+        using var scope = PreSamplingCompactionRuntimeScope.Set(new PreSamplingCompactionRuntimeContext
+        {
+            ThreadId = "thread_1",
+            TurnId = "turn_1",
+            Mode = "agent",
+            TryCompactWithSnapshotAsync = (_, snapshot, _) =>
+            {
+                compactionSnapshot = snapshot;
+                return Task.FromResult<IReadOnlyList<ChatMessage>?>(replacement);
+            },
+            TryCompactAsync = (_, _) => throw new InvalidOperationException("legacy callback should not run")
+        });
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "start")],
+            new ChatOptions
+            {
+                Instructions = "stable base instructions",
+                ModelId = "gpt-test",
+                Tools = [tool]
+            }))
+        {
+        }
+
+        var captured = Assert.IsType<PromptRequestSnapshot>(compactionSnapshot);
+        Assert.Equal("thread_1", captured.ThreadId);
+        Assert.Equal("turn_1", captured.TurnId);
+        Assert.Equal("agent", captured.Mode);
+        Assert.Equal("stable base instructions", captured.BaseInstructions);
+        Assert.Equal("gpt-test", captured.ModelId);
+        Assert.Equal(["user:start"], captured.Messages.Select(m => $"{m.Role}:{m.Text}"));
+        Assert.Equal("ReadFile", Assert.Single(captured.Tools).Name);
+        Assert.Equal(["assistant:compacted summary", "user:latest user"], inner.Calls.Single().Select(m => $"{m.Role}:{m.Text}"));
     }
 
     [Fact]

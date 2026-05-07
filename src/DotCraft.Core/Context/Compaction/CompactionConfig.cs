@@ -123,6 +123,29 @@ public sealed class CompactionConfig
     public int MaxConsecutiveFailures { get; set; } = 3;
 
     /// <summary>
+    /// Creates a copy of this configuration with the same tuning values.
+    /// </summary>
+    public CompactionConfig Clone() => new()
+    {
+        AutoCompactEnabled = AutoCompactEnabled,
+        ReactiveCompactEnabled = ReactiveCompactEnabled,
+        ContextWindow = ContextWindow,
+        SummaryReserveTokens = SummaryReserveTokens,
+        AutoCompactBufferTokens = AutoCompactBufferTokens,
+        WarningBufferTokens = WarningBufferTokens,
+        ErrorBufferTokens = ErrorBufferTokens,
+        ManualCompactBufferTokens = ManualCompactBufferTokens,
+        KeepRecentMinTokens = KeepRecentMinTokens,
+        KeepRecentMinGroups = KeepRecentMinGroups,
+        KeepRecentMaxTokens = KeepRecentMaxTokens,
+        MicrocompactEnabled = MicrocompactEnabled,
+        MicrocompactTriggerCount = MicrocompactTriggerCount,
+        MicrocompactKeepRecent = MicrocompactKeepRecent,
+        MicrocompactGapMinutes = MicrocompactGapMinutes,
+        MaxConsecutiveFailures = MaxConsecutiveFailures
+    };
+
+    /// <summary>
     /// Computes the effective context window: ContextWindow − SummaryReserve,
     /// floored so the auto-compact threshold cannot go negative.
     /// </summary>

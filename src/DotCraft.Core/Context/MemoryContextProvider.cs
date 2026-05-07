@@ -1,4 +1,3 @@
-using DotCraft.Agents;
 using DotCraft.Commands.Custom;
 using DotCraft.Tracing;
 using DotCraft.Memory;
@@ -18,8 +17,6 @@ public sealed class MemoryContextProvider(
     TraceCollector? traceCollector = null,
     Func<IReadOnlyList<string>>? toolNamesProvider = null,
     CustomCommandLoader? customCommandLoader = null,
-    AgentModeManager? modeManager = null,
-    PlanStore? planStore = null,
     bool sandboxEnabled = false,
     IReadOnlyList<string>? deferredMcpServerNames = null,
     string? subAgentProfilesSection = null,
@@ -35,8 +32,6 @@ public sealed class MemoryContextProvider(
         dotCraftPath,
         workspacePath,
         customCommandLoader,
-        modeManager,
-        planStore,
         sandboxEnabled,
         deferredMcpServerNames,
         subAgentProfilesSection,

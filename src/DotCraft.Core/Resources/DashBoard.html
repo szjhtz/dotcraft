@@ -420,6 +420,45 @@ body {
 .trace-label.compaction { color: var(--text-muted); }
 .trace-label.thinking { color: var(--thinking); }
 
+.prompt-cache-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.prompt-cache-diagnostic {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  font-size: 12px;
+}
+
+.prompt-cache-diagnostic.warning {
+  border-color: var(--warning);
+  background: var(--warning-dim);
+}
+
+.prompt-cache-diagnostic.info {
+  border-color: var(--info);
+  background: var(--info-dim);
+}
+
+.prompt-cache-diagnostic-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.prompt-cache-diagnostic-detail {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+
 .trace-content {
   font-size: 13px;
   color: var(--text-secondary);
@@ -1834,6 +1873,7 @@ function renderSessionMetadata(session, idPrefix) {
   const drift = session.promptDriftCount || 0;
   const promptHash = session.systemPromptHash ? session.systemPromptHash.slice(0, 12) : '-';
   const toolHash = session.toolSchemaHash ? session.toolSchemaHash.slice(0, 12) : '-';
+  const promptCacheBadge = renderPromptCacheSessionBadge(session);
 
   return `<div class="session-metadata" onclick="event.stopPropagation()">
     <div class="session-meta-line">
@@ -1846,9 +1886,24 @@ function renderSessionMetadata(session, idPrefix) {
       <span class="badge ${drift > 0 ? 'badge-warning' : 'badge-success'}">drift ${formatNumber(drift)}</span>
       <span class="badge badge-info">prompt ${escapeHtml(promptHash)}</span>
       <span class="badge badge-info">tools ${escapeHtml(toolHash)}</span>
+      ${promptCacheBadge}
     </div>
     <div class="session-tools-inline">${tools}</div>
   </div>`;
+}
+
+function renderPromptCacheSessionBadge(session) {
+  const kind = session.lastPromptCacheChangeKind;
+  if (!kind) return '';
+  const fields = (session.lastPromptCacheChangedFields || []).join('+') || 'change';
+  const when = session.lastPromptCacheChangeAt ? ` title="${escapeHtml(new Date(session.lastPromptCacheChangeAt).toLocaleString())}"` : '';
+  if (kind === 'toolExtension') {
+    return `<span class="badge badge-info"${when}>cache tools extended</span>`;
+  }
+  if (kind === 'drift') {
+    return `<span class="badge badge-warning"${when}>cache ${escapeHtml(fields)} drift</span>`;
+  }
+  return '';
 }
 
 // Dashboard
@@ -1996,8 +2051,9 @@ async function refreshTraces() {
 
 function renderTraceTimeline(events) {
   const container = document.getElementById('traceTimeline');
+  const decoratedEvents = decorateTraceEventsWithPromptCacheDiagnostics(events || []);
 
-  const filtered = currentFilter === 'all' ? events : events.filter(e => {
+  const filtered = currentFilter === 'all' ? decoratedEvents : decoratedEvents.filter(e => {
     if (currentFilter === 'Tool') return e.type === 'ToolCallStarted' || e.type === 'ToolCallCompleted' || e.type === 'ToolInjection';
     return e.type === currentFilter;
   });
@@ -2020,9 +2076,106 @@ function renderTraceTimeline(events) {
   }
 }
 
+function decorateTraceEventsWithPromptCacheDiagnostics(events) {
+  const output = [];
+  let pending = [];
+
+  for (const event of events) {
+    if (isPromptCacheDiagnosticEvent(event)) {
+      if (event.promptCacheEventKind !== 'baseline') {
+        pending.push(event);
+      }
+      if (event.type !== 'SessionMetadata') {
+        output.push(event);
+      }
+      continue;
+    }
+
+    if (pending.length > 0 && isPromptCacheDiagnosticAnchor(event)) {
+      output.push({ ...event, promptCacheDiagnostics: [...pending, ...(event.promptCacheDiagnostics || [])] });
+      pending = [];
+      continue;
+    }
+
+    output.push(event);
+  }
+
+  for (const event of pending) {
+    output.push({
+      ...event,
+      id: `${event.id || 'prompt-cache'}-standalone`,
+      type: 'PromptCacheDiagnostic',
+      promptCacheDiagnostics: [event]
+    });
+  }
+
+  return output;
+}
+
+function isPromptCacheDiagnosticEvent(event) {
+  if (!event || !event.promptCacheEventKind) return false;
+  return event.type === 'SessionMetadata' || event.type === 'ToolInjection';
+}
+
+function isPromptCacheDiagnosticAnchor(event) {
+  return event && (event.type === 'ToolCallStarted' || event.type === 'Thinking' || event.type === 'Response');
+}
+
+function renderPromptCacheDiagnostics(diagnostics) {
+  if (!diagnostics || diagnostics.length === 0) return '';
+  return `<div class="prompt-cache-diagnostics">${diagnostics.map(renderPromptCacheDiagnostic).join('')}</div>`;
+}
+
+function renderPromptCacheDiagnostic(event) {
+  const kind = event.promptCacheEventKind;
+  const changedFields = event.promptCacheChangedFields || [];
+  const level = kind === 'drift' ? 'warning' : 'info';
+  const badge = kind === 'drift'
+    ? '<span class="badge badge-warning">drift</span>'
+    : '<span class="badge badge-info">tool extension</span>';
+  let title;
+  if (kind === 'toolExtension') {
+    const tools = (event.changedToolNames || []).filter(Boolean);
+    title = `Tool schema extended${tools.length > 0 ? ': ' + tools.join(', ') : ''}`;
+  } else if (changedFields.includes('prompt') && changedFields.includes('tools')) {
+    title = 'Prompt cache drift: system prompt and tool schema changed';
+  } else if (changedFields.includes('tools')) {
+    title = 'Prompt cache drift: tool schema changed';
+  } else {
+    title = 'Prompt cache drift: system prompt changed';
+  }
+
+  const detail = renderPromptCacheDiagnosticDetail(event);
+  return `<div class="prompt-cache-diagnostic ${level}">
+    <div class="prompt-cache-diagnostic-title">${badge}<span>${escapeHtml(title)}</span></div>
+    ${detail}
+  </div>`;
+}
+
+function renderPromptCacheDiagnosticDetail(event) {
+  const parts = [];
+  if (event.previousSystemPromptHash || event.currentSystemPromptHash) {
+    parts.push(`prompt ${shortHash(event.previousSystemPromptHash)} -> ${shortHash(event.currentSystemPromptHash || event.systemPromptHash)}`);
+  }
+  if (event.previousToolSchemaHash || event.currentToolSchemaHash) {
+    parts.push(`tools ${shortHash(event.previousToolSchemaHash)} -> ${shortHash(event.currentToolSchemaHash || event.toolSchemaHash)}`);
+  }
+  if (event.promptCacheEventKind === 'toolExtension' && event.changedToolNames && event.changedToolNames.length > 0) {
+    parts.push(`added ${event.changedToolNames.join(', ')}`);
+  }
+  return parts.length > 0
+    ? `<div class="prompt-cache-diagnostic-detail">${escapeHtml(parts.join(' · '))}</div>`
+    : '';
+}
+
+function shortHash(value) {
+  return value ? String(value).slice(0, 12) : '-';
+}
+
 function renderTraceEvent(e) {
   const time = formatTime(e.timestamp);
   const evtId = 'evt-' + e.id;
+  const promptCacheDiagnostics = renderPromptCacheDiagnostics(e.promptCacheDiagnostics || []);
   const meta = [];
   if (e.callId) meta.push(`<span class="badge badge-warning">call: ${escapeHtml(e.callId)}</span>`);
   if (e.responseId) meta.push(`<span class="badge badge-info">response: ${escapeHtml(e.responseId)}</span>`);
@@ -2033,6 +2186,14 @@ function renderTraceEvent(e) {
     : '';
 
   switch (e.type) {
+    case 'PromptCacheDiagnostic':
+      return `<div class="trace-event type-ToolInjection">
+        <div class="trace-time">${time}</div>
+        <div class="trace-icon">⚠️</div>
+        <div class="trace-body">
+          ${promptCacheDiagnostics}
+        </div></div>`;
+
     case 'Request':
       return `<div class="trace-event type-Request">
         <div class="trace-time">${time}</div>
@@ -2048,6 +2209,7 @@ function renderTraceEvent(e) {
         <div class="trace-time">${time}</div>
         <div class="trace-icon">✨</div>
         <div class="trace-body">
+          ${promptCacheDiagnostics}
           <div class="trace-label response">Response${e.sessionKey && !selectedSession ? ' <span class="badge badge-success">' + escapeHtml(e.sessionKey) + '</span>' : ''}</div>
           ${renderExpandableTraceText(evtId, e.content, 500)}
           ${metaLine}
@@ -2059,6 +2221,7 @@ function renderTraceEvent(e) {
         <div class="trace-time">${time}</div>
         <div class="trace-icon">${e.toolIcon || '🔧'}</div>
         <div class="trace-body">
+          ${promptCacheDiagnostics}
           <div class="trace-label tool-start">${escapeHtml(e.toolName || 'Tool')} <span class="badge badge-warning">started</span></div>
           ${metaLine}
           ${e.toolArguments ? renderExpandableTraceText(`${evtId}-args`, e.toolArguments, 800, { mono: true }) : ''}
@@ -2123,6 +2286,7 @@ function renderTraceEvent(e) {
         <div class="trace-time">${time}</div>
         <div class="trace-icon">💭</div>
         <div class="trace-body">
+          ${promptCacheDiagnostics}
           <div class="trace-label thinking">Thinking${e.sessionKey && !selectedSession ? ' <span class="badge badge-info">' + escapeHtml(e.sessionKey) + '</span>' : ''}</div>
           ${renderExpandableTraceText(evtId, e.content, 300)}
           ${metaLine}
@@ -2430,21 +2594,10 @@ function connectSSE() {
       allTraceEvents.push(evt);
 
       if (currentPanel === 'traces') {
-        const container = document.getElementById('traceTimeline');
-        const emptyState = container.querySelector('.empty-state');
-        if (emptyState) emptyState.remove();
-
-        const shouldShow = currentFilter === 'all' ||
-          (currentFilter === 'Tool' && (evt.type === 'ToolCallStarted' || evt.type === 'ToolCallCompleted' || evt.type === 'ToolInjection')) ||
-          evt.type === currentFilter;
-
-        if (shouldShow) {
-          container.insertAdjacentHTML('beforeend', renderTraceEvent(evt));
-          if (autoScroll) {
-            const body = document.getElementById('traceBody');
-            body.scrollTop = body.scrollHeight;
-          }
-        }
+        const visibleEvents = selectedSession
+          ? allTraceEvents.filter(e => e.sessionKey === selectedSession)
+          : allTraceEvents;
+        renderTraceTimeline(visibleEvents);
       }
 
       if (currentPanel === 'dashboard') {

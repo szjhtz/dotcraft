@@ -202,7 +202,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   const streamingFileDiff = FILE_WRITE_TOOLS.has(toolName) ? streamingItemDiffs.get(item.id) : undefined
   const skillManageDiff = isSkillManageTool ? buildSkillManageDiff(args, item.result, turnId) : null
   const canExpandCompleted = !isWebFetchTool && !isSkillManageTool && !isSkillViewTool && !isTodoTool
-  const subAgentRunningLabel = formatSubAgentRunningLabel(toolName, args, locale, subAgentLookup)
+  const hasFinalArgs = args != null && Object.keys(args).length > 0
+  const subAgentRunningLabel = hasFinalArgs
+    ? formatSubAgentRunningLabel(toolName, args, locale, subAgentLookup)
+    : null
   const runningBaseLabel = subAgentRunningLabel
     ?? formatRunningToolLabel(
       toolName,

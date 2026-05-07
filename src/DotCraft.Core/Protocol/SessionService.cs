@@ -66,6 +66,7 @@ public sealed class SessionService(
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _threadAgentLocks = new();
     private readonly ConcurrentDictionary<string, byte> _materializedThreads = new();
     private readonly ConcurrentDictionary<string, int> _turnsSinceConsolidation = new();
+    private readonly ConcurrentDictionary<string, PromptRequestSnapshot> _lastPromptRequestSnapshots = new();
     private readonly ConcurrentDictionary<string, byte> _threadsPendingPermanentDeletion = new();
     private readonly ConcurrentDictionary<string, IReadOnlySet<string>> _threadPluginFunctionToolNames = new();
     private readonly ConcurrentDictionary<string, IReadOnlySet<string>> _threadDynamicToolNames = new();
@@ -111,12 +112,17 @@ public sealed class SessionService(
             return null;
 
         var tokens = persistence.LoadContextUsageTokens(threadId);
-        return tokens is null ? null : CreateContextUsageSnapshot(tokens.Value);
+        return tokens is null ? null : CreateContextUsageSnapshot(threadId, tokens.Value);
     }
 
-    private ContextUsageSnapshot CreateContextUsageSnapshot(long tokens)
+    internal PromptRequestSnapshot? TryGetLastPromptRequestSnapshot(string threadId) =>
+        _lastPromptRequestSnapshots.TryGetValue(threadId, out var snapshot)
+            ? snapshot
+            : null;
+
+    private ContextUsageSnapshot CreateContextUsageSnapshot(string threadId, long tokens)
     {
-        var pipeline = agentFactory.CompactionPipeline;
+        var pipeline = GetCompactionPipelineForThread(threadId);
         var threshold = pipeline.EvaluateThreshold(tokens);
 
         return new ContextUsageSnapshot
@@ -137,7 +143,7 @@ public sealed class SessionService(
     {
         var normalizedTokens = Math.Max(0, tokens);
         await persistence.SaveContextUsageTokensAsync(threadId, normalizedTokens, ct);
-        return CreateContextUsageSnapshot(normalizedTokens);
+        return CreateContextUsageSnapshot(threadId, normalizedTokens);
     }
 
     // =========================================================================
@@ -1065,6 +1071,7 @@ public sealed class SessionService(
 
             async Task<IReadOnlyList<ChatMessage>?> TryCompactBeforeSamplingAsync(
                 IReadOnlyList<ChatMessage> modelVisibleHistory,
+                PromptRequestSnapshot? requestSnapshot,
                 CancellationToken compactionCt)
             {
                 if (session is null || tokenTracker is null || modelVisibleHistory.Count == 0)
@@ -1075,7 +1082,7 @@ public sealed class SessionService(
                 var tokenHint = Math.Max(
                     estimatedTokens,
                     Math.Max(tokenTracker.LastInputTokens, persistedTokens));
-                var pipeline = agentFactory.CompactionPipeline;
+                var pipeline = GetCompactionPipelineForThread(thread);
                 var threshold = pipeline.EvaluateThreshold(tokenHint);
                 if (!threshold.AboveAuto)
                     return null;
@@ -1093,7 +1100,8 @@ public sealed class SessionService(
                         threadId,
                         tokenHint,
                         thread.LastActiveAt,
-                        compactionCt);
+                        compactionCt,
+                        requestSnapshot);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1207,7 +1215,18 @@ public sealed class SessionService(
                 }
 
                 // Step 5c: Append runtime context to the multimodal content list
-                var userMessage = new ChatMessage(ChatRole.User, content.AppendRuntimeContext(turn.Initiator));
+                var turnMode = thread.Configuration?.Mode?.Equals("plan", StringComparison.OrdinalIgnoreCase) == true
+                    ? AgentMode.Plan
+                    : AgentMode.Agent;
+                var runtimeModeManager = GetOrCreateModeManager(threadId, turnMode);
+                var hasActivePlan = agentFactory.PlanStore?.StructuredPlanExists(threadId) == true;
+                var userMessage = new ChatMessage(
+                    ChatRole.User,
+                    content.AppendRuntimeContext(
+                        turn.Initiator,
+                        runtimeModeManager,
+                        thread.WorkspacePath,
+                        hasActivePlan));
 
                 // Step 5d: Run PrePrompt hooks
                 if (hookRunner != null)
@@ -1344,7 +1363,19 @@ public sealed class SessionService(
                     using var preSamplingCompactionScope = PreSamplingCompactionRuntimeScope.Set(
                         new PreSamplingCompactionRuntimeContext
                         {
-                            TryCompactAsync = TryCompactBeforeSamplingAsync
+                            Mode = thread.Configuration?.Mode ?? "agent",
+                            ThreadId = threadId,
+                            TurnId = turn.Id,
+                            EstimatedInputTokens = tokenTracker.LastInputTokens > 0
+                                ? (int)Math.Min(int.MaxValue, tokenTracker.LastInputTokens)
+                                : null,
+                            CaptureSnapshotAsync = (snapshot, _) =>
+                            {
+                                _lastPromptRequestSnapshots[threadId] = snapshot;
+                                return Task.CompletedTask;
+                            },
+                            TryCompactWithSnapshotAsync = TryCompactBeforeSamplingAsync,
+                            TryCompactAsync = (history, compactCt) => TryCompactBeforeSamplingAsync(history, null, compactCt)
                         });
                     using var guidanceScope = TurnGuidanceRuntimeScope.Set(new TurnGuidanceRuntimeContext
                     {
@@ -1729,7 +1760,7 @@ public sealed class SessionService(
                 // model call is needed, keep the snapshot visible and compact
                 // before the next sampling request.
                 {
-                    var compactionPipeline = agentFactory.CompactionPipeline;
+                    var compactionPipeline = GetCompactionPipelineForThread(thread);
                     var threshold = compactionPipeline.EvaluateThreshold(tokenTracker.LastInputTokens);
                     if (threshold.AboveError)
                     {
@@ -1770,7 +1801,14 @@ public sealed class SessionService(
                     logger?.LogError(ex, "Failed to persist thread state after turn completion for thread {ThreadId}", threadId);
                 }
 
-                TryScheduleMemoryConsolidation(threadId, thread, turn, session, eventChannel, NextItemSeq);
+                TryScheduleMemoryConsolidation(
+                    threadId,
+                    thread,
+                    turn,
+                    session,
+                    TryGetLastPromptRequestSnapshot(threadId),
+                    eventChannel,
+                    NextItemSeq);
                 ThreadRuntimeSignalForBroadcast?.Invoke(
                     threadId,
                     EndsWithSuccessfulCreatePlanInPlanMode(thread, turn)
@@ -1817,7 +1855,7 @@ public sealed class SessionService(
                     try
                     {
                         eventChannel.EmitSystemEvent("compacting");
-                        var status = await agentFactory.CompactionPipeline.TryReactiveCompactAsync(
+                        var status = await GetCompactionPipelineForThread(thread).TryReactiveCompactAsync(
                             session,
                             threadId,
                             thread.LastActiveAt,
@@ -2165,6 +2203,18 @@ public sealed class SessionService(
     // =========================================================================
     // Private helpers
     // =========================================================================
+
+    private CompactionPipeline GetCompactionPipelineForThread(string threadId)
+    {
+        _threads.TryGetValue(threadId, out var thread);
+        return GetCompactionPipelineForThread(threadId, thread);
+    }
+
+    private CompactionPipeline GetCompactionPipelineForThread(SessionThread thread) =>
+        GetCompactionPipelineForThread(thread.Id, thread);
+
+    private CompactionPipeline GetCompactionPipelineForThread(string threadId, SessionThread? thread) =>
+        agentFactory.GetCompactionPipeline(threadId, thread?.Configuration?.Model);
 
     private async Task<SessionThread> GetOrLoadThreadAsync(string threadId, CancellationToken ct)
     {
@@ -2632,6 +2682,7 @@ public sealed class SessionService(
         SessionThread thread,
         SessionTurn turn,
         AgentSession session,
+        PromptRequestSnapshot? requestSnapshot,
         SessionEventChannel eventChannel,
         Func<int> nextItemSequence)
     {
@@ -2663,7 +2714,9 @@ public sealed class SessionService(
         {
             try
             {
-                var result = await consolidator.ConsolidateAsync(history);
+                var result = consolidator is IMemoryForkConsolidator forkConsolidator
+                    ? await forkConsolidator.ConsolidateAsync(history, requestSnapshot)
+                    : await consolidator.ConsolidateAsync(history);
                 switch (result.Outcome)
                 {
                     case MemoryConsolidationOutcome.Succeeded:

@@ -1,3 +1,5 @@
+import { stripSystemReminderBlocks } from './systemReminderText'
+
 interface ThreadFallbackNameArgs {
   visibleText: string
   imagesCount: number
@@ -17,7 +19,9 @@ export function getFallbackThreadName({
   fileFallbackThreadName,
   attachmentFallbackThreadName
 }: ThreadFallbackNameArgs): string {
-  const trimmed = visibleText.trim()
+  const trimmed = stripSystemReminderBlocks(visibleText)
+    .replace(/^\[\[Attached File: .+?\]\]\s*/gm, '')
+    .trim()
   if (trimmed.length > 0) {
     return trimmed.length > 50 ? `${trimmed.slice(0, 50)}...` : trimmed
   }

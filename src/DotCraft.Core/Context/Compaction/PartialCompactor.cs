@@ -22,11 +22,16 @@ public sealed class PartialCompactor
 {
     private readonly IChatClient _chatClient;
     private readonly CompactionConfig _config;
+    private readonly MaintenanceForkRunner? _maintenanceForkRunner;
 
-    public PartialCompactor(IChatClient chatClient, CompactionConfig config)
+    public PartialCompactor(
+        IChatClient chatClient,
+        CompactionConfig config,
+        MaintenanceForkRunner? maintenanceForkRunner = null)
     {
         _chatClient = chatClient;
         _config = config;
+        _maintenanceForkRunner = maintenanceForkRunner;
     }
 
     /// <summary>
@@ -85,6 +90,19 @@ public sealed class PartialCompactor
         IReadOnlyList<ChatMessage> messages,
         CancellationToken cancellationToken = default)
     {
+        return await CompactAsync(messages, snapshot: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs partial summary using a captured request snapshot when available.
+    /// The snapshot path preserves the main request prefix and appends only a
+    /// maintenance task at the tail.
+    /// </summary>
+    public async Task<PartialCompactResult?> CompactAsync(
+        IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        CancellationToken cancellationToken = default)
+    {
         if (messages.Count == 0)
             return null;
 
@@ -105,27 +123,9 @@ public sealed class PartialCompactor
         var prefixTokens = MessageTokenEstimator.Estimate(prefix);
         var tailTokens = MessageTokenEstimator.Estimate(tail);
 
-        var summaryPrompt = CompactionPrompts.GetPartialCompactPrompt();
-        var summaryMessages = new List<ChatMessage>(paired.Count + 1)
-        {
-            new(ChatRole.System, summaryPrompt)
-        };
-        summaryMessages.AddRange(paired);
-
-        ChatResponse? response;
-        try
-        {
-            response = await _chatClient.GetResponseAsync(
-                summaryMessages,
-                new ChatOptions { Tools = null },
-                cancellationToken);
-        }
-        catch
-        {
-            return null;
-        }
-
-        var rawSummary = response?.Text;
+        var rawSummary = snapshot is not null && _maintenanceForkRunner is not null
+            ? await RunSnapshotForkAsync(snapshot, splitIndex, tail, cancellationToken)
+            : await RunLegacySummaryAsync(paired, cancellationToken);
         if (string.IsNullOrWhiteSpace(rawSummary))
             return null;
 
@@ -141,5 +141,67 @@ public sealed class PartialCompactor
             RawSummary: rawSummary,
             PrefixEstimatedTokens: prefixTokens,
             TailEstimatedTokens: tailTokens);
+    }
+
+    private async Task<string?> RunSnapshotForkAsync(
+        PromptRequestSnapshot snapshot,
+        int splitIndex,
+        IReadOnlyList<ChatMessage> tail,
+        CancellationToken cancellationToken)
+    {
+        var instructions = BuildContextCompactionTaskInstructions(splitIndex, tail);
+        var result = await _maintenanceForkRunner!.RunAsync(
+            snapshot,
+            new MaintenanceForkTask(
+                MaintenanceForkTaskKind.ContextCompaction,
+                instructions),
+            cancellationToken);
+
+        return result.FallbackReason is null ? result.Text : null;
+    }
+
+    private async Task<string?> RunLegacySummaryAsync(
+        IReadOnlyList<ChatMessage> paired,
+        CancellationToken cancellationToken)
+    {
+        var summaryPrompt = CompactionPrompts.GetPartialCompactPrompt();
+        var summaryMessages = new List<ChatMessage>(paired.Count + 1)
+        {
+            new(ChatRole.System, summaryPrompt)
+        };
+        summaryMessages.AddRange(paired);
+
+        try
+        {
+            var response = await _chatClient.GetResponseAsync(
+                summaryMessages,
+                new ChatOptions { Tools = null },
+                cancellationToken);
+            return response?.Text;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string BuildContextCompactionTaskInstructions(
+        int splitIndex,
+        IReadOnlyList<ChatMessage> tail)
+    {
+        var prompt = CompactionPrompts.GetPartialCompactPrompt();
+        var firstTail = tail.FirstOrDefault();
+        var tailHint = firstTail is null
+            ? "No recent tail messages are preserved."
+            : $"The preserved recent tail starts at message index {splitIndex} with role '{firstTail.Role}'. Do not summarize the preserved tail as completed work; it will remain verbatim after the summary.";
+
+        return $"""
+{prompt}
+
+Compaction boundary:
+- Summarize the conversation before message index {splitIndex}.
+- {tailHint}
+- Return the same <analysis> then <summary> structure requested above.
+""";
     }
 }
