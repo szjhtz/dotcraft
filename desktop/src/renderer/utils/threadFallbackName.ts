@@ -19,7 +19,7 @@ export function getFallbackThreadName({
   fileFallbackThreadName,
   attachmentFallbackThreadName
 }: ThreadFallbackNameArgs): string {
-  const trimmed = stripSystemReminderBlocks(visibleText)
+  const trimmed = stripLeadingFileRefs(stripSystemReminderBlocks(visibleText), filesCount)
     .replace(/^\[\[Attached File: .+?\]\]\s*/gm, '')
     .trim()
   if (trimmed.length > 0) {
@@ -40,4 +40,27 @@ export function getFallbackThreadName({
   }
 
   return fallbackThreadName
+}
+
+function stripLeadingFileRefs(text: string, filesCount: number): string {
+  if (filesCount <= 0) return text
+
+  const lines = text.split(/\r?\n/)
+  let cursor = 0
+  let stripped = 0
+
+  while (cursor < lines.length && stripped < filesCount) {
+    const line = lines[cursor]?.trim() ?? ''
+    if (!line.startsWith('@') || line.length === 1) break
+    cursor += 1
+    stripped += 1
+  }
+
+  if (stripped === 0) return text
+
+  while (cursor < lines.length && (lines[cursor]?.trim() ?? '') === '') {
+    cursor += 1
+  }
+
+  return lines.slice(cursor).join('\n')
 }

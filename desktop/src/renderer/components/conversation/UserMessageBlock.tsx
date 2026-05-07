@@ -78,10 +78,7 @@ export function UserMessageBlock({
     : displayText.length > 0
       ? parseUserMessageSegments(displayText)
       : []
-  const attachedFiles = segments.filter(
-    (seg): seg is Extract<(typeof segments)[number], { type: 'attachedFile' }> => seg.type === 'attachedFile'
-  )
-  const textSegments = segments.filter((seg) => seg.type !== 'attachedFile')
+  const textSegments = segments
   const sentTime = formatMessageTime(createdAt)
   const actionsVisible = hovered || focusedWithin
 
@@ -328,21 +325,7 @@ export function UserMessageBlock({
             {failedImageCount === 1 ? 'Image unavailable' : `${failedImageCount} images unavailable`}
           </span>
         )}
-        {attachedFiles.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'row',
-              flexWrap: 'wrap',
-              gap: '8px'
-            }}
-          >
-            {attachedFiles.map((file, idx) => (
-              <AttachedFileChip key={`${file.path}-${idx}`} path={file.path} fileName={file.fileName} />
-            ))}
-          </div>
-        )}
-        {displayText.length > 0 && (
+        {textSegments.length > 0 && (
           <span>
             {textSegments.map((seg, idx) =>
               seg.type === 'text' ? (
@@ -544,9 +527,10 @@ function FileRefChip({
   relativePath: string
   workspacePath: string
 }): JSX.Element {
-  const fileName = relativePath.split('/').pop() ?? relativePath
+  const fileName = relativePath.split(/[/\\]/).pop() ?? relativePath
+  const isAbsolutePath = /^[a-zA-Z]:[\\/]/.test(relativePath) || relativePath.startsWith('/') || relativePath.startsWith('\\\\')
   const title =
-    workspacePath.length > 0
+    workspacePath.length > 0 && !isAbsolutePath
       ? `${workspacePath.replace(/[/\\]+$/, '')}/${relativePath.replace(/^[/\\]+/, '')}`
       : relativePath
 
@@ -656,31 +640,6 @@ function AutomationTriggerPill({
     <span title={title} style={commonStyle}>
       <Bot size={11} strokeWidth={2.1} aria-hidden />
       <span>{badgeText}</span>
-    </span>
-  )
-}
-
-function AttachedFileChip({ path, fileName }: { path: string; fileName: string }): JSX.Element {
-  return (
-    <span
-      title={path}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '4px',
-          padding: '4px 8px',
-          borderRadius: '999px',
-          border: '1px solid color-mix(in srgb, var(--border-active) 40%, transparent)',
-          background: 'color-mix(in srgb, var(--bg-tertiary) 84%, var(--bg-primary))',
-          color: 'var(--text-primary)',
-          fontSize: '12px',
-          whiteSpace: 'nowrap',
-          userSelect: 'none',
-          lineHeight: 1.25
-        }}
-      >
-      <FileText size={12} strokeWidth={2.1} aria-hidden />
-      <span>{fileName}</span>
     </span>
   )
 }

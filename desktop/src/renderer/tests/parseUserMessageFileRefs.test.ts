@@ -63,17 +63,10 @@ describe('parseUserMessageFileRefs', () => {
     ])
   })
 
-  it('parses leading attached file markers before normal body segments', () => {
+  it('treats attached file marker text as normal text', () => {
     expect(parseUserMessageFileRefs('[[Attached File: C:\\logs\\a.txt]]\n\nCheck @src/foo.ts')).toEqual([
-      { type: 'attachedFile', path: 'C:\\logs\\a.txt', fileName: 'a.txt' },
-      { type: 'text', value: 'Check ' },
+      { type: 'text', value: '[[Attached File: C:\\logs\\a.txt]]\n\nCheck ' },
       { type: 'fileRef', relativePath: 'src/foo.ts' }
-    ])
-  })
-
-  it('does not parse attached file markers when they are not at the beginning', () => {
-    expect(parseUserMessageFileRefs('Keep [[Attached File: C:\\logs\\a.txt]] literal')).toEqual([
-      { type: 'text', value: 'Keep [[Attached File: C:\\logs\\a.txt]] literal' }
     ])
   })
 })

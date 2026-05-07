@@ -290,6 +290,7 @@ public sealed record SessionWireInputPart
 
     /// <summary>
     /// Canonical file-reference path. Present when <see cref="Type"/> is "fileRef".
+    /// May be a workspace-relative path or a local absolute path; outside-workspace reads remain governed by file-tool approval policy.
     /// Also used for <see cref="Type"/> "localImage".
     /// </summary>
     public string? Path { get; init; }
@@ -320,9 +321,6 @@ public sealed record SessionWireInputPart
 /// </summary>
 public static class SessionWireMapper
 {
-    private const string AttachedFileMarkerPrefix = "[[Attached File: ";
-    private const string AttachedFileMarkerSuffix = "]]";
-
     /// <summary>
     /// Maps a thread into the wire DTO without turn history.
     /// Equivalent to <c>thread.ToWire(includeTurns: false)</c>.
@@ -530,7 +528,7 @@ public static class SessionWireMapper
     public static AIContent ToAIContent(this SessionWireInputPart part) =>
         part.Type switch
         {
-            "text" => new TextContent(ExpandAttachedFileMarkersForModel(part.Text ?? string.Empty)),
+            "text" => new TextContent(part.Text ?? string.Empty),
             "commandRef" => new TextContent(BuildCommandRefText(part)),
             "skillRef" => new TextContent(BuildSkillRefText(part)),
             "fileRef" => new TextContent(BuildFileRefText(part)),
@@ -563,53 +561,6 @@ public static class SessionWireMapper
         }
 
         return sb.ToString();
-    }
-
-    private static string ExpandAttachedFileMarkersForModel(string text)
-    {
-        var (files, bodyText) = ParseLeadingAttachedFileMarkers(text);
-        if (files.Count == 0)
-            return text;
-
-        var pathBlock = string.Join('\n', files);
-        return string.IsNullOrEmpty(bodyText)
-            ? pathBlock
-            : $"{pathBlock}\n\n{bodyText}";
-    }
-
-    private static (List<string> Files, string BodyText) ParseLeadingAttachedFileMarkers(string text)
-    {
-        var normalized = text.Replace("\r\n", "\n");
-        var lines = normalized.Split('\n');
-        var files = new List<string>();
-        var index = 0;
-
-        while (index < lines.Length)
-        {
-            var line = lines[index] ?? string.Empty;
-            if (!line.StartsWith(AttachedFileMarkerPrefix, StringComparison.Ordinal)
-                || !line.EndsWith(AttachedFileMarkerSuffix, StringComparison.Ordinal))
-            {
-                break;
-            }
-
-            var path = line.Substring(
-                AttachedFileMarkerPrefix.Length,
-                line.Length - AttachedFileMarkerPrefix.Length - AttachedFileMarkerSuffix.Length).Trim();
-            if (string.IsNullOrWhiteSpace(path))
-                break;
-
-            files.Add(path);
-            index++;
-        }
-
-        if (files.Count == 0)
-            return (files, text);
-
-        if (index < lines.Length && string.IsNullOrEmpty(lines[index]))
-            index++;
-
-        return (files, string.Join('\n', lines[index..]));
     }
 
     /// <summary>

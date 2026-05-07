@@ -13,6 +13,7 @@ const fileReadFile = vi.fn()
 const appServerSendRequest = vi.fn()
 const saveImageToTemp = vi.fn()
 const pickFiles = vi.fn()
+const getPathForFile = vi.fn((file: File) => file.name === 'notes.txt' ? 'C:\\temp\\notes.txt' : '')
 const settingsGet = vi.fn()
 
 function createDeferred<T>() {
@@ -151,6 +152,7 @@ describe('ConversationWelcome composer', () => {
 
     fileReadFile.mockResolvedValue('{}')
     settingsGet.mockResolvedValue({ locale: 'en' })
+    getPathForFile.mockImplementation((file: File) => file.name === 'notes.txt' ? 'C:\\temp\\notes.txt' : '')
     appServerSendRequest.mockImplementation(async (method: string) => {
       if (method === 'command/list') {
         return {
@@ -215,7 +217,8 @@ describe('ConversationWelcome composer', () => {
         },
         workspace: {
           saveImageToTemp,
-          pickFiles
+          pickFiles,
+          getPathForFile
         }
       }
     })

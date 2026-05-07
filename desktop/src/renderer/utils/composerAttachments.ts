@@ -2,13 +2,11 @@ import type { ComposerFileAttachment } from '../types/conversation'
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
 
-interface FileWithOptionalPath extends File {
-  path?: string
-}
-
 interface DataTransferItemWithEntry extends DataTransferItem {
   webkitGetAsEntry?: () => { isDirectory?: boolean } | null
 }
+
+export type DroppedFilePathResolver = (file: File) => string
 
 export interface ClassifiedDroppedComposerFiles {
   imageFiles: File[]
@@ -64,20 +62,16 @@ export function mergeComposerFileAttachments(
   return merged
 }
 
-function getDroppedFilePath(file: File): string {
-  const rawPath = (file as FileWithOptionalPath).path
-  return typeof rawPath === 'string' ? rawPath.trim() : ''
-}
-
 function classifyDroppedFile(
   file: File,
-  seenFilePaths: Set<string>
+  seenFilePaths: Set<string>,
+  resolvePath: DroppedFilePathResolver
 ): { kind: 'image'; file: File } | { kind: 'file'; file: ComposerFileAttachment } | { kind: 'skip' } {
   if (isImageFile(file)) {
     return { kind: 'image', file }
   }
 
-  const normalized = normalizeComposerFileAttachment(getDroppedFilePath(file), file.name)
+  const normalized = normalizeComposerFileAttachment(resolvePath(file), file.name)
   if (!normalized) return { kind: 'skip' }
   if (seenFilePaths.has(normalized.path)) return { kind: 'skip' }
 
@@ -85,7 +79,10 @@ function classifyDroppedFile(
   return { kind: 'file', file: normalized }
 }
 
-export function classifyDroppedComposerFiles(dataTransfer: Pick<DataTransfer, 'files' | 'items'>): ClassifiedDroppedComposerFiles {
+export function classifyDroppedComposerFiles(
+  dataTransfer: Pick<DataTransfer, 'files' | 'items'>,
+  resolvePath: DroppedFilePathResolver = () => ''
+): ClassifiedDroppedComposerFiles {
   const imageFiles: File[] = []
   const fileAttachments: ComposerFileAttachment[] = []
   let skippedCount = 0
@@ -107,7 +104,7 @@ export function classifyDroppedComposerFiles(dataTransfer: Pick<DataTransfer, 'f
         continue
       }
 
-      const classified = classifyDroppedFile(file, seenFilePaths)
+      const classified = classifyDroppedFile(file, seenFilePaths, resolvePath)
       if (classified.kind === 'image') {
         imageFiles.push(classified.file)
       } else if (classified.kind === 'file') {
@@ -121,7 +118,7 @@ export function classifyDroppedComposerFiles(dataTransfer: Pick<DataTransfer, 'f
   }
 
   for (const file of Array.from(dataTransfer.files ?? [])) {
-    const classified = classifyDroppedFile(file, seenFilePaths)
+    const classified = classifyDroppedFile(file, seenFilePaths, resolvePath)
     if (classified.kind === 'image') {
       imageFiles.push(classified.file)
     } else if (classified.kind === 'file') {

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DotCraft.Commands.Core;
 using DotCraft.Protocol;
+using DotCraft.Protocol.AppServer;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Tests.Sessions.Protocol;
@@ -205,6 +207,43 @@ public class SerializationTests
         ]);
 
         Assert.Equal("Check @src/foo.ts then /code-review --fast and $memory", text);
+    }
+
+    [Fact]
+    public void BuildDisplayText_PreservesAbsoluteFileRefPaths()
+    {
+        var text = SessionWireMapper.BuildDisplayText(
+        [
+            new SessionWireInputPart { Type = "fileRef", Path = "C:\\temp\\notes.txt", DisplayPath = "C:\\temp\\notes.txt" },
+            new SessionWireInputPart { Type = "text", Text = "\n" },
+            new SessionWireInputPart { Type = "fileRef", Path = "/tmp/brief.md", DisplayPath = "/tmp/brief.md" }
+        ]);
+
+        Assert.Equal("@C:\\temp\\notes.txt\n@/tmp/brief.md", text);
+    }
+
+    [Fact]
+    public void InputMaterialization_AcceptsAbsoluteFileRefPaths()
+    {
+        var service = new InputMaterializationService(new CommandRegistry(), skillsLoader: null);
+        var result = service.Materialize(
+        [
+            new SessionWireInputPart { Type = "fileRef", Path = "C:\\temp\\notes.txt", DisplayPath = "C:\\temp\\notes.txt" },
+            new SessionWireInputPart { Type = "text", Text = "\n\nSummarize it" }
+        ]);
+
+        Assert.Collection(result.NativeInputParts,
+            part =>
+            {
+                Assert.Equal("fileRef", part.Type);
+                Assert.Equal("C:\\temp\\notes.txt", part.Path);
+                Assert.Equal("C:\\temp\\notes.txt", part.DisplayPath);
+            },
+            part => Assert.Equal("\n\nSummarize it", part.Text));
+        Assert.Collection(result.MaterializedInputParts,
+            part => Assert.Equal("@C:\\temp\\notes.txt", part.Text),
+            part => Assert.Equal("\n\nSummarize it", part.Text));
+        Assert.Equal("@C:\\temp\\notes.txt\n\nSummarize it", result.DisplayText);
     }
 
     [Fact]

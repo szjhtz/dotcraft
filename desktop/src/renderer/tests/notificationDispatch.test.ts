@@ -1296,7 +1296,8 @@ describe('pending message auto-send', () => {
           expect.objectContaining({
             threadId: 'thread-1',
             input: [
-              { type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]\n\n' },
+              { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' },
+              { type: 'text', text: '\n\n' },
               { type: 'commandRef', name: 'code-review', rawText: '/code-review' }
             ]
           })
@@ -1309,7 +1310,8 @@ describe('pending message auto-send', () => {
     useConversationStore.getState().setPendingMessage({
       text: '/code-review',
       inputParts: [
-        { type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]\n\n' },
+        { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' },
+        { type: 'text', text: '\n\n' },
         { type: 'commandRef', name: 'code-review', rawText: '/code-review' }
       ],
       files: [{ path: 'C:\\temp\\notes.txt', fileName: 'notes.txt' }]
@@ -1332,7 +1334,7 @@ describe('pending message auto-send', () => {
       expect(params).toEqual(
         expect.objectContaining({
           threadId: 'thread-1',
-          input: [{ type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]' }]
+          input: [{ type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' }]
         })
       )
       return {}

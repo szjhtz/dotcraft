@@ -741,7 +741,10 @@ export function ConversationWelcome({
       e.preventDefault()
       e.stopPropagation()
       setDragOver(false)
-      const { imageFiles, fileAttachments, skippedCount } = classifyDroppedComposerFiles(e.dataTransfer)
+      const { imageFiles, fileAttachments, skippedCount } = classifyDroppedComposerFiles(
+        e.dataTransfer,
+        window.api.workspace.getPathForFile
+      )
       attachImages(imageFiles)
       if (fileAttachments.length > 0) {
         setFiles((prev) => mergeComposerFileAttachments(prev, fileAttachments))

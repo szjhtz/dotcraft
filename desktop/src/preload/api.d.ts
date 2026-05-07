@@ -414,7 +414,10 @@ declare global {
       }
       workspace: {
         pickFolder(): Promise<string | null>
+        /** Opens the native file picker and returns selected local file paths, including files outside the workspace. */
         pickFiles(): Promise<Array<{ path: string; fileName: string }>>
+        /** Returns the absolute local path for a dragged or picked Electron-backed File. */
+        getPathForFile(file: File): string
         switch(newPath: string): Promise<void>
         clearSelection(): Promise<void>
         getRecent(): Promise<Array<{ path: string; name: string; lastOpenedAt: string }>>

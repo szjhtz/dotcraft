@@ -1,6 +1,5 @@
 import type { ComposerDraftSegment } from '../types/composerDraft'
 import type { ComposerFileAttachment, ImageAttachment, InputPart } from '../types/conversation'
-import { serializeAttachedFileMarkers } from './attachedFileMarkers'
 import { stringifyComposerDraftSegments } from '../components/conversation/richInputSerialization'
 
 interface BuildComposerInputPartsArgs {
@@ -63,14 +62,24 @@ export function buildComposerInputParts({
 }: BuildComposerInputPartsArgs): BuildComposerInputPartsResult {
   const normalizedSegments = normalizeSegments(text, segments)
   const bodyText = stringifyComposerDraftSegments(normalizedSegments).trim()
-  const markerText = serializeAttachedFileMarkers(files, '')
   const inputParts: InputPart[] = []
+  const normalizedFiles = files
+    .map((file) => file.path.trim())
+    .filter((path) => path.length > 0)
 
-  if (markerText.length > 0) {
+  normalizedFiles.forEach((path, index) => {
     inputParts.push({
-      type: 'text',
-      text: normalizedSegments.length > 0 ? `${markerText}\n\n` : markerText
+      type: 'fileRef',
+      path,
+      displayPath: path
     })
+    if (index < normalizedFiles.length - 1) {
+      inputParts.push({ type: 'text', text: '\n' })
+    }
+  })
+
+  if (normalizedFiles.length > 0 && normalizedSegments.length > 0) {
+    inputParts.push({ type: 'text', text: '\n\n' })
   }
 
   inputParts.push(...segmentsToInputParts(normalizedSegments))
@@ -87,6 +96,17 @@ export function buildComposerInputParts({
   return {
     inputParts,
     bodyText,
-    visibleText: serializeAttachedFileMarkers(files, bodyText)
+    visibleText: buildVisibleText(files, bodyText)
   }
+}
+
+function buildVisibleText(files: ComposerFileAttachment[], bodyText: string): string {
+  const fileRefs = files
+    .map((file) => file.path.trim())
+    .filter((path) => path.length > 0)
+    .map((path) => `@${path}`)
+
+  if (fileRefs.length === 0) return bodyText
+  const fileBlock = fileRefs.join('\n')
+  return bodyText.length > 0 ? `${fileBlock}\n\n${bodyText}` : fileBlock
 }

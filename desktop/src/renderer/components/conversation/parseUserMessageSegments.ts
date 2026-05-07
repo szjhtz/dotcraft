@@ -1,10 +1,8 @@
 import type { InputPart } from '../../types/conversation'
 import { serializeSkillMarker } from './richInputSerialization'
-import { parseLeadingAttachedFileMarkers } from '../../utils/attachedFileMarkers'
 
 export type UserMessageSegment =
   | { type: 'text'; value: string }
-  | { type: 'attachedFile'; path: string; fileName: string }
   | { type: 'fileRef'; relativePath: string }
   | { type: 'commandRef'; commandText: string }
   | { type: 'skillRef'; skillName: string }
@@ -77,16 +75,7 @@ function findNextSkillRef(text: string, from: number): Match | null {
  */
 export function parseUserMessageSegments(text: string): UserMessageSegment[] {
   const out: UserMessageSegment[] = []
-  const { files, bodyText } = parseLeadingAttachedFileMarkers(text)
-  for (const file of files) {
-    out.push({
-      type: 'attachedFile',
-      path: file.path,
-      fileName: file.fileName
-    })
-  }
-
-  const source = bodyText
+  const source = text
   let cursor = 0
 
   while (cursor < source.length) {
@@ -124,13 +113,7 @@ export function segmentsFromNativeInputParts(parts: InputPart[]): UserMessageSeg
   for (const part of parts) {
     switch (part.type) {
       case 'text': {
-        const { files, bodyText } = parseLeadingAttachedFileMarkers(part.text)
-        for (const file of files) {
-          out.push({ type: 'attachedFile', path: file.path, fileName: file.fileName })
-        }
-        if (bodyText.length > 0) {
-          out.push(...parseUserMessageSegments(bodyText))
-        }
+        out.push(...parseUserMessageSegments(part.text))
         break
       }
       case 'fileRef':

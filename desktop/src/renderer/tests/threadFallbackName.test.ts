@@ -41,6 +41,28 @@ describe('getFallbackThreadName', () => {
     ).toBe('File reference message')
   })
 
+  it('ignores leading structured file refs when naming attachment messages', () => {
+    expect(
+      getFallbackThreadName({
+        visibleText: '@C:\\temp\\notes.txt\n\nReview this change set',
+        imagesCount: 0,
+        filesCount: 1,
+        ...fallbackNames
+      })
+    ).toBe('Review this change set')
+  })
+
+  it('uses the file fallback when structured file refs are the only visible text', () => {
+    expect(
+      getFallbackThreadName({
+        visibleText: '@C:\\temp\\notes.txt\n@D:\\docs\\plan.md',
+        imagesCount: 0,
+        filesCount: 2,
+        ...fallbackNames
+      })
+    ).toBe('File reference message')
+  })
+
   it('uses the attachment fallback when images and files are both present', () => {
     expect(
       getFallbackThreadName({

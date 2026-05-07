@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, shell } from 'electron'
+import { contextBridge, ipcRenderer, shell, webUtils } from 'electron'
 import { resolveThemeMode, type ThemeMode } from '../shared/theme'
 import {
   TITLE_BAR_OVERLAY_HEIGHT,
@@ -630,8 +630,16 @@ const api = {
       return ipcRenderer.invoke('workspace:pick-folder')
     },
 
+    /**
+     * Opens the native file picker and returns selected local file paths,
+     * including files outside the workspace.
+     */
     pickFiles(): Promise<Array<{ path: string; fileName: string }>> {
       return ipcRenderer.invoke('workspace:pick-files')
+    },
+
+    getPathForFile(file: File): string {
+      return webUtils.getPathForFile(file)
     },
 
     /**

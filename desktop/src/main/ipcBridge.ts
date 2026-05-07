@@ -1114,6 +1114,7 @@ export function registerIpcHandlers(
     return result.filePaths[0]
   })
 
+  // Renderer -> Main: open native file picker; selected files may be outside the workspace.
   handleSafe('workspace:pick-files', async () => {
     const focusedWin = BrowserWindow.getFocusedWindow()
     const result = await dialog.showOpenDialog(

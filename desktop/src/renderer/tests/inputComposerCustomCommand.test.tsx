@@ -12,6 +12,7 @@ const settingsGet = vi.fn()
 const appServerSendRequest = vi.fn()
 const pickFiles = vi.fn()
 const saveImageToTemp = vi.fn()
+const getPathForFile = vi.fn((file: File) => file.name === 'notes.txt' ? 'C:\\temp\\notes.txt' : '')
 
 function renderWithLocale(node: JSX.Element): void {
   render(<LocaleProvider>{node}</LocaleProvider>)
@@ -33,6 +34,7 @@ describe('InputComposer custom command expansion', () => {
     settingsGet.mockResolvedValue({ locale: 'en' })
     pickFiles.mockResolvedValue([])
     saveImageToTemp.mockResolvedValue({ path: 'C:\\temp\\image.png' })
+    getPathForFile.mockImplementation((file: File) => file.name === 'notes.txt' ? 'C:\\temp\\notes.txt' : '')
     appServerSendRequest.mockImplementation(async (method: string) => {
       if (method === 'command/list') {
         return {
@@ -72,7 +74,7 @@ describe('InputComposer custom command expansion', () => {
       value: {
         settings: { get: settingsGet },
         appServer: { sendRequest: appServerSendRequest },
-        workspace: { saveImageToTemp, pickFiles }
+        workspace: { saveImageToTemp, pickFiles, getPathForFile }
       }
     })
 
@@ -219,7 +221,7 @@ describe('InputComposer custom command expansion', () => {
     })
   })
 
-  it('serializes picked file attachments into attached-file markers on turn/start', async () => {
+  it('serializes picked file attachments into fileRef parts on turn/start', async () => {
     pickFiles.mockResolvedValue([
       { path: 'C:\\temp\\notes.txt', fileName: 'notes.txt' }
     ])
@@ -243,7 +245,8 @@ describe('InputComposer custom command expansion', () => {
         expect.objectContaining({
           threadId: 'thread-1',
           input: [
-            { type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]\n\n' },
+            { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' },
+            { type: 'text', text: '\n\n' },
             { type: 'text', text: 'Review this file' }
           ]
         })
@@ -274,9 +277,7 @@ describe('InputComposer custom command expansion', () => {
       .closest('div[style*="border-radius: 20px"]') as HTMLElement
 
     const image = new File(['image-bytes'], 'diagram.png', { type: 'image/png' })
-    Object.defineProperty(image, 'path', { configurable: true, value: 'C:\\temp\\diagram.png' })
     const note = new File(['notes'], 'notes.txt', { type: 'text/plain' })
-    Object.defineProperty(note, 'path', { configurable: true, value: 'C:\\temp\\notes.txt' })
 
     fireEvent.drop(surface, {
       dataTransfer: {
@@ -329,7 +330,8 @@ describe('InputComposer custom command expansion', () => {
       expect(enqueueCall?.[1]).toEqual({
         threadId: 'thread-1',
         input: [
-          { type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]\n\n' },
+          { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' },
+          { type: 'text', text: '\n\n' },
           { type: 'text', text: '/code-review' }
         ],
         sender: undefined
@@ -361,7 +363,7 @@ describe('InputComposer custom command expansion', () => {
       expect(enqueueCall?.[1]).toEqual({
         threadId: 'thread-1',
         input: [
-          { type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]' }
+          { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' }
         ],
         sender: undefined
       })
@@ -382,9 +384,7 @@ describe('InputComposer custom command expansion', () => {
       .closest('div[style*="border-radius: 20px"]') as HTMLElement
 
     const image = new File(['image-bytes'], 'diagram.png', { type: 'image/png' })
-    Object.defineProperty(image, 'path', { configurable: true, value: 'C:\\temp\\diagram.png' })
     const note = new File(['notes'], 'notes.txt', { type: 'text/plain' })
-    Object.defineProperty(note, 'path', { configurable: true, value: 'C:\\temp\\notes.txt' })
 
     fireEvent.drop(surface, {
       dataTransfer: {
@@ -420,7 +420,8 @@ describe('InputComposer custom command expansion', () => {
       expect(enqueueCall?.[1]).toEqual({
         threadId: 'thread-1',
         input: [
-          { type: 'text', text: '[[Attached File: C:\\temp\\notes.txt]]\n\n' },
+          { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'C:\\temp\\notes.txt' },
+          { type: 'text', text: '\n\n' },
           { type: 'text', text: '/code-review' },
           {
             type: 'localImage',
