@@ -117,7 +117,16 @@ public sealed class OpenAIClientProvider
         _clients.GetOrAdd(key, static clientKey =>
             new OpenAIClient(
                 new ApiKeyCredential(clientKey.ApiKey),
-                new OpenAIClientOptions { Endpoint = clientKey.Endpoint }));
+                CreateClientOptions(clientKey.Endpoint, clientKey.NetworkTimeoutSeconds)));
+
+    internal static OpenAIClientOptions CreateClientOptions(Uri endpoint, int networkTimeoutSeconds)
+    {
+        return new OpenAIClientOptions
+        {
+            Endpoint = endpoint,
+            NetworkTimeout = TimeSpan.FromSeconds(NormalizeNetworkTimeoutSeconds(networkTimeoutSeconds))
+        };
+    }
 
     private static string NormalizeRequiredModel(string? model)
     {
@@ -127,7 +136,7 @@ public sealed class OpenAIClientProvider
         return model.Trim();
     }
 
-    private readonly record struct ClientKey(Uri Endpoint, string ApiKey)
+    private readonly record struct ClientKey(Uri Endpoint, string ApiKey, int NetworkTimeoutSeconds)
     {
         public static ClientKey From(AppConfig config)
         {
@@ -137,7 +146,7 @@ public sealed class OpenAIClientProvider
             if (!Uri.TryCreate(config.EndPoint, UriKind.Absolute, out var endpoint))
                 throw new ArgumentException("Endpoint must be an absolute URI.", nameof(config));
 
-            return new ClientKey(endpoint, config.ApiKey);
+            return new ClientKey(endpoint, config.ApiKey, NormalizeNetworkTimeoutSeconds(config.NetworkTimeoutSeconds));
         }
     }
 
@@ -146,4 +155,6 @@ public sealed class OpenAIClientProvider
         public static ChatClientKey From(AppConfig config, string model) =>
             new(ClientKey.From(config), model);
     }
+
+    private static int NormalizeNetworkTimeoutSeconds(int seconds) => Math.Max(1, seconds);
 }

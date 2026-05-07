@@ -78,6 +78,40 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
     }
 
     [Fact]
+    public async Task SubmitInputAsync_WhenSdkNetworkTimeoutCancellationOccurs_MarksTurnFailed()
+    {
+        const string timeoutMessage =
+            "The operation was cancelled because it exceeded the configured timeout of 0:01:40. " +
+            "The default timeout can be adjusted by passing a custom ClientPipelineOptions.NetworkTimeout value " +
+            "to the client's constructor.";
+        IChatClient chatClient = new ThrowingChatClient(new OperationCanceledException(timeoutMessage));
+        await using var agentFactory = CreateAgentFactory(chatClient);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+        var seen = new List<SessionThreadRuntimeSignal>();
+        svc.ThreadRuntimeSignalForBroadcast = (threadId, signal) =>
+        {
+            if (threadId == thread.Id)
+                seen.Add(signal);
+        };
+
+        await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("hello")]));
+
+        Assert.Equal(
+            [SessionThreadRuntimeSignal.TurnStarted, SessionThreadRuntimeSignal.TurnFailed],
+            seen);
+        var updatedThread = await svc.GetThreadAsync(thread.Id);
+        var turn = Assert.Single(updatedThread.Turns);
+        Assert.Equal(TurnStatus.Failed, turn.Status);
+        Assert.Equal(timeoutMessage, turn.Error);
+        var errorItem = Assert.Single(turn.Items, item => item.Type == ItemType.Error);
+        var payload = Assert.IsType<ErrorPayload>(errorItem.Payload);
+        Assert.Equal("agent_error", payload.Code);
+        Assert.True(payload.Fatal);
+        Assert.Equal(timeoutMessage, payload.Message);
+    }
+
+    [Fact]
     public async Task SubmitInputAsync_PassesCapturedPromptRequestSnapshotToMemoryForkConsolidator()
     {
         IChatClient chatClient = new FakeChatClient([new ChatResponseUpdate(ChatRole.Assistant, [new TextContent("ok")])]);

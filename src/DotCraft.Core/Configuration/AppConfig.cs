@@ -31,6 +31,12 @@ public sealed class AppConfig
     public string EndPoint { get; set; } = "https://api.openai.com/v1";
 
     /// <summary>
+    /// Network timeout applied to each OpenAI-compatible client request.
+    /// </summary>
+    [ConfigField(Min = 1, Hint = "seconds; default 600 (10 minutes)", Reload = ReloadBehavior.ProcessRestart, HasReload = true)]
+    public int NetworkTimeoutSeconds { get; set; } = 600;
+
+    /// <summary>
     /// Controls provider reasoning/thinking behavior.
     /// Disabled by default; enable when you want providers that support reasoning to use it.
     /// </summary>

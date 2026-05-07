@@ -1847,9 +1847,40 @@ public sealed class SessionService(
                 ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnCancelled);
                 await PersistCancelledTurnAsync();
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (callerCt.IsCancellationRequested)
             {
                 // Caller cancellation
+                FinalizeStreamingAgentMessage();
+                FinalizeStreamingReasoning();
+                await RestoreUndrainedGuidanceAsync();
+                turn.Status = TurnStatus.Cancelled;
+                turn.CompletedAt = DateTimeOffset.UtcNow;
+                eventChannel.EmitTurnCancelled(turn, "Caller cancelled");
+                ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnCancelled);
+                await PersistCancelledTurnAsync();
+            }
+            catch (OperationCanceledException ex) when (IsConfiguredNetworkTimeoutCancellation(ex))
+            {
+                logger?.LogError(ex, "Turn execution failed due to network timeout for thread {ThreadId}", threadId);
+                FinalizeStreamingAgentMessage();
+                FinalizeStreamingReasoning();
+                await RestoreUndrainedGuidanceAsync();
+
+                var errorMsg = ex.Message;
+                var errorItem = CreateErrorItem(turn, NextItemSeq(), errorMsg, "agent_error", fatal: true);
+                turn.Items.Add(errorItem);
+                eventChannel.EmitItemStarted(errorItem);
+                eventChannel.EmitItemCompleted(errorItem);
+                FailTurn(turn, eventChannel, errorMsg);
+                ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnFailed);
+                await TrySaveThreadAsync(thread);
+                if (session is not null)
+                    await TrySaveSessionAsync(agent, session, threadId);
+            }
+            catch (OperationCanceledException)
+            {
+                // Preserve historical behavior for cancellation-shaped exceptions that
+                // are not the SDK network timeout and are not tied to a known source.
                 FinalizeStreamingAgentMessage();
                 FinalizeStreamingReasoning();
                 await RestoreUndrainedGuidanceAsync();
@@ -2670,6 +2701,14 @@ public sealed class SessionService(
         turn.Error = errorMsg;
         turn.CompletedAt = DateTimeOffset.UtcNow;
         channel.EmitTurnFailed(turn, errorMsg);
+    }
+
+    private static bool IsConfiguredNetworkTimeoutCancellation(OperationCanceledException ex)
+    {
+        var text = ex.ToString();
+        return text.Contains("exceeded the configured timeout", StringComparison.OrdinalIgnoreCase)
+            && (text.Contains("NetworkTimeout", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("Network timeout", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool EndsWithSuccessfulCreatePlanInPlanMode(SessionThread thread, SessionTurn turn)

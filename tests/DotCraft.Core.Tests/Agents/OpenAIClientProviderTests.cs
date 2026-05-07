@@ -64,4 +64,54 @@ public sealed class OpenAIClientProviderTests
 
         Assert.Equal("workspace-model", consolidation);
     }
+
+    [Fact]
+    public void AppConfig_DefaultNetworkTimeoutSeconds_IsTenMinutes()
+    {
+        var config = new AppConfig();
+
+        Assert.Equal(600, config.NetworkTimeoutSeconds);
+    }
+
+    [Fact]
+    public void CreateClientOptions_UsesConfiguredNetworkTimeout()
+    {
+        var endpoint = new Uri("https://example.test/v1");
+
+        var options = OpenAIClientProvider.CreateClientOptions(endpoint, 240);
+
+        Assert.Equal(endpoint, options.Endpoint);
+        Assert.Equal(TimeSpan.FromSeconds(240), options.NetworkTimeout);
+    }
+
+    [Fact]
+    public void GetOpenAIClient_CacheKeyIncludesNetworkTimeout()
+    {
+        var provider = new OpenAIClientProvider();
+        var baseConfig = new AppConfig
+        {
+            ApiKey = "sk-test",
+            EndPoint = "https://example.test/v1",
+            NetworkTimeoutSeconds = 600
+        };
+        var sameConfig = new AppConfig
+        {
+            ApiKey = "sk-test",
+            EndPoint = "https://example.test/v1",
+            NetworkTimeoutSeconds = 600
+        };
+        var differentTimeoutConfig = new AppConfig
+        {
+            ApiKey = "sk-test",
+            EndPoint = "https://example.test/v1",
+            NetworkTimeoutSeconds = 900
+        };
+
+        var first = provider.GetOpenAIClient(baseConfig);
+        var same = provider.GetOpenAIClient(sameConfig);
+        var differentTimeout = provider.GetOpenAIClient(differentTimeoutConfig);
+
+        Assert.Same(first, same);
+        Assert.NotSame(first, differentTimeout);
+    }
 }
