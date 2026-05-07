@@ -43,6 +43,7 @@ public sealed class AppServerHandshakeTests : IDisposable
         Assert.True(caps.GetProperty("approvalFlow").GetBoolean());
         Assert.True(caps.GetProperty("modeSwitch").GetBoolean());
         Assert.True(caps.GetProperty("configOverride").GetBoolean());
+        Assert.True(caps.GetProperty("memoryManagement").GetBoolean());
     }
 
     [Fact]

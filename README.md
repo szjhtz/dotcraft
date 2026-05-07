@@ -2,13 +2,9 @@
 
 # DotCraft
 
-**[中文](./README_ZH.md) | English**
+[中文](./README_ZH.md) · [Documentation](https://dotharness.github.io/dotcraft/en/) · [Getting Started](https://dotharness.github.io/dotcraft/en/getting-started) · [Download Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
 
-[Documentation](https://dotharness.github.io/dotcraft/en/) · [Getting Started](https://dotharness.github.io/dotcraft/en/getting-started) · [Download Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
-
-A project-scoped agent harness for persistent AI workspaces.
-
-DotCraft connects CLI, Desktop, IDEs, chat bots, APIs, and automations to one workspace so sessions, memory, skills, and tools stay coherent across every entry point.
+Agent Harness best for your project. All in one workspace.
 
 ![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
@@ -18,10 +14,10 @@ DotCraft connects CLI, Desktop, IDEs, chat bots, APIs, and automations to one wo
 
 DotCraft is a .NET 10 / C# Agent Harness. It organizes AI workflows around a real project folder, allowing multiple entry points to share one session core, configuration, skills, tools, tasks, and observability surface.
 
-- Project-scoped workspace: configuration, sessions, memory, skills, and tasks stay with the project.
-- Unified session model: CLI, Desktop, TUI, ACP, SDKs, bots, and Automations reuse the same execution engine.
+- Project first: plugins, skills, sessions, and memory are integrated with the project, the agent can better understand your project.
+- Unified session model: CLI, Desktop, TUI, chatbots, etc, all applications reuse the same execution engine.
 - Observability and governance: approvals, traces, Dashboard, Hooks, and sandbox settings make agent workflows easier to inspect and control.
-- Extensibility and integration: AppServer, OpenAI-compatible API, SDKs, and plugins support custom entry points and business workflows.
+- Extensibility and integration: AppServer, SDKs, and plugins support custom entry points and business workflows.
 
 ## Get Started
 

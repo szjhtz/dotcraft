@@ -32,8 +32,8 @@ export function resolveTrayIconPath(platform: NodeJS.Platform = process.platform
     ? process.resourcesPath
     : join(__dirname, '../../resources')
   const candidates = platform === 'win32'
-    ? ['icon.ico', 'icon.png']
-    : ['icon.png']
+    ? ['tray-icon.png', 'icon.ico', 'icon.png']
+    : ['tray-icon.png', 'icon.png']
 
   for (const candidate of candidates) {
     const path = join(basePath, candidate)

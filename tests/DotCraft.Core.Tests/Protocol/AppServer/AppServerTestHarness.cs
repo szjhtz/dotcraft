@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DotCraft.Configuration;
+using DotCraft.Memory;
 using DotCraft.Mcp;
 using DotCraft.Modules;
 using DotCraft.Protocol;
@@ -43,6 +44,7 @@ internal sealed class AppServerTestHarness : IDisposable
         IReadOnlyList<ConfigSchemaSection>? configSchema = null,
         IAppConfigMonitor? appConfigMonitor = null,
         SkillsLoader? skillsLoader = null,
+        MemoryStore? memoryStore = null,
         McpClientManager? mcpClientManager = null,
         IWelcomeSuggestionService? welcomeSuggestionService = null,
         WireNodeReplProxy? wireNodeReplProxy = null,
@@ -55,6 +57,7 @@ internal sealed class AppServerTestHarness : IDisposable
 
         var store = new ThreadStore(_tempDir);
         Service = new TestableSessionService(store);
+        memoryStore ??= new MemoryStore(_tempDir);
         Transport = new InMemoryTransport();
         Connection = new AppServerConnection();
         Monitor = appConfigMonitor ?? new AppConfigMonitor(new AppConfig());
@@ -65,6 +68,7 @@ internal sealed class AppServerTestHarness : IDisposable
             defaultApprovalDecision: defaultApprovalDecision,
             workspaceCraftPath: workspaceCraftPath,
             hostWorkspacePath: _tempDir,
+            memoryStore: memoryStore,
             protocolExtensions: protocolExtensions,
             welcomeSuggestionService: welcomeSuggestionService,
             onExternalChannelUpserted: onExternalChannelUpserted,

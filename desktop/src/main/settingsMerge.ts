@@ -40,5 +40,12 @@ export function mergeUpdatedSettings(current: AppSettings, partial: Partial<AppS
     }
   }
 
+  if (partial.notifications !== undefined) {
+    next.notifications = {
+      ...(current.notifications ?? {}),
+      ...partial.notifications
+    }
+  }
+
   return next
 }

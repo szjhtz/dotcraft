@@ -16,6 +16,7 @@ export type ConnectionMode = 'local' | 'remote'
 export type BinarySource = 'bundled' | 'path' | 'custom'
 export type ProxyOAuthProvider = 'codex' | 'claude' | 'gemini' | 'qwen' | 'iflow'
 export type BrowserUseApprovalMode = 'alwaysAsk' | 'askUnknown' | 'neverAsk'
+export type TaskCompletionNotificationMode = 'whenUnfocused' | 'always' | 'never'
 export type BrowserUseApprovalResponseAction = 'allowOnce' | 'allowDomain' | 'blockDomain' | 'deny'
 export type ThemeMode = 'dark' | 'light'
 export type AddTabMenuAction = 'openFile' | 'newBrowser' | 'newTerminal'
@@ -438,7 +439,12 @@ declare global {
           query: string
           workspacePath: string
           limit?: number
-        }): Promise<{ files: Array<{ name: string; relativePath: string; dir: string }> }>
+        }): Promise<{
+          files: Array<{ name: string; relativePath: string; dir: string }>
+          indexStatus?: 'empty' | 'building' | 'ready'
+          indexedCount?: number
+          stale?: boolean
+        }>
         viewer: {
           listFiles(params: {
             workspacePath: string
@@ -602,6 +608,9 @@ declare global {
             blockedDomains?: string[]
             allowedDomains?: string[]
           }
+          notifications?: {
+            taskCompletionMode?: TaskCompletionNotificationMode
+          }
         }>
         set(
           partial: {
@@ -635,6 +644,9 @@ declare global {
               approvalMode?: BrowserUseApprovalMode
               blockedDomains?: string[]
               allowedDomains?: string[]
+            }
+            notifications?: {
+              taskCompletionMode?: TaskCompletionNotificationMode
             }
           }
         ): Promise<void>

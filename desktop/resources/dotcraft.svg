@@ -1,0 +1,219 @@
+<svg
+  width="48"
+  height="48"
+  viewBox="0 0 48 48"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+  aria-label="DotCraft logo thin outline"
+>
+  <title>DotCraft Thin Outline</title>
+  <path
+    d="M39.007 0H8.993A8.993 8.993 0 0 0 0 8.993v30.014A8.993 8.993 0 0 0 8.993 48h30.014A8.993 8.993 0 0 0 48 39.007V8.993A8.993 8.993 0 0 0 39.007 0Z"
+    fill="#fff"
+  />
+
+  <g filter="url(#dotcraft-simple-body-shadow)">
+    <path
+      d="M24 9.1v4"
+      stroke="#0B5E91"
+      stroke-width="4.8"
+      stroke-linecap="round"
+    />
+    <path
+      d="M24 9.3v3.6"
+      stroke="#7EC0E5"
+      stroke-width="1.55"
+      stroke-linecap="round"
+    />
+    <circle cx="24" cy="7" r="4.4" fill="#0B5E91" />
+    <circle
+      cx="24"
+      cy="7"
+      r="2.8"
+      fill="url(#dotcraft-simple-highlight)"
+      filter="url(#dotcraft-simple-top-glow)"
+    />
+
+    <path
+      d="M6.6 32.2v-8.4c0-7.4 7.2-10.8 17.4-10.8s17.4 3.4 17.4 10.8v8.4c0 6.9-7.4 10-17.4 10s-17.4-3.1-17.4-10Z"
+      fill="url(#dotcraft-simple-shell)"
+      stroke="#0B5E91"
+      stroke-width="2"
+      stroke-linejoin="round"
+    />
+
+    <path
+      d="M18.8 13.4c.9 2.5 2.8 3.9 5.2 3.9s4.3-1.4 5.2-3.9"
+      fill="#7EC0E5"
+      fill-opacity=".72"
+      stroke="#0B5E91"
+      stroke-width="1.8"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+
+    <path
+      d="M12.9 31.7v-7.4c0-4.2 2.5-5.8 11.1-5.8s11.1 1.6 11.1 5.8v7.4c0 4.4-2.7 6.1-11.1 6.1s-11.1-1.7-11.1-6.1Z"
+      stroke="#0B5E91"
+      stroke-width="3.1"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M12.9 31.7v-7.4c0-4.2 2.5-5.8 11.1-5.8s11.1 1.6 11.1 5.8v7.4c0 4.4-2.7 6.1-11.1 6.1s-11.1-1.7-11.1-6.1Z"
+      fill="url(#dotcraft-simple-screen)"
+      stroke="#0B5E91"
+      stroke-width="1.55"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M12.9 31.7v-7.4c0-4.2 2.5-5.8 11.1-5.8s11.1 1.6 11.1 5.8v7.4c0 4.4-2.7 6.1-11.1 6.1s-11.1-1.7-11.1-6.1Z"
+      fill="url(#dotcraft-simple-screen-glint)"
+    />
+
+    <path
+      d="M16.6 24.3 22 28l-5.4 3.7"
+      stroke="#F9D76D"
+      stroke-width="3.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      filter="url(#dotcraft-simple-terminal-glow)"
+    />
+    <path
+      d="M27 31.6h6.4"
+      stroke="#F9D76D"
+      stroke-width="3.4"
+      stroke-linecap="round"
+      filter="url(#dotcraft-simple-terminal-glow)"
+    />
+    <path
+      d="M16.6 24.3 22 28l-5.4 3.7"
+      stroke="#FFF0A6"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M27 31.6h6.4"
+      stroke="#FFF0A6"
+      stroke-width="1.6"
+      stroke-linecap="round"
+    />
+  </g>
+
+  <defs>
+    <radialGradient
+      id="dotcraft-simple-highlight"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(23.2 6.3) rotate(60.9) scale(7.2 11.5)"
+    >
+      <stop stop-color="#FFF5B8" />
+      <stop offset=".55" stop-color="#F9D76D" />
+      <stop offset="1" stop-color="#E4B846" />
+    </radialGradient>
+    <linearGradient
+      id="dotcraft-simple-shell"
+      x1="24"
+      y1="13"
+      x2="24"
+      y2="42.2"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#FFFFFF" />
+      <stop offset=".62" stop-color="#F7FCFF" />
+      <stop offset="1" stop-color="#C7E4F5" />
+    </linearGradient>
+    <linearGradient
+      id="dotcraft-simple-screen"
+      x1="24"
+      y1="18.5"
+      x2="24"
+      y2="37.8"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#1A8BC7" />
+      <stop offset=".34" stop-color="#0D6FA9" />
+      <stop offset=".72" stop-color="#07517F" />
+      <stop offset="1" stop-color="#04385F" />
+    </linearGradient>
+    <radialGradient
+      id="dotcraft-simple-screen-glint"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(18 22) rotate(42) scale(14 9)"
+    >
+      <stop stop-color="#5EC7F2" stop-opacity=".23" />
+      <stop offset=".58" stop-color="#5EC7F2" stop-opacity=".08" />
+      <stop offset="1" stop-color="#5EC7F2" stop-opacity="0" />
+    </radialGradient>
+    <filter
+      id="dotcraft-simple-body-shadow"
+      x="2"
+      y="1"
+      width="44"
+      height="45"
+      filterUnits="userSpaceOnUse"
+      color-interpolation-filters="sRGB"
+    >
+      <feDropShadow
+        dx="0"
+        dy=".8"
+        stdDeviation=".65"
+        flood-color="#063B66"
+        flood-opacity=".16"
+      />
+    </filter>
+    <filter
+      id="dotcraft-simple-top-glow"
+      x="14"
+      y="1"
+      width="20"
+      height="19"
+      filterUnits="userSpaceOnUse"
+      color-interpolation-filters="sRGB"
+    >
+      <feDropShadow
+        dx="0"
+        dy="0"
+        stdDeviation=".8"
+        flood-color="#F6C945"
+        flood-opacity=".72"
+      />
+      <feDropShadow
+        dx="0"
+        dy="0"
+        stdDeviation="1.8"
+        flood-color="#F6C945"
+        flood-opacity=".32"
+      />
+    </filter>
+    <filter
+      id="dotcraft-simple-terminal-glow"
+      x="11"
+      y="19"
+      width="27"
+      height="17"
+      filterUnits="userSpaceOnUse"
+      color-interpolation-filters="sRGB"
+    >
+      <feDropShadow
+        dx="0"
+        dy="0"
+        stdDeviation="1"
+        flood-color="#F6C945"
+        flood-opacity=".88"
+      />
+      <feDropShadow
+        dx="0"
+        dy="0"
+        stdDeviation="2.2"
+        flood-color="#F6C945"
+        flood-opacity=".32"
+      />
+    </filter>
+  </defs>
+</svg>

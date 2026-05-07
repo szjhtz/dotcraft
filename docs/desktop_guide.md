@@ -33,6 +33,8 @@ Desktop 常见配置入口：
 | Model provider | OpenAI-compatible API Key、模型名、Endpoint |
 | Dashboard / Automations | 可视化调试和自动化审核入口 |
 
+在 **设置 → 个性化** 中，可以启用或关闭长期记忆，也可以通过 **重置记忆** 删除当前工作区的 `MEMORY.md`、`HISTORY.md` 和派生记忆缓存。重置不会删除会话、配置、技能或自动化任务；如果长期记忆仍启用，后续成功会话会重新沉淀记忆。
+
 也可以通过启动参数覆盖：
 
 ```bash

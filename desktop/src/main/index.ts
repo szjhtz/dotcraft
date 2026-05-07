@@ -641,7 +641,7 @@ async function connectViaWebSocket(
 
   client.onNotification((method, params) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      broadcastNotification(mainWindow, method, params)
+      broadcastNotification(mainWindow, method, params, sharedSettings)
     }
   })
 
@@ -727,7 +727,7 @@ function startHubEventSubscription(workspacePath: string, hubClient: HubClient):
 
     if (event.kind === 'notification.requested' && mainWindow && !mainWindow.isDestroyed()) {
       const data = event.data as { kind?: string; title?: string; body?: string } | null
-      broadcastNotification(mainWindow, data?.kind ?? 'hub/notification', data ?? {})
+      broadcastNotification(mainWindow, data?.kind ?? 'hub/notification', data ?? {}, sharedSettings)
     }
   }, controller.signal).catch((error) => {
     if (!controller.signal.aborted) {

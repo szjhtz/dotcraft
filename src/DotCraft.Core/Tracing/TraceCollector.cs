@@ -184,6 +184,29 @@ public sealed class TraceCollector(TraceStore store)
         });
     }
 
+    public void RecordPromptCachePoints(
+        string sessionKey,
+        string model,
+        IReadOnlyList<PromptCachePointTraceEntry> points)
+    {
+        if (points.Count == 0)
+            return;
+
+        store.Record(new TraceEvent
+        {
+            Type = TraceEventType.PromptCachePoint,
+            SessionKey = sessionKey,
+            Content = $"{points.Count} prompt cache point{(points.Count == 1 ? "" : "s")}",
+            ModelId = model,
+            MetadataJson = JsonSerializer.Serialize(new
+            {
+                sessionKey,
+                model,
+                points
+            }, JsonOptions)
+        });
+    }
+
     public void RecordTokenUsage(string sessionKey, long inputTokens, long outputTokens)
         => RecordTokenUsage(sessionKey, new TokenUsageSnapshot(inputTokens, outputTokens, 0, 0));
 

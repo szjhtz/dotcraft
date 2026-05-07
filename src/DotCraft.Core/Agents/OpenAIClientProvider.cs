@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
 using DotCraft.Configuration;
 using OpenAI;
@@ -121,11 +122,13 @@ public sealed class OpenAIClientProvider
 
     internal static OpenAIClientOptions CreateClientOptions(Uri endpoint, int networkTimeoutSeconds)
     {
-        return new OpenAIClientOptions
+        var options = new OpenAIClientOptions
         {
             Endpoint = endpoint,
             NetworkTimeout = TimeSpan.FromSeconds(NormalizeNetworkTimeoutSeconds(networkTimeoutSeconds))
         };
+        options.AddPolicy(new PromptCacheControlPipelinePolicy(), PipelinePosition.PerCall);
+        return options;
     }
 
     private static string NormalizeRequiredModel(string? model)

@@ -4,6 +4,7 @@ import { LocaleProvider } from '../contexts/LocaleContext'
 import { SettingsView } from '../components/settings/SettingsView'
 import { useConnectionStore } from '../stores/connectionStore'
 import { usePendingRestartStore } from '../stores/pendingRestartStore'
+import { useToastStore } from '../stores/toastStore'
 import { useUIStore } from '../stores/uiStore'
 
 const settingsGet = vi.fn()
@@ -41,6 +42,7 @@ describe('SettingsView self-learning settings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     usePendingRestartStore.getState().clear()
+    useToastStore.setState({ toasts: [] })
     useUIStore.getState().setShowThinkingContent(true)
     delete (window as Window & { __confirmDialog?: unknown }).__confirmDialog
 
@@ -126,7 +128,8 @@ describe('SettingsView self-learning settings', () => {
     useConnectionStore.setState({
       status: 'connected',
       capabilities: {
-        workspaceConfigManagement: true
+        workspaceConfigManagement: true,
+        memoryManagement: true
       }
     })
   })
@@ -231,6 +234,74 @@ describe('SettingsView self-learning settings', () => {
       })
     })
     expect(screen.queryByText('Changes require a service restart to take effect')).not.toBeInTheDocument()
+  })
+
+  it('resets memory after confirmation and shows success toast', async () => {
+    const confirm = vi.fn().mockResolvedValue(true)
+    ;(window as Window & { __confirmDialog?: unknown }).__confirmDialog = confirm
+
+    renderView()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Personalization' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset' }))
+
+    await waitFor(() => {
+      expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Reset memory?',
+        danger: true
+      }))
+      expect(appServerSendRequest).toHaveBeenCalledWith('memory/reset', undefined, 20_000)
+    })
+    expect(useToastStore.getState().toasts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: 'Memory reset', type: 'success' })
+      ])
+    )
+  })
+
+  it('keeps memory reset hidden when the server capability is absent', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        workspaceConfigManagement: true
+      }
+    })
+
+    renderView()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Personalization' }))
+
+    expect(screen.queryByText('Reset memory')).not.toBeInTheDocument()
+  })
+
+  it('shows memory reset failures in a toast', async () => {
+    const confirm = vi.fn().mockResolvedValue(true)
+    ;(window as Window & { __confirmDialog?: unknown }).__confirmDialog = confirm
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'memory/reset') {
+        throw new Error('disk denied')
+      }
+      if (method === 'channel/list') {
+        return { channels: [] }
+      }
+      return {}
+    })
+
+    renderView()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Personalization' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset' }))
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: 'Failed to reset memory: disk denied',
+            type: 'error'
+          })
+        ])
+      )
+    })
   })
 
   it('shows restart banner for LLM edits and ignore only hides the banner', async () => {

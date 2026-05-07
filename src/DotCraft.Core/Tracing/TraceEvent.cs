@@ -15,7 +15,8 @@ public enum TraceEventType
     TokenUsage,
     Error,
     ContextCompaction,
-    Thinking
+    Thinking,
+    PromptCachePoint
 }
 
 /// <summary>
@@ -111,6 +112,17 @@ public sealed class TraceEvent
 
     public long? TotalTokens { get; init; }
 }
+
+public sealed record PromptCachePointTraceEntry(
+    string Model,
+    string Role,
+    int MessageIndex,
+    int ContentIndex,
+    int Sequence,
+    string HashPrefix,
+    bool Remembered,
+    bool Latest,
+    string ContentKind);
 
 public sealed class TraceSession
 {

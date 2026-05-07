@@ -72,4 +72,22 @@ describe('mergeUpdatedSettings', () => {
 
     expect(next.lastOpenEditorId).toBe('cursor')
   })
+
+  it('merges notification settings without dropping unspecified fields', () => {
+    const current: AppSettings = {
+      notifications: {
+        taskCompletionMode: 'whenUnfocused'
+      }
+    }
+
+    const next = mergeUpdatedSettings(current, {
+      notifications: {
+        taskCompletionMode: 'never'
+      }
+    })
+
+    expect(next.notifications).toEqual({
+      taskCompletionMode: 'never'
+    })
+  })
 })

@@ -37,6 +37,7 @@ export interface RemoteConnectionSettings {
 export type ProxyStatus = 'stopped' | 'starting' | 'running' | 'error'
 export type ProxyOAuthProvider = 'codex' | 'claude' | 'gemini' | 'qwen' | 'iflow'
 export type BrowserUseApprovalMode = 'alwaysAsk' | 'askUnknown' | 'neverAsk'
+export type TaskCompletionNotificationMode = 'whenUnfocused' | 'always' | 'never'
 
 export interface ProxySettings {
   enabled?: boolean
@@ -53,6 +54,10 @@ export interface BrowserUseSettings {
   approvalMode?: BrowserUseApprovalMode
   blockedDomains?: string[]
   allowedDomains?: string[]
+}
+
+export interface NotificationSettings {
+  taskCompletionMode?: TaskCompletionNotificationMode
 }
 
 export interface AppSettings {
@@ -80,6 +85,7 @@ export interface AppSettings {
   visibleChannels?: string[]
   lastOpenEditorId?: LastOpenEditorId
   browserUse?: BrowserUseSettings
+  notifications?: NotificationSettings
 }
 
 const MAX_RECENT = 20
@@ -191,6 +197,18 @@ function normalizeBrowserUseSettings(settings: AppSettings): BrowserUseSettings 
   }
 }
 
+function normalizeTaskCompletionNotificationMode(value: unknown): TaskCompletionNotificationMode {
+  return value === 'always' || value === 'never' ? value : 'whenUnfocused'
+}
+
+function normalizeNotificationSettings(settings: AppSettings): NotificationSettings {
+  const raw = settings.notifications
+  const source: NotificationSettings = raw != null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  return {
+    taskCompletionMode: normalizeTaskCompletionNotificationMode(source.taskCompletionMode)
+  }
+}
+
 function normalizeActiveModuleVariants(settings: AppSettings): Record<string, string> | undefined {
   const raw = settings.activeModuleVariants
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -229,6 +247,7 @@ export function loadSettings(): AppSettings {
       raw.lastOpenEditorId = normalizeLastOpenEditorId(raw)
       raw.proxy = normalizeProxySettings(raw)
       raw.browserUse = normalizeBrowserUseSettings(raw)
+      raw.notifications = normalizeNotificationSettings(raw)
       raw.activeModuleVariants = normalizeActiveModuleVariants(raw)
       raw.showThinkingContent = normalizeShowThinkingContent(raw)
       if (raw.locale !== undefined) {
@@ -259,6 +278,7 @@ export function saveSettings(settings: AppSettings): void {
     settings.lastOpenEditorId = normalizeLastOpenEditorId(settings)
     settings.proxy = normalizeProxySettings(settings)
     settings.browserUse = normalizeBrowserUseSettings(settings)
+    settings.notifications = normalizeNotificationSettings(settings)
     settings.activeModuleVariants = normalizeActiveModuleVariants(settings)
     settings.showThinkingContent = normalizeShowThinkingContent(settings)
     writeFileSync(filePath, JSON.stringify(settings, null, 2), 'utf8')

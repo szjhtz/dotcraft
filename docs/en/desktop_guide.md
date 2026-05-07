@@ -33,6 +33,8 @@ Common Desktop settings:
 | Model provider | OpenAI-compatible API key, model name, endpoint |
 | Dashboard / Automations | Visual debugging and automation review |
 
+In **Settings -> Personalization**, you can enable or disable long-term memory, and use **Reset memory** to delete the current workspace's `MEMORY.md`, `HISTORY.md`, and derived memory caches. Resetting memory does not delete sessions, configuration, skills, or automation tasks; if long-term memory stays enabled, future successful sessions can build new memory again.
+
 You can also override startup values:
 
 ```bash

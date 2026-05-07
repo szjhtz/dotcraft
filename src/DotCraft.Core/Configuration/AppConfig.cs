@@ -44,6 +44,12 @@ public sealed class AppConfig
     public ReasoningConfig Reasoning { get; set; } = new();
 
     /// <summary>
+    /// Controls provider prompt-cache markers for OpenAI-compatible Claude routes.
+    /// </summary>
+    [ConfigField(Ignore = true)]
+    public PromptCachingConfig PromptCaching { get; set; } = new();
+
+    /// <summary>
     /// Language setting for CLI interface. QQ and WeCom bots always use Chinese.
     /// </summary>
     public Language Language { get; set; } = Language.Chinese;
@@ -428,6 +434,58 @@ public sealed class AppConfig
                 Effort = Effort,
                 Output = Output
             };
+        }
+    }
+
+    [ConfigSection("PromptCaching", DisplayName = "Prompt Caching", Order = 11)]
+    public sealed class PromptCachingConfig
+    {
+        /// <summary>
+        /// Whether to add Anthropic/LiteLLM prompt-cache markers for matching models.
+        /// </summary>
+        [ConfigField(Hint = "Add Anthropic/LiteLLM cache_control markers for matching Claude models.")]
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// Case-insensitive model-name fragments that should receive prompt-cache markers.
+        /// </summary>
+        [ConfigField(Hint = "Case-insensitive model name fragments. Empty disables model matching.")]
+        public List<string> ModelPatterns { get; set; } = ["claude"];
+
+        /// <summary>
+        /// Prompt-cache marker placement strategy.
+        /// </summary>
+        [ConfigField(Hint = "Prompt cache placement strategy. Currently only ConversationTail is supported.")]
+        public string Placement { get; set; } = "ConversationTail";
+
+        /// <summary>
+        /// Optional Anthropic cache TTL. Empty uses the provider default 5-minute cache.
+        /// Use "1h" for the longer Anthropic prompt cache duration.
+        /// </summary>
+        [ConfigField(Hint = "Empty = provider default 5m; set to 1h for Anthropic's longer cache.")]
+        public string Ttl { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Returns true when prompt-cache markers should be applied for the model.
+        /// </summary>
+        public bool ShouldApply(string? model)
+        {
+            if (!Enabled ||
+                !string.Equals(Placement, "ConversationTail", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(model) ||
+                ModelPatterns.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var pattern in ModelPatterns)
+            {
+                if (!string.IsNullOrWhiteSpace(pattern) &&
+                    model.Contains(pattern.Trim(), StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
         }
     }
 

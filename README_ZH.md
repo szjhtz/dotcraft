@@ -2,13 +2,9 @@
 
 # DotCraft
 
-**中文 | [English](./README.md)**
+[English](./README.md) · [官方文档](https://dotharness.github.io/dotcraft/) · [快速开始](https://dotharness.github.io/dotcraft/getting-started) · [下载 Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
 
-[官方文档](https://dotharness.github.io/dotcraft/) · [快速开始](https://dotharness.github.io/dotcraft/getting-started) · [下载 Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
-
-面向项目的 Agent Harness，打造持久的 AI 工作空间。
-
-DotCraft 将 CLI、Desktop、IDE、聊天机器人、API 与自动化任务接入同一个工作区，让会话、记忆、技能和工具在不同入口之间保持一致。
+最适合您项目的 Agent Harness。你想要的所有功能尽在工作区内。
 
 ![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
@@ -18,10 +14,10 @@ DotCraft 将 CLI、Desktop、IDE、聊天机器人、API 与自动化任务接�
 
 DotCraft 是一个 .NET 10 / C# Agent Harness。它围绕真实项目目录组织 AI 工作流，让多个入口共享同一套会话核心、配置、技能、工具、任务和可观测能力。
 
-- 项目级工作区：配置、会话、记忆、技能和任务跟随项目保存。
-- 统一会话模型：CLI、Desktop、TUI、ACP、SDK、机器人和 Automations 复用同一执行引擎。
+- 项目为先：插件、技能、会话与记忆随项目走，Agent 更能理解你的项目。
+- 统一会话模型：CLI、Desktop、TUI 聊天机器人等等，所有应用复用同一执行引擎。
 - 可观测与治理：审批、Trace、Dashboard、Hooks 和沙箱配置让 agent 工作流更容易检查和约束。
-- 扩展与集成：AppServer、OpenAI-compatible API、SDK 与插件体系支持自定义入口和业务工作流。
+- 扩展与集成：AppServer、SDK 与插件体系支持自定义入口和业务工作流。
 
 ## 快速开始
 

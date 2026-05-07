@@ -111,10 +111,13 @@ Desktop exposes memory consolidation as a personalization setting:
 
 - Label: "Enable long-term memory"
 - Meaning: allow DotCraft to progressively accumulate facts about the user and workspace so future sessions can reference them.
+- Destructive action: "Reset memory" calls AppServer `memory/reset` after confirmation. It clears the current workspace's `MEMORY.md`, `HISTORY.md`, and derived memory artifacts without deleting sessions, configuration, skills, plugins, plans, or automation tasks.
 
 Other clients do not need dedicated UI to benefit from the same workspace setting. They may read or update the same workspace configuration through AppServer.
 
 The setting should take effect for future successful turns without requiring an AppServer restart.
+
+Resetting memory does not disable automatic consolidation. If `Memory.AutoConsolidateEnabled` remains enabled, future successful turns may create new memory files.
 
 ## 10. Future Work
 

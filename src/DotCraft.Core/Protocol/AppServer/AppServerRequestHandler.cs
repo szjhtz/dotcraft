@@ -13,6 +13,7 @@ using DotCraft.Logging;
 using DotCraft.Localization;
 using DotCraft.Lsp;
 using DotCraft.Mcp;
+using DotCraft.Memory;
 using DotCraft.Plugins;
 using DotCraft.Skills;
 using DotCraft.Tools.BackgroundTerminals;
@@ -37,6 +38,7 @@ public sealed class AppServerRequestHandler(
     CronService? cronService = null,
     HeartbeatService? heartbeatService = null,
     SkillsLoader? skillsLoader = null,
+    MemoryStore? memoryStore = null,
     string? workspaceCraftPath = null,
     string? hostWorkspacePath = null,
     IAutomationsRequestHandler? automationsHandler = null,
@@ -120,6 +122,7 @@ public sealed class AppServerRequestHandler(
         AppServerMethods.WelcomeSuggestions,
         AppServerMethods.WorkspaceConfigSchema,
         AppServerMethods.WorkspaceConfigUpdate,
+        AppServerMethods.MemoryReset,
         AppServerMethods.CronList,
         AppServerMethods.CronRemove,
         AppServerMethods.CronEnable,
@@ -274,6 +277,7 @@ public sealed class AppServerRequestHandler(
                 AppServerMethods.WelcomeSuggestions => HandleWelcomeSuggestionsAsync(msg, ct),
                 AppServerMethods.WorkspaceConfigSchema => HandleWorkspaceConfigSchemaAsync(msg, ct),
                 AppServerMethods.WorkspaceConfigUpdate => HandleWorkspaceConfigUpdateAsync(msg, ct),
+                AppServerMethods.MemoryReset => HandleMemoryResetAsync(msg, ct),
                 _ => TryHandleExtensionAsync(method, msg, ct)
             });
         }
@@ -324,6 +328,7 @@ public sealed class AppServerRequestHandler(
             ChannelStatus = channelStatusProvider != null,
             ModelCatalogManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath),
             WorkspaceConfigManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath),
+            MemoryManagement = memoryStore != null,
             McpManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath) && mcpClientManager != null,
             McpServerOrigins = mcpClientManager != null,
             ExternalChannelManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath),
@@ -2442,6 +2447,37 @@ public sealed class AppServerRequestHandler(
         {
             Sections = [.. _configSchema]
         });
+    }
+
+    private Task<object?> HandleMemoryResetAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        if (memoryStore == null)
+            throw AppServerErrors.MethodNotFound(AppServerMethods.MemoryReset);
+        if (msg.Params.HasValue
+            && msg.Params.Value.ValueKind is not JsonValueKind.Null
+                and not JsonValueKind.Object
+                and not JsonValueKind.Undefined)
+        {
+            throw AppServerErrors.InvalidParams("memory/reset accepts omitted, null, or empty-object params.");
+        }
+
+        try
+        {
+            memoryStore.ClearAll();
+            if (!string.IsNullOrWhiteSpace(_hostWorkspacePath))
+                welcomeSuggestionService?.ClearWorkspaceCache(_hostWorkspacePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw AppServerErrors.InternalError($"Failed to reset memory: {ex.Message}");
+        }
+
+        appConfigMonitor?.NotifyChanged(
+            AppServerMethods.MemoryReset,
+            [ConfigChangeRegions.Memory]);
+
+        return Task.FromResult<object?>(new MemoryResetResult());
     }
 
     // -------------------------------------------------------------------------

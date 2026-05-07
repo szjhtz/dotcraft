@@ -67,6 +67,10 @@ public sealed class SandboxToolProvider : IAgentToolProvider
                 shellTimeout: context.Config.Tools.Shell.Timeout,
                 requireApprovalOutsideWorkspace: requireOutside,
                 reasoningConfig: context.Config.Reasoning,
+                promptCachingConfig: context.Config.PromptCaching,
+                model: context.OpenAIClientProvider.ResolveSubAgentModel(
+                    context.Config,
+                    context.EffectiveMainModel),
                 blacklist: context.PathBlacklist,
                 sandboxManager: sandboxManager,
                 approvalService: context.ApprovalService,

@@ -334,9 +334,9 @@ public sealed class AgentFactory : IAsyncDisposable
 
         var deferredRegistry = ctx.DeferredToolRegistry;
 
-        // Reverse middleware control:
-        // OpenAIChatClient => ImageContentSanitizingChatClient => [DynamicToolInjectionChatClient]
-        // => StreamingFunctionInvokingChatClient => TracingChatClient
+        // ChatClientBuilder applies earlier Use calls outside later ones:
+        // TracingChatClient => StreamingFunctionInvokingChatClient => [DynamicToolInjectionChatClient]
+        // => ImageContentSanitizingChatClient => PromptCachingChatClient => OpenAIChatClient.
         var chatClientBuilder = new ChatClientBuilder(ctx.ChatClient.AsIChatClient());
         if (_traceCollector != null)
         {
@@ -367,6 +367,11 @@ public sealed class AgentFactory : IAsyncDisposable
             chatClientBuilder.Use(innerClient => new DynamicToolInjectionChatClient(innerClient, registry, tc, hr));
         }
         chatClientBuilder.Use(innerClient => new ImageContentSanitizingChatClient(innerClient));
+        chatClientBuilder.Use(innerClient => new PromptCachingChatClient(
+            innerClient,
+            ctx.Config.PromptCaching,
+            ctx.EffectiveMainModel,
+            _traceCollector));
         var configuredChatClient = chatClientBuilder.Build();
 
         var options = new ChatClientAgentOptions
@@ -449,9 +454,10 @@ public sealed class AgentFactory : IAsyncDisposable
     {
         var deferredRegistry = _toolProviderContext.DeferredToolRegistry;
 
-        // Reverse middleware control:
-        // OpenAIChatClient => ImageContentSanitizingChatClient => [DynamicToolInjectionChatClient]
-        // => StreamingFunctionInvokingChatClient => TracingChatClient => ToolCallFilteringChatClient
+        // ChatClientBuilder applies earlier Use calls outside later ones:
+        // ToolCallFilteringChatClient => TracingChatClient => StreamingFunctionInvokingChatClient
+        // => [DynamicToolInjectionChatClient] => ImageContentSanitizingChatClient
+        // => PromptCachingChatClient => OpenAIChatClient.
         var chatClientBuilder = new ChatClientBuilder(_chatClient.AsIChatClient());
         chatClientBuilder.Use(innerClient => new ToolCallFilteringChatClient(innerClient));
         if (_traceCollector != null)
@@ -482,6 +488,11 @@ public sealed class AgentFactory : IAsyncDisposable
             chatClientBuilder.Use(innerClient => new DynamicToolInjectionChatClient(innerClient, registry, tc, hr));
         }
         chatClientBuilder.Use(innerClient => new ImageContentSanitizingChatClient(innerClient));
+        chatClientBuilder.Use(innerClient => new PromptCachingChatClient(
+            innerClient,
+            _config.PromptCaching,
+            _toolProviderContext.EffectiveMainModel,
+            _traceCollector));
         return chatClientBuilder.Build();
     }
 

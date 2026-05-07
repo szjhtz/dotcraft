@@ -592,6 +592,12 @@ public sealed class AppServerServerCapabilities
     public bool WorkspaceConfigManagement { get; set; }
 
     /// <summary>
+    /// Server supports workspace memory management methods (<c>memory/reset</c>).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MemoryManagement { get; set; }
+
+    /// <summary>
     /// Server supports MCP configuration management methods (<c>mcp/list</c>, <c>mcp/upsert</c>, etc.).
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -2179,6 +2185,15 @@ public sealed class WorkspaceConfigSchemaParams
 {
 }
 
+// ───── memory/reset (memory management) ─────
+
+/// <summary>
+/// Result for <see cref="AppServerMethods.MemoryReset"/>.
+/// </summary>
+public sealed class MemoryResetResult
+{
+}
+
 /// <summary>
 /// Result for <see cref="AppServerMethods.WorkspaceConfigSchema"/>.
 /// </summary>
@@ -2650,6 +2665,7 @@ public static class AppServerMethods
     public const string WorkspaceConfigSchema = "workspace/config/schema";
     public const string WorkspaceConfigUpdate = "workspace/config/update";
     public const string WorkspaceConfigChanged = "workspace/configChanged";
+    public const string MemoryReset = "memory/reset";
     public const string McpList = "mcp/list";
     public const string McpGet = "mcp/get";
     public const string McpUpsert = "mcp/upsert";

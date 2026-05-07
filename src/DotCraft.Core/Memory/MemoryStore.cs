@@ -34,6 +34,11 @@ public sealed class MemoryStore
     public string LongTermFilePath => _longTermFile;
 
     /// <summary>
+    /// Gets the path to the workspace memory directory.
+    /// </summary>
+    public string MemoryDirectoryPath => _memoryDir;
+
+    /// <summary>
     /// Gets the path to the HISTORY.md file.
     /// </summary>
     public string HistoryFilePath => _historyFile;
@@ -121,6 +126,31 @@ public sealed class MemoryStore
     }
 
     /// <summary>
+    /// Clears every file and subdirectory in the memory directory while preserving the root directory.
+    /// </summary>
+    public void ClearAll()
+    {
+        lock (_syncRoot)
+        {
+            RejectReparsePointRoot();
+            Directory.CreateDirectory(_memoryDir);
+
+            foreach (var entry in Directory.EnumerateFileSystemEntries(_memoryDir).ToArray())
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    Directory.Delete(entry, recursive: (attributes & FileAttributes.ReparsePoint) == 0);
+                }
+                else
+                {
+                    File.Delete(entry);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Get combined memory context for agent (long-term memory only; HISTORY.md is searched on demand via grep).
     /// </summary>
     public string GetMemoryContext()
@@ -157,6 +187,16 @@ public sealed class MemoryStore
             if (File.Exists(tempFile))
                 File.Delete(tempFile);
         }
+    }
+
+    private void RejectReparsePointRoot()
+    {
+        if (!Directory.Exists(_memoryDir))
+            return;
+
+        var attributes = File.GetAttributes(_memoryDir);
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            throw new IOException($"Refusing to clear reparse-point memory directory: {_memoryDir}");
     }
 }
 

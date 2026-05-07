@@ -42,6 +42,10 @@ public sealed class SubAgentManager
 
     private readonly AppConfig.ReasoningConfig _reasoningConfig;
 
+    private readonly AppConfig.PromptCachingConfig _promptCachingConfig;
+
+    private readonly string _model;
+
     private readonly TraceCollector? _traceCollector;
 
     private readonly IApprovalService? _approvalService;
@@ -60,6 +64,8 @@ public sealed class SubAgentManager
         int shellTimeout = 60,
         bool requireApprovalOutsideWorkspace = true,
         AppConfig.ReasoningConfig? reasoningConfig = null,
+        AppConfig.PromptCachingConfig? promptCachingConfig = null,
+        string? model = null,
         PathBlacklist? blacklist = null,
         SandboxSessionManager? sandboxManager = null,
         IApprovalService? approvalService = null,
@@ -71,6 +77,8 @@ public sealed class SubAgentManager
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         _useSandbox = sandboxManager != null;
         _reasoningConfig = reasoningConfig ?? new AppConfig.ReasoningConfig();
+        _promptCachingConfig = promptCachingConfig ?? new AppConfig.PromptCachingConfig();
+        _model = string.IsNullOrWhiteSpace(model) ? string.Empty : model.Trim();
         _traceCollector = traceCollector;
         _approvalService = approvalService;
         _blacklist = blacklist;
@@ -247,8 +255,8 @@ public sealed class SubAgentManager
         // ChatClientBuilder applies middleware in reverse registration order:
         // first Use(...) is outermost. Register function invocation first so its internal
         // LLM rounds pass through progress/tracing clients.
-        // Effective pipeline: StreamingFunctionInvokingChatClient → SubAgentProgressChatClient
-        // → TracingChatClient → base LLM client.
+        // Effective pipeline: TracingChatClient -> SubAgentProgressChatClient
+        // -> StreamingFunctionInvokingChatClient -> PromptCachingChatClient -> base LLM client.
         var chatClientBuilder = new ChatClientBuilder(_chatClient.AsIChatClient());
         chatClientBuilder.Use(inner =>
         {
@@ -291,6 +299,7 @@ public sealed class SubAgentManager
             var tc = _traceCollector;
             chatClientBuilder.Use(inner => new TracingChatClient(inner, tc));
         }
+        chatClientBuilder.Use(inner => new PromptCachingChatClient(inner, _promptCachingConfig, _model, _traceCollector));
         var configuredChatClient = chatClientBuilder.Build();
 
         var options = new ChatClientAgentOptions

@@ -73,6 +73,17 @@ Workspace mappings take precedence over global mappings; both override the built
 | `Reasoning.Effort` | Reasoning depth: `None` / `Low` / `Medium` / `High` / `ExtraHigh` | `Medium` |
 | `Reasoning.Output` | Reasoning visibility: `None` / `Summary` / `Full` | `Full` |
 
+## PromptCaching
+
+Used when you cannot change the LiteLLM proxy configuration and need DotCraft to inject Anthropic/LiteLLM prompt cache markers into OpenAI-compatible Claude requests. DotCraft places `cache_control` on the last cacheable text position at the tail of the current request: it prefers the latest user request or assistant response, and skips tool results to avoid changing their serialized shape. Single-text messages keep their original string content; messages that already use a content-block array receive the marker on the text block. v1 emits one tail breakpoint per request. If a single turn creates more than about 20 content blocks, a future multi-breakpoint strategy may be needed.
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `PromptCaching.Enabled` | Inject prompt cache markers for matching models | `true` |
+| `PromptCaching.ModelPatterns` | Case-insensitive model name fragments. Empty matches no models | `["claude"]` |
+| `PromptCaching.Placement` | Marker placement strategy. Currently only `ConversationTail` is supported | `ConversationTail` |
+| `PromptCaching.Ttl` | Anthropic cache TTL. Empty uses the default 5 minutes; `1h` requests the long cache | Empty |
+
 ## Entry Points and Services
 
 | Field | Description | Default |

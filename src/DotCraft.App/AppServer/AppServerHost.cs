@@ -266,6 +266,7 @@ public sealed class AppServerHost(
             cronService: _runtime.CronService,
             heartbeatService: _runtime.HeartbeatService,
             skillsLoader: _runtime.SkillsLoader,
+            memoryStore: _runtime.MemoryStore,
             workspaceCraftPath: _runtime.Paths.CraftPath,
             hostWorkspacePath: _runtime.Paths.WorkspacePath,
             automationsHandler: _runtime.AutomationsHandler,

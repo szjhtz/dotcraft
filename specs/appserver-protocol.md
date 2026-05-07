@@ -44,7 +44,7 @@ Purpose: Define a language-neutral JSON-RPC wire protocol that exposes Session C
 - [23. External Channel Management Methods](#23-external-channel-management-methods)
 - [24. SubAgent Profile Management Methods](#24-subagent-profile-management-methods)
 - [25. Workspace Config Methods](#25-workspace-config-methods)
-- [26. GitHub Tracker Config Methods](#26-github-tracker-config-methods)
+- [26. Memory Management Methods](#26-memory-management-methods)
 - [27. Design Inspiration](#27-design-inspiration)
 
 ---
@@ -368,6 +368,7 @@ Built-in channels do not negotiate these capabilities over `initialize`; they pr
 | `capabilities.commandManagement` | boolean | Server supports command management methods (`command/list`, `command/execute`). |
 | `capabilities.modelCatalogManagement` | boolean | Server supports model catalog methods (`model/list`). |
 | `capabilities.workspaceConfigManagement` | boolean | Server supports workspace configuration methods (`workspace/config/schema`, `workspace/config/update`). |
+| `capabilities.memoryManagement` | boolean | Server supports workspace memory management methods (`memory/reset`). |
 | `capabilities.mcpManagement` | boolean | Server supports MCP configuration management methods (`mcp/list`, `mcp/get`, `mcp/upsert`, `mcp/remove`). |
 | `capabilities.mcpServerOrigins` | boolean | Server annotates MCP config/status DTOs with `origin` and `readOnly` so clients can show plugin-bundled MCP servers as read-only runtime entries. |
 | `capabilities.externalChannelManagement` | boolean | Server supports external channel configuration management methods (`externalChannel/list`, `externalChannel/get`, `externalChannel/upsert`, `externalChannel/remove`). |
@@ -4734,7 +4735,7 @@ Server notification emitted after a successful workspace configuration write.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `source` | string | RPC method that triggered the mutation (`workspace/config/update`, `skills/setEnabled`, `skills/uninstall`, `plugin/install`, `plugin/remove`, `plugin/setEnabled`, `mcp/upsert`, `mcp/remove`, `externalChannel/upsert`, `externalChannel/remove`, `subagent/settings/update`, `subagent/profiles/setEnabled`, `subagent/profiles/upsert`, `subagent/profiles/remove`). |
+| `source` | string | RPC method that triggered the mutation (`workspace/config/update`, `memory/reset`, `skills/setEnabled`, `skills/uninstall`, `plugin/install`, `plugin/remove`, `plugin/setEnabled`, `mcp/upsert`, `mcp/remove`, `externalChannel/upsert`, `externalChannel/remove`, `subagent/settings/update`, `subagent/profiles/setEnabled`, `subagent/profiles/upsert`, `subagent/profiles/remove`). |
 | `regions` | string[] | Coarse region tags describing what changed. |
 | `changedAt` | string (ISO-8601) | Server-side UTC timestamp when the change event was emitted. |
 
@@ -4748,7 +4749,7 @@ Current `regions` taxonomy:
 | `welcomeSuggestions` | `workspace/config/update` |
 | `skills` | `skills/setEnabled`, `skills/uninstall`, `plugin/install`, `plugin/remove`, `plugin/setEnabled`, `workspace/config/update` |
 | `plugins` | `plugin/install`, `plugin/remove`, `plugin/setEnabled` |
-| `memory` | `workspace/config/update` |
+| `memory` | `workspace/config/update`, `memory/reset` |
 | `workspace.defaultApprovalPolicy` | `workspace/config/update` |
 | `mcp` | `mcp/upsert`, `mcp/remove`, `plugin/install`, `plugin/remove`, `plugin/setEnabled` |
 | `externalChannel` | `externalChannel/upsert`, `externalChannel/remove` |
@@ -4765,7 +4766,39 @@ Semantics:
 - Clients that set `capabilities.configChange = false` are supported indefinitely and simply do not receive `workspace/configChanged` on that connection.
 - Older servers may not emit `workspace/configChanged`; clients must tolerate its absence and rely on existing refresh paths.
 
-## 26. Design Inspiration
+## 26. Memory Management Methods
+
+These methods provide a server-authoritative path for destructive workspace memory maintenance.
+
+Clients must check `capabilities.memoryManagement` in `initialize` before calling memory management methods. If absent or `false`, the server returns `-32601` (Method not found).
+
+### 26.1 `memory/reset`
+
+Clear the current workspace's durable memory artifacts.
+
+**Direction**: client -> server (request)
+
+**Params**: omitted, `null`, or `{}`
+
+**Result**:
+
+```json
+{}
+```
+
+**Semantics**:
+
+- The server clears the contents of the current workspace memory root, including `MEMORY.md`, `HISTORY.md`, and derived memory files, while preserving the memory directory itself.
+- The operation does not delete sessions, archived sessions, thread history, skills, plugins, automation tasks, or configuration.
+- The operation preserves `Memory.AutoConsolidateEnabled`; future successful turns may create new memory according to the current configuration.
+- The server clears memory-derived welcome suggestion caches so clients do not continue displaying suggestions generated from deleted memory.
+- On success, the server emits `workspace/configChanged` with `source: "memory/reset"` and `regions: ["memory"]`.
+
+### 26.2 Capability Advertisement
+
+Clients must check `capabilities.memoryManagement` before calling `memory/reset`.
+
+## 27. Design Inspiration
 
 The DotCraft AppServer Protocol's architecture references the Codex App Server
 design. The overall structural approach - a JSON-RPC 2.0 surface layered around

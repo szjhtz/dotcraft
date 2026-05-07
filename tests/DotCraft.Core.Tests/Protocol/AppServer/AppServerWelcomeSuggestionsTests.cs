@@ -1,3 +1,4 @@
+using DotCraft.Memory;
 using DotCraft.Protocol;
 using DotCraft.Protocol.AppServer;
 
@@ -72,11 +73,54 @@ public sealed class AppServerWelcomeSuggestionsTests : IDisposable
         AppServerTestHarness.AssertIsErrorResponse(doc, AppServerErrors.NotInitializedCode);
     }
 
+    [Fact]
+    public async Task ClearWorkspaceCache_RemovesPersistedCache()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"welcome_suggestions_cache_{Guid.NewGuid():N}");
+        try
+        {
+            var workspacePath = Path.Combine(tempRoot, "workspace");
+            var craftPath = Path.Combine(workspacePath, ".craft");
+            var cacheDir = Path.Combine(craftPath, "cache");
+            Directory.CreateDirectory(cacheDir);
+            var persistedPath = Path.Combine(cacheDir, "welcome-suggestions.json");
+            await File.WriteAllTextAsync(persistedPath, "{}");
+
+            var threadStore = new ThreadStore(Path.Combine(tempRoot, "threads"));
+            var sessionService = new TestableSessionService(threadStore);
+            await using var service = new WelcomeSuggestionService(
+                sessionService,
+                new SessionPersistenceService(threadStore),
+                new MemoryStore(craftPath),
+                workspacePath);
+
+            service.ClearWorkspaceCache(workspacePath);
+
+            Assert.False(File.Exists(persistedPath));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempRoot))
+                    Directory.Delete(tempRoot, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
     private sealed class FakeWelcomeSuggestionService : IWelcomeSuggestionService
     {
         public WelcomeSuggestionsParams? LastParams { get; private set; }
 
         public void ScheduleRefresh(string workspacePath, string? triggerThreadId = null)
+        {
+        }
+
+        public void ClearWorkspaceCache(string workspacePath)
         {
         }
 

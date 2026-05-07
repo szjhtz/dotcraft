@@ -31,6 +31,7 @@ export type ConnectionMode = 'local' | 'remote'
 export type BinarySource = 'bundled' | 'path' | 'custom'
 export type ProxyOAuthProvider = 'codex' | 'claude' | 'gemini' | 'qwen' | 'iflow'
 export type BrowserUseApprovalMode = 'alwaysAsk' | 'askUnknown' | 'neverAsk'
+export type TaskCompletionNotificationMode = 'whenUnfocused' | 'always' | 'never'
 export type BrowserUseApprovalResponseAction = 'allowOnce' | 'allowDomain' | 'blockDomain' | 'deny'
 export type WorkspaceSetupState = 'no-workspace' | 'needs-setup' | 'ready'
 export type WorkspaceBootstrapProfile = 'default' | 'developer' | 'personal-assistant'
@@ -722,7 +723,12 @@ const api = {
       query: string
       workspacePath: string
       limit?: number
-    }): Promise<{ files: Array<{ name: string; relativePath: string; dir: string }> }> {
+    }): Promise<{
+      files: Array<{ name: string; relativePath: string; dir: string }>
+      indexStatus?: 'empty' | 'building' | 'ready'
+      indexedCount?: number
+      stale?: boolean
+    }> {
       return ipcRenderer.invoke('workspace:search-files', params)
     },
 
@@ -1018,6 +1024,9 @@ const api = {
         blockedDomains?: string[]
         allowedDomains?: string[]
       }
+      notifications?: {
+        taskCompletionMode?: TaskCompletionNotificationMode
+      }
     }> {
       return ipcRenderer.invoke('settings:get')
     },
@@ -1056,6 +1065,9 @@ const api = {
         approvalMode?: BrowserUseApprovalMode
         blockedDomains?: string[]
         allowedDomains?: string[]
+      }
+      notifications?: {
+        taskCompletionMode?: TaskCompletionNotificationMode
       }
     }): Promise<void> {
       return ipcRenderer.invoke('settings:set', partial)

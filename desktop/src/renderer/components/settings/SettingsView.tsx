@@ -65,7 +65,13 @@ import {
   type McpServerStatusWire,
   type McpTransport
 } from '../../stores/mcpStore'
-import type { BinarySource, BrowserUseApprovalMode, ProxyAuthFileSummary, ProxyOAuthProvider } from '../../../preload/api'
+import type {
+  BinarySource,
+  BrowserUseApprovalMode,
+  ProxyAuthFileSummary,
+  ProxyOAuthProvider,
+  TaskCompletionNotificationMode
+} from '../../../preload/api'
 import type { WorkspaceConfigChangedPayload } from '../../utils/workspaceConfigChanged'
 
 declare const __APP_VERSION__: string | undefined
@@ -606,6 +612,8 @@ export function SettingsView({
   const [restartingProxy, setRestartingProxy] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>('light')
   const [locale, setLocale] = useState<AppLocale>(normalizeLocale(undefined))
+  const [taskCompletionNotificationMode, setTaskCompletionNotificationMode] =
+    useState<TaskCompletionNotificationMode>('whenUnfocused')
   const [version, setVersion] = useState('')
   const [saving, setSaving] = useState(false)
   const [restartingAppServer, setRestartingAppServer] = useState(false)
@@ -666,6 +674,7 @@ export function SettingsView({
   const [selfLearningRestartPending, setSelfLearningRestartPending] = useState(false)
   const [memoryAutoConsolidateEnabled, setMemoryAutoConsolidateEnabled] = useState(true)
   const [applyingMemoryAutoConsolidate, setApplyingMemoryAutoConsolidate] = useState(false)
+  const [resettingMemory, setResettingMemory] = useState(false)
   const [defaultApprovalPolicy, setDefaultApprovalPolicy] = useState<VisibleApprovalPolicy>('default')
   const [applyingDefaultApprovalPolicy, setApplyingDefaultApprovalPolicy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -693,6 +702,8 @@ export function SettingsView({
   const mcpOriginsEnabled = capabilities?.mcpServerOrigins === true
   const subAgentEnabled = capabilities?.subAgentManagement === true
   const pluginManagementEnabled = capabilities?.pluginManagement === true
+  const memoryManagementEnabled = capabilities?.memoryManagement === true
+  const personalizationAvailable = workspaceCoreApiAvailable || memoryManagementEnabled
   const browserUsePlugin = plugins.find((plugin) => plugin.id === 'browser-use') ?? null
   const browserUsePluginReady = !pluginManagementEnabled || browserUsePlugin?.installed === true
   const proxyLockActive = proxyStatusText === 'running'
@@ -866,6 +877,33 @@ export function SettingsView({
     [memoryAutoConsolidateEnabled, reloadWorkspaceCore, t]
   )
 
+  const handleResetMemory = useCallback(
+    async (): Promise<void> => {
+      if (resettingMemory) return
+
+      const confirmed = await confirm({
+        title: t('settings.personalization.resetMemoryConfirmTitle'),
+        message: t('settings.personalization.resetMemoryConfirmMessage'),
+        confirmLabel: t('settings.personalization.resetMemoryButton'),
+        cancelLabel: t('common.cancel'),
+        danger: true
+      })
+      if (!confirmed) return
+
+      setResettingMemory(true)
+      try {
+        await window.api.appServer.sendRequest('memory/reset', undefined, 20_000)
+        addToast(t('settings.personalization.resetMemorySuccess'), 'success')
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        addToast(t('settings.personalization.resetMemoryFailed', { error: msg }), 'error')
+      } finally {
+        setResettingMemory(false)
+      }
+    },
+    [confirm, resettingMemory, t]
+  )
+
   const handleShowThinkingContentToggle = useCallback(
     async (checked: boolean): Promise<void> => {
       const previous = showThinkingContent
@@ -978,6 +1016,11 @@ export function SettingsView({
         setProxyBinaryPath(s.proxy?.binaryPath ?? '')
         setTheme(resolveTheme(s.theme))
         setLocale(normalizeLocale(s.locale))
+        setTaskCompletionNotificationMode(
+          s.notifications?.taskCompletionMode === 'always' || s.notifications?.taskCompletionMode === 'never'
+            ? s.notifications.taskCompletionMode
+            : 'whenUnfocused'
+        )
         setShowThinkingContent(s.showThinkingContent !== false)
         setVisibleChannels(await ensureVisibleChannelsSeeded(s))
         setBrowserUseApprovalMode((s.browserUse?.approvalMode ?? 'alwaysAsk') as BrowserUseApprovalMode)
@@ -1010,10 +1053,10 @@ export function SettingsView({
   }, [])
 
   useEffect(() => {
-    if (!workspaceCoreApiAvailable && activeSettingsTab === 'personalization') {
+    if (!personalizationAvailable && activeSettingsTab === 'personalization') {
       setActiveSettingsTab('general')
     }
-  }, [activeSettingsTab, workspaceCoreApiAvailable])
+  }, [activeSettingsTab, personalizationAvailable])
 
   useEffect(() => {
     let cancelled = false
@@ -1569,6 +1612,26 @@ export function SettingsView({
       await window.api.settings.set({ visibleChannels: next })
       onThreadListRefreshRequested?.()
     } catch (err) {
+      addToast(
+        t('settings.saveFailed', {
+          error: err instanceof Error ? err.message : String(err)
+        }),
+        'error'
+      )
+    }
+  }
+
+  async function handleTaskCompletionNotificationModeChange(next: TaskCompletionNotificationMode): Promise<void> {
+    const previous = taskCompletionNotificationMode
+    setTaskCompletionNotificationMode(next)
+    try {
+      await window.api.settings.set({
+        notifications: {
+          taskCompletionMode: next
+        }
+      })
+    } catch (err) {
+      setTaskCompletionNotificationMode(previous)
       addToast(
         t('settings.saveFailed', {
           error: err instanceof Error ? err.message : String(err)
@@ -2149,7 +2212,7 @@ export function SettingsView({
     { id: 'usage', label: t('settings.tab.usage'), icon: BarChart3 },
     { id: 'channels', label: t('settings.tab.channels'), icon: MessageSquare }
   ]
-  if (workspaceCoreApiAvailable) {
+  if (personalizationAvailable) {
     tabs.splice(1, 0, { id: 'personalization', label: t('settings.tab.personalization'), icon: UserRound })
   }
   if (mcpEnabled) {
@@ -2285,6 +2348,28 @@ export function SettingsView({
                       DotCraft Desktop {t('settings.version')} {version}
                     </div>
                   </SettingsRow>
+                </SettingsGroup>
+
+                <SettingsGroup title={t('settings.notifications.title')}>
+                  <SettingsRow
+                    label={t('settings.notifications.taskCompletion')}
+                    description={t('settings.notifications.taskCompletionHint')}
+                    htmlFor="settings-task-completion-notification"
+                    control={
+                      <select
+                        id="settings-task-completion-notification"
+                        value={taskCompletionNotificationMode}
+                        onChange={(e) => {
+                          void handleTaskCompletionNotificationModeChange(e.target.value as TaskCompletionNotificationMode)
+                        }}
+                        style={{ ...inputStyle(), width: '180px', cursor: 'pointer' }}
+                      >
+                        <option value="whenUnfocused">{t('settings.notifications.taskCompletion.whenUnfocused')}</option>
+                        <option value="always">{t('settings.notifications.taskCompletion.always')}</option>
+                        <option value="never">{t('settings.notifications.taskCompletion.never')}</option>
+                      </select>
+                    }
+                  />
                 </SettingsGroup>
 
                 <SettingsGroup
@@ -2436,54 +2521,58 @@ export function SettingsView({
               </GeneralPanel>
             )}
 
-            {workspaceCoreApiAvailable && activeSettingsTab === 'personalization' && (
+            {personalizationAvailable && activeSettingsTab === 'personalization' && (
               <GeneralPanel>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <SettingsGroup
                   title={t('settings.group.personalization')}
                 >
-                  <SettingsRow
-                    label={t('settings.personalization.welcomeSuggestions')}
-                    description={t('settings.personalization.welcomeSuggestionsHint')}
-                    control={
-                      <PillSwitch
-                        checked={welcomeSuggestionsEnabled}
-                        disabled={applyingWelcomeSuggestions}
-                        aria-label={t('settings.personalization.welcomeSuggestions')}
-                        onChange={(checked) => {
-                          void handleWelcomeSuggestionsToggle(checked)
-                        }}
+                  {workspaceCoreApiAvailable && (
+                    <>
+                      <SettingsRow
+                        label={t('settings.personalization.welcomeSuggestions')}
+                        description={t('settings.personalization.welcomeSuggestionsHint')}
+                        control={
+                          <PillSwitch
+                            checked={welcomeSuggestionsEnabled}
+                            disabled={applyingWelcomeSuggestions}
+                            aria-label={t('settings.personalization.welcomeSuggestions')}
+                            onChange={(checked) => {
+                              void handleWelcomeSuggestionsToggle(checked)
+                            }}
+                          />
+                        }
                       />
-                    }
-                  />
-                  <SettingsRow
-                    label={t('settings.personalization.selfLearning')}
-                    description={t('settings.personalization.selfLearningHint')}
-                    control={
-                      <PillSwitch
-                        checked={selfLearningEnabled}
-                        disabled={applyingSelfLearning}
-                        aria-label={t('settings.personalization.selfLearning')}
-                        onChange={(checked) => {
-                          void handleSelfLearningToggle(checked)
-                        }}
+                      <SettingsRow
+                        label={t('settings.personalization.selfLearning')}
+                        description={t('settings.personalization.selfLearningHint')}
+                        control={
+                          <PillSwitch
+                            checked={selfLearningEnabled}
+                            disabled={applyingSelfLearning}
+                            aria-label={t('settings.personalization.selfLearning')}
+                            onChange={(checked) => {
+                              void handleSelfLearningToggle(checked)
+                            }}
+                          />
+                        }
                       />
-                    }
-                  />
-                  <SettingsRow
-                    label={t('settings.personalization.longTermMemory')}
-                    description={t('settings.personalization.longTermMemoryHint')}
-                    control={
-                      <PillSwitch
-                        checked={memoryAutoConsolidateEnabled}
-                        disabled={applyingMemoryAutoConsolidate}
-                        aria-label={t('settings.personalization.longTermMemory')}
-                        onChange={(checked) => {
-                          void handleMemoryAutoConsolidateToggle(checked)
-                        }}
+                      <SettingsRow
+                        label={t('settings.personalization.longTermMemory')}
+                        description={t('settings.personalization.longTermMemoryHint')}
+                        control={
+                          <PillSwitch
+                            checked={memoryAutoConsolidateEnabled}
+                            disabled={applyingMemoryAutoConsolidate}
+                            aria-label={t('settings.personalization.longTermMemory')}
+                            onChange={(checked) => {
+                              void handleMemoryAutoConsolidateToggle(checked)
+                            }}
+                          />
+                        }
                       />
-                    }
-                  />
+                    </>
+                  )}
                   <SettingsRow
                     label={t('settings.personalization.showThinkingContent')}
                     description={t('settings.personalization.showThinkingContentHint')}
@@ -2497,6 +2586,29 @@ export function SettingsView({
                       />
                     }
                   />
+                  {memoryManagementEnabled && (
+                    <SettingsRow
+                      label={t('settings.personalization.resetMemory')}
+                      description={t('settings.personalization.resetMemoryHint')}
+                      control={
+                        <button
+                          type="button"
+                          disabled={resettingMemory}
+                          onClick={() => void handleResetMemory()}
+                          style={{
+                            ...secondaryButtonStyle(resettingMemory),
+                            color: '#f85149',
+                            borderColor: 'rgba(248,81,73,0.45)',
+                            background: resettingMemory ? 'rgba(248,81,73,0.08)' : 'transparent'
+                          }}
+                        >
+                          {resettingMemory
+                            ? t('settings.personalization.resettingMemory')
+                            : t('settings.personalization.resetMemoryButton')}
+                        </button>
+                      }
+                    />
+                  )}
                 </SettingsGroup>
               </div>
               </GeneralPanel>

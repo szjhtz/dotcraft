@@ -9,7 +9,8 @@ import type {
   RecentWorkspace,
   BinarySource,
   ProxyStatus,
-  ProxyOAuthProvider
+  ProxyOAuthProvider,
+  TaskCompletionNotificationMode
 } from './settings'
 import type { ProxyAuthFileSummary } from './proxyAuthFiles'
 import { resolveBinaryLocation } from './AppServerManager'
@@ -22,9 +23,9 @@ import {
 import {
   activateFileIndexWorkspace,
   cleanupWorkspaceCache,
+  listWorkspaceFiles,
   readImageAsDataUrl,
   saveImageDataUrlToTemp,
-  searchWorkspaceFiles,
   warmFileSearchIndex
 } from './workspaceComposerIpc'
 import {
@@ -1209,24 +1210,25 @@ export function registerIpcHandlers(
     }
   )
 
-  // Renderer -> Main: fuzzy file name search for @ mentions
+  // Renderer -> Main: fuzzy file name search for @ mentions.
+  // Returns the same shape as workspace:viewer:list-files so the popover
+  // can show "indexing in progress" instead of silently rendering empty.
   handleSafe(
     'workspace:search-files',
     async (
       _event,
       params: { query: string; workspacePath: string; limit?: number }
     ) => {
+      if (!workspacePath.trim()) {
+        return { files: [], indexStatus: 'empty', indexedCount: 0, stale: false }
+      }
       const ws = path.resolve(workspacePath)
       const req = path.resolve(params.workspacePath)
       if (ws !== req) {
         throw new Error(translate(mainLocale(callbacks), 'ipc.workspacePathMismatch'))
       }
-      if (!ws) {
-        return { files: [] as { name: string; relativePath: string; dir: string }[] }
-      }
       const limit = Math.min(20, Math.max(1, params.limit ?? 10))
-      const files = await searchWorkspaceFiles(ws, params.query, limit)
-      return { files }
+      return listWorkspaceFiles(ws, params.query, limit)
     }
   )
 
@@ -1739,19 +1741,32 @@ function stripMarkdownForNotify(text: string): string {
     .trim()
 }
 
+function resolveTaskCompletionNotificationMode(settings?: AppSettings): TaskCompletionNotificationMode {
+  const mode = settings?.notifications?.taskCompletionMode
+  return mode === 'always' || mode === 'never' ? mode : 'whenUnfocused'
+}
+
+export function shouldShowTaskCompletionNotification(win: BrowserWindow, settings?: AppSettings): boolean {
+  const mode = resolveTaskCompletionNotificationMode(settings)
+  if (mode === 'never') return false
+  if (mode === 'always') return true
+  return !win.isFocused()
+}
+
 /**
  * Forwards a Wire Protocol notification to the renderer.
- * When the window is not focused, shows a native notification for job results (spec §18.6).
+ * Shows a native notification for job results according to the Desktop notification setting.
  */
 export function broadcastNotification(
   win: BrowserWindow,
   method: string,
-  params: unknown
+  params: unknown,
+  settings?: AppSettings
 ): void {
   if (
     method === 'system/jobResult' &&
     !win.isDestroyed() &&
-    !win.isFocused()
+    shouldShowTaskCompletionNotification(win, settings)
   ) {
     const p = (params ?? {}) as Record<string, unknown>
     const jobName = String((p.jobName as string) ?? (p.name as string) ?? 'Job')

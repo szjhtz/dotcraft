@@ -78,6 +78,12 @@ const MESSAGES_EN = {
   'settings.restartAppServerSuccess': 'AppServer restarted',
   'settings.restartAppServerFailed': 'Failed to restart AppServer: {{error}}',
   'settings.theme': 'Theme',
+  'settings.notifications.title': 'Notifications',
+  'settings.notifications.taskCompletion': 'Task completion notifications',
+  'settings.notifications.taskCompletionHint': 'Set reminders when DotCraft completes a task.',
+  'settings.notifications.taskCompletion.whenUnfocused': 'Only when unfocused',
+  'settings.notifications.taskCompletion.always': 'Always',
+  'settings.notifications.taskCompletion.never': 'Never',
   'settings.personalization.description': 'Customize suggestions for this workspace.',
   'settings.personalization.welcomeSuggestions': 'Enable suggestions',
   'settings.personalization.welcomeSuggestionsHint':
@@ -98,6 +104,16 @@ const MESSAGES_EN = {
   'settings.personalization.showThinkingContent': 'Show thinking content',
   'settings.personalization.showThinkingContentHint':
     'When off, DotCraft still shows the live thinking status but hides reasoning text.',
+  'settings.personalization.resetMemory': 'Reset memory',
+  'settings.personalization.resetMemoryHint':
+    'Delete long-term and historical memory for this workspace.',
+  'settings.personalization.resetMemoryButton': 'Reset',
+  'settings.personalization.resettingMemory': 'Resetting...',
+  'settings.personalization.resetMemoryConfirmTitle': 'Reset memory?',
+  'settings.personalization.resetMemoryConfirmMessage':
+    "This deletes this workspace's long-term memory, history memory, and memory-derived suggestion cache. Sessions, settings, skills, and automations stay intact. This cannot be undone.",
+  'settings.personalization.resetMemorySuccess': 'Memory reset',
+  'settings.personalization.resetMemoryFailed': 'Failed to reset memory: {{error}}',
   'settings.permissions.description':
     'Choose the default approval behavior for new threads in this workspace. Channels without per-thread controls use this setting.',
   'settings.permissions.workspaceDefault.label': 'Workspace default permissions',
@@ -947,6 +963,8 @@ const MESSAGES_EN = {
   'fileSearch.loading': 'Loading…',
   'fileSearch.noMatch': 'No matching files',
   'fileSearch.hint': 'Type to search files',
+  'fileSearch.building': 'Indexing files…',
+  'fileSearch.buildingWithCount': 'Indexing files… ({{count}} indexed)',
   'commandSearch.loading': 'Loading custom commands…',
   'commandSearch.noMatch': 'No matching custom commands',
   'commandSearch.hint': 'Type to filter custom commands',
@@ -1876,6 +1894,12 @@ const MESSAGES_ZH: Record<MessageId, string> = {
   'settings.restartAppServerSuccess': 'AppServer 已重启',
   'settings.restartAppServerFailed': '重启 AppServer 失败：{{error}}',
   'settings.theme': '主题',
+  'settings.notifications.title': '通知',
+  'settings.notifications.taskCompletion': '任务完成通知',
+  'settings.notifications.taskCompletionHint': '设置 DotCraft 完成任务时的提醒。',
+  'settings.notifications.taskCompletion.whenUnfocused': '仅当应用失焦时',
+  'settings.notifications.taskCompletion.always': '始终',
+  'settings.notifications.taskCompletion.never': '从不',
   'settings.personalization.description': '自定义当前工作区的建议。',
   'settings.personalization.welcomeSuggestions': '启用建议',
   'settings.personalization.welcomeSuggestionsHint':
@@ -1896,6 +1920,16 @@ const MESSAGES_ZH: Record<MessageId, string> = {
   'settings.personalization.showThinkingContent': '显示思考内容',
   'settings.personalization.showThinkingContentHint':
     '关闭后仍会显示正在思考状态，但不会展开或保留思考文本。',
+  'settings.personalization.resetMemory': '重置记忆',
+  'settings.personalization.resetMemoryHint':
+    '删除当前工作区的长期记忆和历史记忆。',
+  'settings.personalization.resetMemoryButton': '重置',
+  'settings.personalization.resettingMemory': '正在重置...',
+  'settings.personalization.resetMemoryConfirmTitle': '重置记忆？',
+  'settings.personalization.resetMemoryConfirmMessage':
+    '这将删除当前工作区的长期记忆、历史记忆和基于记忆生成的建议缓存。会话、设置、技能和自动化任务会保留。此操作不可撤销。',
+  'settings.personalization.resetMemorySuccess': '记忆已重置',
+  'settings.personalization.resetMemoryFailed': '重置记忆失败：{{error}}',
   'settings.permissions.description':
     '选择此工作区中新会话的默认审批行为。没有单会话选项的渠道会使用此设置。',
   'settings.permissions.workspaceDefault.label': '工作区默认权限',
@@ -2658,6 +2692,8 @@ const MESSAGES_ZH: Record<MessageId, string> = {
   'fileSearch.loading': '加载中…',
   'fileSearch.noMatch': '没有匹配的文件',
   'fileSearch.hint': '输入以搜索文件',
+  'fileSearch.building': '正在建立文件索引…',
+  'fileSearch.buildingWithCount': '正在建立文件索引…（已索引 {{count}} 个）',
   'commandSearch.loading': '正在加载自定义命令…',
   'commandSearch.noMatch': '没有匹配的自定义命令',
   'commandSearch.hint': '输入以筛选自定义命令',

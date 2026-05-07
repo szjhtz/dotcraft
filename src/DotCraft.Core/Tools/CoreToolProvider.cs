@@ -41,6 +41,10 @@ public sealed class CoreToolProvider : IAgentToolProvider
                 shellTimeout: context.Config.Tools.Shell.Timeout,
                 requireApprovalOutsideWorkspace: requireOutside,
                 reasoningConfig: context.Config.Reasoning,
+                promptCachingConfig: context.Config.PromptCaching,
+                model: context.OpenAIClientProvider.ResolveSubAgentModel(
+                    context.Config,
+                    context.EffectiveMainModel),
                 blacklist: context.PathBlacklist,
                 approvalService: context.ApprovalService,
                 traceCollector: context.TraceCollector);

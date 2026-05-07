@@ -1,13 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ipcMain, shell } from 'electron'
+import { ipcMain, Notification, shell } from 'electron'
 import { promises as fs } from 'fs'
 
-const { scanModulesMock, moduleProcessManagerStartMock, detectEditorsMock, launchEditorMock, execFileMock } = vi.hoisted(() => ({
+const {
+  scanModulesMock,
+  moduleProcessManagerStartMock,
+  detectEditorsMock,
+  launchEditorMock,
+  execFileMock,
+  listWorkspaceFilesMock,
+  notificationShowMock
+} = vi.hoisted(() => ({
   scanModulesMock: vi.fn(),
   moduleProcessManagerStartMock: vi.fn(),
   detectEditorsMock: vi.fn(),
   launchEditorMock: vi.fn(),
-  execFileMock: vi.fn()
+  execFileMock: vi.fn(),
+  listWorkspaceFilesMock: vi.fn(),
+  notificationShowMock: vi.fn()
 }))
 
 vi.mock('fs', () => ({
@@ -25,7 +35,14 @@ vi.mock('child_process', () => ({
   execFile: execFileMock
 }))
 
-vi.mock('electron', () => ({
+vi.mock('electron', () => {
+  const NotificationMock = vi.fn(function (this: { show: () => void }, _options: unknown) {
+    this.show = notificationShowMock
+  })
+  Object.assign(NotificationMock, {
+    isSupported: vi.fn(() => false)
+  })
+  return {
   app: {
     isPackaged: true,
     getPath: vi.fn(() => 'C:\\Users\\tester')
@@ -41,14 +58,12 @@ vi.mock('electron', () => ({
   dialog: {
     showOpenDialog: vi.fn()
   },
-  Notification: {
-    isSupported: vi.fn(() => false)
-  },
+  Notification: NotificationMock,
   shell: {
     openExternal: vi.fn().mockResolvedValue(undefined),
     openPath: vi.fn().mockResolvedValue('')
   }
-}))
+}})
 
 vi.mock('../moduleScanner', async () => {
   const actual = await vi.importActual('../moduleScanner')
@@ -80,6 +95,17 @@ vi.mock('../externalEditors', () => ({
   launchEditor: launchEditorMock
 }))
 
+vi.mock('../workspaceComposerIpc', async () => {
+  const actual = await vi.importActual('../workspaceComposerIpc')
+  return {
+    ...actual,
+    activateFileIndexWorkspace: vi.fn(),
+    cleanupWorkspaceCache: vi.fn().mockResolvedValue(undefined),
+    listWorkspaceFiles: listWorkspaceFilesMock,
+    warmFileSearchIndex: vi.fn()
+  }
+})
+
 import {
   createServerRequestBridge,
   registerIpcHandlers,
@@ -87,7 +113,9 @@ import {
   sanitizeHttpOrHttpsUrl,
   sanitizeExternalUrl,
   openExternalUrl,
-  openExternalHttpUrl
+  openExternalHttpUrl,
+  broadcastNotification,
+  shouldShowTaskCompletionNotification
 } from '../ipcBridge'
 
 type IpcCallbacks = NonNullable<Parameters<typeof registerIpcHandlers>[3]>
@@ -264,6 +292,12 @@ describe('registerIpcHandlers', () => {
       { id: 'explorer', labelKey: 'editors.explorer', iconKey: 'explorer' }
     ])
     launchEditorMock.mockResolvedValue(undefined)
+    listWorkspaceFilesMock.mockResolvedValue({
+      files: [],
+      indexStatus: 'ready',
+      indexedCount: 0,
+      stale: false
+    })
   })
 
   it('git:commit filters missing and ignored paths before staging and committing', async () => {
@@ -360,6 +394,21 @@ describe('registerIpcHandlers', () => {
     const commitCall = execFileMock.mock.calls.find(([, args]) => (args as string[])[0] === 'commit')
     expect(commitCall?.[1]).toEqual(['commit', '-m', 'fix: requested', '--', 'src/valid.ts'])
     expect(commitCall?.[1]).not.toContain('src/already-staged.ts')
+  })
+
+  it('workspace:search-files returns empty when no workspace is active', async () => {
+    const handlers = registerHandlersForTest('')
+    const searchFiles = handlers.get('workspace:search-files')!
+
+    const result = await searchFiles({}, { query: 'src', workspacePath: '', limit: 10 })
+
+    expect(result).toEqual({
+      files: [],
+      indexStatus: 'empty',
+      indexedCount: 0,
+      stale: false
+    })
+    expect(listWorkspaceFilesMock).not.toHaveBeenCalled()
   })
 
   it('registers editors:list and returns detected editor entries', async () => {
@@ -900,6 +949,82 @@ describe('registerIpcHandlers', () => {
     resolveUpdate?.()
     await pending
     expect(settled).toBe(true)
+  })
+})
+
+describe('task completion notifications', () => {
+  function createWindow(focused: boolean): Electron.BrowserWindow {
+    return {
+      isDestroyed: vi.fn(() => false),
+      isFocused: vi.fn(() => focused),
+      webContents: {
+        send: vi.fn()
+      }
+    } as unknown as Electron.BrowserWindow
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(Notification.isSupported).mockReturnValue(true)
+  })
+
+  it('defaults to showing task completion notifications only when unfocused', () => {
+    expect(shouldShowTaskCompletionNotification(createWindow(false))).toBe(true)
+    expect(shouldShowTaskCompletionNotification(createWindow(true))).toBe(false)
+  })
+
+  it('honors always and never task completion notification settings', () => {
+    expect(shouldShowTaskCompletionNotification(createWindow(true), {
+      notifications: { taskCompletionMode: 'always' }
+    })).toBe(true)
+    expect(shouldShowTaskCompletionNotification(createWindow(false), {
+      notifications: { taskCompletionMode: 'never' }
+    })).toBe(false)
+  })
+
+  it('shows native job result notifications according to settings while still forwarding renderer events', () => {
+    const win = createWindow(true)
+
+    broadcastNotification(win, 'system/jobResult', {
+      jobName: 'Heartbeat',
+      result: '**Done** with `task`'
+    }, {
+      notifications: { taskCompletionMode: 'always' }
+    })
+
+    expect(Notification).toHaveBeenCalledWith({
+      title: 'Heartbeat',
+      body: 'Done with task'
+    })
+    expect(notificationShowMock).toHaveBeenCalledOnce()
+    expect(win.webContents.send).toHaveBeenCalledWith('appserver:notification', {
+      method: 'system/jobResult',
+      params: {
+        jobName: 'Heartbeat',
+        result: '**Done** with `task`'
+      }
+    })
+  })
+
+  it('suppresses native job result notifications when disabled but still forwards renderer events', () => {
+    const win = createWindow(false)
+
+    broadcastNotification(win, 'system/jobResult', {
+      jobName: 'Cron',
+      result: 'Done'
+    }, {
+      notifications: { taskCompletionMode: 'never' }
+    })
+
+    expect(Notification).not.toHaveBeenCalled()
+    expect(notificationShowMock).not.toHaveBeenCalled()
+    expect(win.webContents.send).toHaveBeenCalledWith('appserver:notification', {
+      method: 'system/jobResult',
+      params: {
+        jobName: 'Cron',
+        result: 'Done'
+      }
+    })
   })
 })
 

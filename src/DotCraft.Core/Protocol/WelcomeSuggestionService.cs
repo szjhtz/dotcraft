@@ -20,6 +20,8 @@ public interface IWelcomeSuggestionService
         CancellationToken cancellationToken = default);
 
     void ScheduleRefresh(string workspacePath, string? triggerThreadId = null);
+
+    void ClearWorkspaceCache(string workspacePath);
 }
 
 public sealed class WelcomeSuggestionService(
@@ -112,6 +114,18 @@ public sealed class WelcomeSuggestionService(
                 () => RunScheduledRefreshAsync(normalizedWorkspace, triggerThreadId, refreshCt),
                 CancellationToken.None);
         }
+    }
+
+    public void ClearWorkspaceCache(string workspacePath)
+    {
+        var normalizedWorkspace = NormalizeWorkspacePath(workspacePath);
+        if (!string.Equals(normalizedWorkspace, NormalizeWorkspacePath(workspaceRoot), StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _cache.TryRemove(normalizedWorkspace, out _);
+        var persistedPath = BuildPersistedCachePath(normalizedWorkspace);
+        if (File.Exists(persistedPath))
+            File.Delete(persistedPath);
     }
 
     public async ValueTask DisposeAsync()

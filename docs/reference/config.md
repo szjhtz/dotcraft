@@ -73,6 +73,17 @@ DotCraft 内置一份常见模型的上下文窗口映射表，并会在 `Compac
 | `Reasoning.Effort` | 推理深度：`None` / `Low` / `Medium` / `High` / `ExtraHigh` | `Medium` |
 | `Reasoning.Output` | 推理内容是否暴露在响应中：`None` / `Summary` / `Full` | `Full` |
 
+## PromptCaching
+
+用于无法修改 LiteLLM proxy 配置时，在 DotCraft 客户端侧为 OpenAI-compatible Claude 请求注入 Anthropic/LiteLLM prompt cache marker。DotCraft 会把 `cache_control` 放到当前请求尾部的最后一个可缓存文本位置上：优先标记最新 user request 或 assistant response，跳过 tool result 以避免改变工具结果的序列化形态。单文本消息会保持原始字符串内容；已有 content-block 数组的消息会在文本 block 上附加 marker。v1 每次只放一个 tail breakpoint；如果单轮产生超过约 20 个 content blocks，后续可能需要更细的多 breakpoint 策略。
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `PromptCaching.Enabled` | 是否为匹配模型注入 prompt cache marker | `true` |
+| `PromptCaching.ModelPatterns` | 大小写不敏感的模型名片段；为空则不匹配任何模型 | `["claude"]` |
+| `PromptCaching.Placement` | marker 放置策略；当前仅支持 `ConversationTail` | `ConversationTail` |
+| `PromptCaching.Ttl` | Anthropic cache TTL；为空使用默认 5 分钟，`1h` 使用长缓存 | 空 |
+
 ## 入口与服务
 
 | 配置项 | 说明 | 默认值 |
