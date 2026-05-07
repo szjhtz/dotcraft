@@ -187,7 +187,11 @@ public sealed class SubAgentManager
             progressEntry.IsCompleted = true;
             TokenTracker.Current?.AddSubAgentTokens(
                 progressEntry.InputTokens,
-                progressEntry.OutputTokens);
+                    progressEntry.OutputTokens,
+                    progressEntry.CachedInputTokens,
+                    progressEntry.CacheWriteInputTokens,
+                    progressEntry.ReasoningOutputTokens,
+                    progressEntry.LlmCallCount);
         }
     }
 

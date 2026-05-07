@@ -95,6 +95,8 @@ public static class DashBoardMiddleware
                     s.TotalInputTokens,
                     s.TotalOutputTokens,
                     s.TotalCachedInputTokens,
+                    s.TotalCacheWriteInputTokens,
+                    s.TotalFreshInputTokens,
                     s.TotalNonCachedInputTokens,
                     s.TotalReasoningOutputTokens,
                     s.CacheHitRate,
@@ -104,6 +106,7 @@ public static class DashBoardMiddleware
                     s.ToolCallCount,
                     s.ErrorCount,
                     s.ContextCompactionCount,
+                    llmCallCount = s.TokenUsageCount,
                     totalToolDurationMs = s.TotalToolDurationMs,
                     avgToolDurationMs = s.AvgToolDurationMs,
                     maxToolDurationMs = s.MaxToolDurationMs,
@@ -322,10 +325,13 @@ public static class DashBoardMiddleware
                     totalInputTokens = summary.TotalInputTokens,
                     totalOutputTokens = summary.TotalOutputTokens,
                     totalCachedInputTokens = summary.TotalCachedInputTokens,
+                    totalCacheWriteInputTokens = summary.TotalCacheWriteInputTokens,
+                    totalFreshInputTokens = summary.TotalFreshInputTokens,
                     totalNonCachedInputTokens = summary.TotalNonCachedInputTokens,
                     totalReasoningOutputTokens = summary.TotalReasoningOutputTokens,
                     cacheHitRate = summary.CacheHitRate,
                     totalTokens = summary.TotalTokens,
+                    llmCallCount = summary.LlmCallCount,
                     lastActiveAt = summary.LastActiveAt.ToString("o")
                 });
                 return Results.Json(summaries, JsonOptions);
@@ -343,10 +349,13 @@ public static class DashBoardMiddleware
                     totalInputTokens = entry.TotalInputTokens,
                     totalOutputTokens = entry.TotalOutputTokens,
                     totalCachedInputTokens = entry.TotalCachedInputTokens,
+                    totalCacheWriteInputTokens = entry.TotalCacheWriteInputTokens,
+                    totalFreshInputTokens = entry.TotalFreshInputTokens,
                     totalNonCachedInputTokens = entry.TotalNonCachedInputTokens,
                     totalReasoningOutputTokens = entry.TotalReasoningOutputTokens,
                     cacheHitRate = entry.CacheHitRate,
                     totalTokens = entry.TotalTokens,
+                    llmCallCount = entry.LlmCallCount,
                     lastActiveAt = entry.LastActiveAt.ToString("o")
                 });
                 return Results.Json(entries, JsonOptions);
@@ -364,10 +373,13 @@ public static class DashBoardMiddleware
                     totalInputTokens = entry.TotalInputTokens,
                     totalOutputTokens = entry.TotalOutputTokens,
                     totalCachedInputTokens = entry.TotalCachedInputTokens,
+                    totalCacheWriteInputTokens = entry.TotalCacheWriteInputTokens,
+                    totalFreshInputTokens = entry.TotalFreshInputTokens,
                     totalNonCachedInputTokens = entry.TotalNonCachedInputTokens,
                     totalReasoningOutputTokens = entry.TotalReasoningOutputTokens,
                     cacheHitRate = entry.CacheHitRate,
                     totalTokens = entry.TotalTokens,
+                    llmCallCount = entry.LlmCallCount,
                     lastActiveAt = entry.LastActiveAt.ToString("o")
                 });
                 return Results.Json(entries, JsonOptions);

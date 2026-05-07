@@ -135,15 +135,31 @@ internal sealed class SessionEventChannel(
     public void EmitUsageDelta(
         long inputTokens,
         long outputTokens,
+        long cachedInputTokens = 0,
+        long cacheWriteInputTokens = 0,
+        long reasoningOutputTokens = 0,
+        int llmCallDelta = 0,
         long? totalInputTokens = null,
         long? totalOutputTokens = null,
+        long? contextInputTokens = null,
+        long? turnInputTokens = null,
+        long? turnOutputTokens = null,
+        int? turnLlmCalls = null,
         ContextUsageSnapshot? contextUsage = null) =>
         Write(SessionEventType.UsageDelta, null, new UsageDeltaPayload
         {
             InputTokens = inputTokens,
             OutputTokens = outputTokens,
+            CachedInputTokens = cachedInputTokens,
+            CacheWriteInputTokens = cacheWriteInputTokens,
+            ReasoningOutputTokens = reasoningOutputTokens,
+            LlmCallDelta = llmCallDelta,
             TotalInputTokens = totalInputTokens,
             TotalOutputTokens = totalOutputTokens,
+            ContextInputTokens = contextInputTokens ?? totalInputTokens,
+            TurnInputTokens = turnInputTokens,
+            TurnOutputTokens = turnOutputTokens ?? totalOutputTokens,
+            TurnLlmCalls = turnLlmCalls,
             ContextUsage = contextUsage
         });
 

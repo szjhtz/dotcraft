@@ -44,6 +44,8 @@ public sealed class StateBackedStoreTests : IDisposable
             Type = TraceEventType.TokenUsage,
             InputTokens = 11,
             OutputTokens = 7,
+            CachedInputTokens = 3,
+            CacheWriteInputTokens = 2,
             TotalTokens = 18
         });
         writer.Record(new TraceEvent
@@ -63,6 +65,10 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal(1, session.RequestCount);
         Assert.Equal(11, session.TotalInputTokens);
         Assert.Equal(7, session.TotalOutputTokens);
+        Assert.Equal(3, session.TotalCachedInputTokens);
+        Assert.Equal(2, session.TotalCacheWriteInputTokens);
+        Assert.Equal(6, session.TotalFreshInputTokens);
+        Assert.Equal(1, session.TokenUsageCount);
         Assert.Equal(1, session.ToolCallCount);
         Assert.Equal(42, session.MaxToolDurationMs);
         Assert.Equal("system", session.FinalSystemPrompt);
@@ -74,6 +80,7 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal(1, summary.SessionCount);
         Assert.Equal(1, summary.TotalRequests);
         Assert.Equal(18, summary.TotalTokens);
+        Assert.Equal(2, summary.TotalCacheWriteInputTokens);
         Assert.Equal(1, summary.TotalToolCalls);
     }
 
@@ -255,7 +262,9 @@ public sealed class StateBackedStoreTests : IDisposable
             InputTokens = 3,
             OutputTokens = 5,
             CachedInputTokens = 1,
-            ReasoningOutputTokens = 2
+            CacheWriteInputTokens = 1,
+            ReasoningOutputTokens = 2,
+            LlmCallCount = 2
         });
         writer.Record(new TokenUsageRecord
         {
@@ -272,7 +281,9 @@ public sealed class StateBackedStoreTests : IDisposable
             InputTokens = 7,
             OutputTokens = 11,
             CachedInputTokens = 4,
-            ReasoningOutputTokens = 3
+            CacheWriteInputTokens = 2,
+            ReasoningOutputTokens = 3,
+            LlmCallCount = 3
         });
 
         var reader = new TokenUsageStore(_tracingPath, stateRuntime: _stateRuntime);
@@ -281,10 +292,13 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal("qq", summary.SourceId);
         Assert.Equal(26, summary.TotalTokens);
         Assert.Equal(5, summary.TotalCachedInputTokens);
+        Assert.Equal(3, summary.TotalCacheWriteInputTokens);
+        Assert.Equal(2, summary.TotalFreshInputTokens);
         Assert.Equal(5, summary.TotalNonCachedInputTokens);
         Assert.Equal(5, summary.TotalReasoningOutputTokens);
         Assert.Equal(0.5, summary.CacheHitRate);
         Assert.Equal(2, summary.RequestCount);
+        Assert.Equal(5, summary.LlmCallCount);
         Assert.Equal(2, summary.SubjectCount);
         Assert.Equal(1, summary.ContextCount);
         Assert.Equal(TokenUsageSubjectKinds.User, summary.SubjectKind);
@@ -296,6 +310,8 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal("Team", context.Label);
         Assert.Equal(1, context.RelatedSubjectCount);
         Assert.Equal(4, context.TotalCachedInputTokens);
+        Assert.Equal(2, context.TotalCacheWriteInputTokens);
+        Assert.Equal(3, context.LlmCallCount);
     }
 
     [Fact]
@@ -412,7 +428,8 @@ public sealed class StateBackedStoreTests : IDisposable
                 SubjectLabel = "Alice",
             InputTokens = 3,
             OutputTokens = 5,
-            CachedInputTokens = 1
+            CachedInputTokens = 1,
+            CacheWriteInputTokens = 1
             }),
             JsonSerializer.Serialize(new TokenUsageRecord
             {
@@ -427,7 +444,8 @@ public sealed class StateBackedStoreTests : IDisposable
                 ContextLabel = "Team",
                 InputTokens = 7,
                 OutputTokens = 11,
-                CachedInputTokens = 6
+                CachedInputTokens = 6,
+                CacheWriteInputTokens = 1
             })
         ]);
 
@@ -443,6 +461,8 @@ public sealed class StateBackedStoreTests : IDisposable
         Assert.Equal(1, summary.ContextCount);
         Assert.Equal(26, summary.TotalTokens);
         Assert.Equal(7, summary.TotalCachedInputTokens);
+        Assert.Equal(2, summary.TotalCacheWriteInputTokens);
+        Assert.Equal(1, summary.TotalFreshInputTokens);
         Assert.Equal(3, summary.TotalNonCachedInputTokens);
 
         var subjectIds = store.GetSubjectBreakdown("qq").Select(entry => entry.Id).OrderBy(id => id).ToArray();

@@ -169,7 +169,27 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
         DateTimeOffset? thinkingStartedAt = null;
         DateTimeOffset? responseStartedAt = null;
         ChatResponseUpdate? responseLastUpdate = null;
-        var tokenUsage = new TokenUsageSnapshot();
+        var usageAccumulator = new TokenUsageRequestAccumulator();
+        var pendingRequestUsage = new TokenUsageSnapshot();
+        int? currentUsageRequestIndex = null;
+
+        void FlushPendingUsage()
+        {
+            if (pendingRequestUsage.InputTokens <= 0 && pendingRequestUsage.OutputTokens <= 0)
+                return;
+
+            collector.RecordTokenUsage(sessionKey, pendingRequestUsage);
+            pendingRequestUsage = new TokenUsageSnapshot();
+        }
+
+        void AccumulateUsage(TokenUsageSnapshot snapshot)
+        {
+            var delta = usageAccumulator.ApplySnapshot(snapshot, currentUsageRequestIndex);
+            if (delta.IsNewRequest)
+                FlushPendingUsage();
+
+            pendingRequestUsage = AddUsage(pendingRequestUsage, delta.Usage);
+        }
 
         void FlushThinking()
         {
@@ -256,11 +276,15 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
             catch (Exception ex)
             {
                 FlushPendingSegments(includeResponseFinishReason: false);
+                FlushPendingUsage();
                 collector.RecordError(sessionKey, ex.Message);
                 throw;
             }
 
             state.LastUpdate = update;
+            var updateRequestIndex = TokenUsageRequestMetadata.TryGetRequestIndex(update);
+            if (updateRequestIndex.HasValue)
+                currentUsageRequestIndex = updateRequestIndex;
             var sawTextContent = false;
 
             foreach (var content in update.Contents)
@@ -315,7 +339,7 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
                     }
                     case UsageContent usage:
                     {
-                        tokenUsage = TokenUsageExtractor.FromUsageContent(usage);
+                        AccumulateUsage(TokenUsageExtractor.FromUsageContent(usage));
                         break;
                     }
                 }
@@ -328,10 +352,16 @@ public sealed class TracingChatClient(IChatClient innerClient, TraceCollector co
         }
 
         FlushPendingSegments(includeResponseFinishReason: true);
-
-        if (tokenUsage.InputTokens > 0 || tokenUsage.OutputTokens > 0)
-            collector.RecordTokenUsage(sessionKey, tokenUsage);
+        FlushPendingUsage();
     }
+
+    private static TokenUsageSnapshot AddUsage(TokenUsageSnapshot left, TokenUsageSnapshot right) =>
+        new(
+            InputTokens: left.InputTokens + right.InputTokens,
+            OutputTokens: left.OutputTokens + right.OutputTokens,
+            CachedInputTokens: left.CachedInputTokens + right.CachedInputTokens,
+            ReasoningOutputTokens: left.ReasoningOutputTokens + right.ReasoningOutputTokens,
+            CacheWriteInputTokens: left.CacheWriteInputTokens + right.CacheWriteInputTokens);
 
     private void RecordRequestIfFirst(string sessionKey, IList<ChatMessage> messages, SessionCallState state)
     {

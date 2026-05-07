@@ -259,8 +259,17 @@ public sealed class AppServerEventDispatcher
             turnId = evt.TurnId,
             inputTokens = usage.InputTokens,
             outputTokens = usage.OutputTokens,
+            cachedInputTokens = usage.CachedInputTokens,
+            cacheWriteInputTokens = usage.CacheWriteInputTokens,
+            freshInputTokens = usage.FreshInputTokens,
+            reasoningOutputTokens = usage.ReasoningOutputTokens,
+            llmCallDelta = usage.LlmCallDelta,
             totalInputTokens = usage.TotalInputTokens,
             totalOutputTokens = usage.TotalOutputTokens,
+            contextInputTokens = usage.ContextInputTokens,
+            turnInputTokens = usage.TurnInputTokens,
+            turnOutputTokens = usage.TurnOutputTokens,
+            turnLlmCalls = usage.TurnLlmCalls,
             contextUsage = usage.ContextUsage
         },
 

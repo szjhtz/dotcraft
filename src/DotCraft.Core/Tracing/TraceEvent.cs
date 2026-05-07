@@ -101,6 +101,10 @@ public sealed class TraceEvent
 
     public long? CachedInputTokens { get; init; }
 
+    public long? CacheWriteInputTokens { get; init; }
+
+    public long? FreshInputTokens { get; init; }
+
     public long? NonCachedInputTokens { get; init; }
 
     public long? ReasoningOutputTokens { get; init; }
@@ -119,6 +123,7 @@ public sealed class TraceSession
     private long _totalInputTokens;
     private long _totalOutputTokens;
     private long _totalCachedInputTokens;
+    private long _totalCacheWriteInputTokens;
     private long _totalReasoningOutputTokens;
     private long _totalToolDurationMs;
     private long _maxToolDurationMs;
@@ -128,6 +133,10 @@ public sealed class TraceSession
     public long TotalOutputTokens => Interlocked.Read(ref _totalOutputTokens);
 
     public long TotalCachedInputTokens => Interlocked.Read(ref _totalCachedInputTokens);
+
+    public long TotalCacheWriteInputTokens => Interlocked.Read(ref _totalCacheWriteInputTokens);
+
+    public long TotalFreshInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens - TotalCacheWriteInputTokens);
 
     public long TotalNonCachedInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens);
 
@@ -151,6 +160,8 @@ public sealed class TraceSession
 
     public void AddCachedInputTokens(long value) => Interlocked.Add(ref _totalCachedInputTokens, value);
 
+    public void AddCacheWriteInputTokens(long value) => Interlocked.Add(ref _totalCacheWriteInputTokens, value);
+
     public void AddReasoningOutputTokens(long value) => Interlocked.Add(ref _totalReasoningOutputTokens, value);
 
     public void AddToolDuration(long value)
@@ -170,6 +181,7 @@ public sealed class TraceSession
         long totalInputTokens,
         long totalOutputTokens,
         long totalCachedInputTokens,
+        long totalCacheWriteInputTokens,
         long totalReasoningOutputTokens,
         long totalToolDurationMs,
         long maxToolDurationMs)
@@ -177,6 +189,7 @@ public sealed class TraceSession
         Interlocked.Exchange(ref _totalInputTokens, totalInputTokens);
         Interlocked.Exchange(ref _totalOutputTokens, totalOutputTokens);
         Interlocked.Exchange(ref _totalCachedInputTokens, totalCachedInputTokens);
+        Interlocked.Exchange(ref _totalCacheWriteInputTokens, totalCacheWriteInputTokens);
         Interlocked.Exchange(ref _totalReasoningOutputTokens, totalReasoningOutputTokens);
         Interlocked.Exchange(ref _totalToolDurationMs, totalToolDurationMs);
         Interlocked.Exchange(ref _maxToolDurationMs, maxToolDurationMs);
@@ -193,6 +206,8 @@ public sealed class TraceSession
     public int ContextCompactionCount { get; set; }
 
     public int ThinkingCount { get; set; }
+
+    public int TokenUsageCount { get; set; }
 
     public string? FinalSystemPrompt { get; set; }
 

@@ -349,18 +349,9 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         IChatClient chatClient = new FakeChatClient(
         [
             new ChatResponseUpdate(ChatRole.Assistant, [new TextContent("ok")]),
-            new ChatResponseUpdate
-            {
-                Role = ChatRole.Assistant,
-                Contents =
-                [
-                    new UsageContent(new UsageDetails
-                    {
-                        InputTokenCount = 12,
-                        OutputTokenCount = 8
-                    })
-                ]
-            }
+            UsageUpdate(requestIndex: 1, input: 12_000, output: 1, cachedInput: 8_000),
+            UsageUpdate(requestIndex: 2, input: 20_000, output: 2, cachedInput: 18_000),
+            UsageUpdate(requestIndex: 3, input: 41_000, output: 8, cachedInput: 40_000)
         ]);
         await using var agentFactory = CreateAgentFactory(chatClient);
         var tokenUsageStore = new TokenUsageStore(_tempDir);
@@ -382,18 +373,45 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         Assert.Equal(TokenUsageSourceModes.ServerManaged, summary.SourceMode);
         Assert.Equal(TokenUsageSubjectKinds.User, summary.SubjectKind);
         Assert.Equal(TokenUsageContextKinds.Group, summary.ContextKind);
-        Assert.Equal(20, summary.TotalTokens);
+        Assert.Equal(73_000, summary.TotalInputTokens);
+        Assert.Equal(66_000, summary.TotalCachedInputTokens);
+        Assert.Equal(7_000, summary.TotalFreshInputTokens);
+        Assert.Equal(11, summary.TotalOutputTokens);
+        Assert.Equal(73_011, summary.TotalTokens);
+        Assert.Equal(3, summary.LlmCallCount);
+
+        var contextUsage = svc.TryGetContextUsageSnapshot(thread.Id);
+        Assert.Equal(41_000, contextUsage?.Tokens);
 
         var subject = Assert.Single(tokenUsageStore.GetSubjectBreakdown("test"));
         Assert.Equal("user-42", subject.Id);
         Assert.Equal("Alice", subject.Label);
-        Assert.Equal(20, subject.TotalTokens);
+        Assert.Equal(73_011, subject.TotalTokens);
 
         var context = Assert.Single(tokenUsageStore.GetContextBreakdown("test"));
         Assert.Equal("group-9", context.Id);
         Assert.Equal("group-9", context.Label);
         Assert.Equal(1, context.RelatedSubjectCount);
     }
+
+    private static ChatResponseUpdate UsageUpdate(int requestIndex, long input, long output, long cachedInput)
+        => new()
+        {
+            Role = ChatRole.Assistant,
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [TokenUsageRequestMetadata.RequestIndexKey] = requestIndex
+            },
+            Contents =
+            [
+                new UsageContent(new UsageDetails
+                {
+                    InputTokenCount = input,
+                    OutputTokenCount = output,
+                    CachedInputTokenCount = cachedInput
+                })
+            ]
+        };
 
     [Fact]
     public async Task SubmitInputAsync_AppendsSenderRuntimeContext_AndPersistsInitiator()

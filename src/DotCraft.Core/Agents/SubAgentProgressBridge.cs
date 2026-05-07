@@ -37,14 +37,33 @@ public static class SubAgentProgressBridge
         public volatile bool IsCompleted;
         private long _inputTokens;
         private long _outputTokens;
+        private long _cachedInputTokens;
+        private long _cacheWriteInputTokens;
+        private long _reasoningOutputTokens;
+        private long _llmCallCount;
 
         public long InputTokens => Interlocked.Read(ref _inputTokens);
         public long OutputTokens => Interlocked.Read(ref _outputTokens);
+        public long CachedInputTokens => Interlocked.Read(ref _cachedInputTokens);
+        public long CacheWriteInputTokens => Interlocked.Read(ref _cacheWriteInputTokens);
+        public long ReasoningOutputTokens => Interlocked.Read(ref _reasoningOutputTokens);
+        public int LlmCallCount => (int)Interlocked.Read(ref _llmCallCount);
 
         public void AddTokens(long input, long output)
+            => AddTokens(input, output, 0, 0, 0);
+
+        public void AddTokens(long input, long output, long cachedInput, long cacheWriteInput, long reasoningOutput)
+            => AddTokens(input, output, cachedInput, cacheWriteInput, reasoningOutput, llmCallCount: 0);
+
+        public void AddTokens(long input, long output, long cachedInput, long cacheWriteInput, long reasoningOutput, int llmCallCount)
         {
             Interlocked.Add(ref _inputTokens, input);
             Interlocked.Add(ref _outputTokens, output);
+            Interlocked.Add(ref _cachedInputTokens, cachedInput);
+            Interlocked.Add(ref _cacheWriteInputTokens, cacheWriteInput);
+            Interlocked.Add(ref _reasoningOutputTokens, reasoningOutput);
+            if (llmCallCount > 0)
+                Interlocked.Add(ref _llmCallCount, llmCallCount);
         }
     }
 

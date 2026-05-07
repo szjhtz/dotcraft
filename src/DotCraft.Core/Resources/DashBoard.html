@@ -1411,8 +1411,10 @@ body {
             <div class="stat-card"><div class="stat-label">Tool Calls</div><div class="stat-value warning" id="statToolCalls">-</div></div>
             <div class="stat-card"><div class="stat-label">Errors</div><div class="stat-value text-error" id="statErrors">-</div></div>
             <div class="stat-card"><div class="stat-label">Avg Tool Latency</div><div class="stat-value" id="statAvgToolMs">-</div></div>
-            <div class="stat-card"><div class="stat-label">Input Tokens</div><div class="stat-value" id="statInputTokens">-</div></div>
-            <div class="stat-card"><div class="stat-label">Cached Input</div><div class="stat-value info" id="statCachedInputTokens">-</div></div>
+            <div class="stat-card"><div class="stat-label">Total Input</div><div class="stat-value" id="statInputTokens">-</div></div>
+            <div class="stat-card"><div class="stat-label">Fresh Input</div><div class="stat-value warning" id="statFreshInputTokens">-</div></div>
+            <div class="stat-card"><div class="stat-label">Cache Hit Input</div><div class="stat-value info" id="statCachedInputTokens">-</div></div>
+            <div class="stat-card"><div class="stat-label">Cache Write Input</div><div class="stat-value accent" id="statCacheWriteInputTokens">-</div></div>
             <div class="stat-card"><div class="stat-label">Cache Hit Rate</div><div class="stat-value success" id="statCacheHitRate">-</div></div>
             <div class="stat-card"><div class="stat-label">Output Tokens</div><div class="stat-value" id="statOutputTokens">-</div></div>
             <div class="stat-card"><div class="stat-label">Total Tokens</div><div class="stat-value success" id="statTotalTokens">-</div></div>
@@ -1918,7 +1920,9 @@ async function refreshDashboard() {
   document.getElementById('statErrors').textContent = formatNumber(summary.totalErrors);
   document.getElementById('statAvgToolMs').textContent = formatDurationMs(summary.avgToolDurationMs || 0);
   document.getElementById('statInputTokens').textContent = formatNumber(summary.totalInputTokens);
+  document.getElementById('statFreshInputTokens').textContent = formatNumber(summary.totalFreshInputTokens || 0);
   document.getElementById('statCachedInputTokens').textContent = formatNumber(summary.totalCachedInputTokens || 0);
+  document.getElementById('statCacheWriteInputTokens').textContent = formatNumber(summary.totalCacheWriteInputTokens || 0);
   document.getElementById('statCacheHitRate').textContent = formatPercent(summary.cacheHitRate || 0);
   document.getElementById('statOutputTokens').textContent = formatNumber(summary.totalOutputTokens);
   document.getElementById('statTotalTokens').textContent = formatNumber(summary.totalTokens);
@@ -2255,8 +2259,10 @@ function renderTraceEvent(e) {
         <div class="trace-body">
           <div class="trace-label token">Token Usage</div>
           <div class="trace-tokens-inline">
-            <span class="in">↑ ${formatNumber(e.inputTokens)} input</span>
-            <span class="in">${formatNumber(e.cachedInputTokens || 0)} cached</span>
+            <span class="in">↑ ${formatNumber(e.inputTokens)} total in</span>
+            <span class="in">${formatNumber(e.freshInputTokens || 0)} fresh</span>
+            <span class="in">${formatNumber(e.cachedInputTokens || 0)} hit</span>
+            <span class="in">${formatNumber(e.cacheWriteInputTokens || 0)} write</span>
             <span class="in">${formatPercent((e.inputTokens || 0) > 0 ? (e.cachedInputTokens || 0) / e.inputTokens : 0)} hit</span>
             <span class="out">↓ ${formatNumber(e.outputTokens)} output</span>
             <span style="color:var(--text-muted)">= ${formatNumber(e.totalTokens)} total</span>
@@ -2431,16 +2437,21 @@ async function refreshTokenUsage() {
 
   const totalTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalTokens || 0), 0);
   const totalInputTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalInputTokens || 0), 0);
+  const totalFreshInputTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalFreshInputTokens || 0), 0);
   const totalCachedInputTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalCachedInputTokens || 0), 0);
+  const totalCacheWriteInputTokens = tokenUsageSources.reduce((sum, s) => sum + (s.totalCacheWriteInputTokens || 0), 0);
   const totalCacheHitRate = totalInputTokens > 0 ? totalCachedInputTokens / totalInputTokens : 0;
-  const totalRequests = tokenUsageSources.reduce((sum, s) => sum + (s.requestCount || 0), 0);
+  const totalLlmCalls = tokenUsageSources.reduce((sum, s) => sum + (s.llmCallCount || s.requestCount || 0), 0);
   const totalSubjects = tokenUsageSources.reduce((sum, s) => sum + (s.subjectCount || 0), 0);
 
   statsEl.innerHTML = `
     <div class="stat-card"><div class="stat-label">Total Tokens</div><div class="stat-value success">${formatNumber(totalTokens)}</div></div>
-    <div class="stat-card"><div class="stat-label">Cached Input</div><div class="stat-value info">${formatNumber(totalCachedInputTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">Total Input</div><div class="stat-value">${formatNumber(totalInputTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">Fresh Input</div><div class="stat-value warning">${formatNumber(totalFreshInputTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">Cache Hit Input</div><div class="stat-value info">${formatNumber(totalCachedInputTokens)}</div></div>
+    <div class="stat-card"><div class="stat-label">Cache Write Input</div><div class="stat-value accent">${formatNumber(totalCacheWriteInputTokens)}</div></div>
     <div class="stat-card"><div class="stat-label">Cache Hit Rate</div><div class="stat-value success">${formatPercent(totalCacheHitRate)}</div></div>
-    <div class="stat-card"><div class="stat-label">Total Requests</div><div class="stat-value accent">${formatNumber(totalRequests)}</div></div>
+    <div class="stat-card"><div class="stat-label">LLM Calls</div><div class="stat-value accent">${formatNumber(totalLlmCalls)}</div></div>
     <div class="stat-card"><div class="stat-label">Active Sources</div><div class="stat-value info">${formatNumber(tokenUsageSources.length)}</div></div>
     <div class="stat-card"><div class="stat-label">Active Subjects</div><div class="stat-value warning">${formatNumber(totalSubjects)}</div></div>
     ${tokenUsageSources.map(source => `
@@ -2448,7 +2459,7 @@ async function refreshTokenUsage() {
         <div class="stat-label">${escapeHtml(formatSourceLabel(source.sourceId))}</div>
         <div class="stat-value accent">${formatNumber(source.totalTokens || 0)}</div>
         <div style="margin-top:8px;color:var(--text-secondary);font-size:12px">
-          ${formatNumber(source.requestCount || 0)} requests • ${formatPercent(source.cacheHitRate || 0)} cache hit
+          ${formatNumber(source.llmCallCount || source.requestCount || 0)} LLM calls • ${formatPercent(source.cacheHitRate || 0)} cache hit
         </div>
       </div>
     `).join('')}
@@ -2484,13 +2495,15 @@ function renderUsageSourceSection(source, subjects, contexts) {
           <div class="session-key">${escapeHtml(formatSourceLabel(source.sourceId))}</div>
           <div class="session-meta">
             <span>${escapeHtml(source.sourceMode || '-')}</span>
-            <span>${formatNumber(source.requestCount || 0)} requests</span>
+            <span>${formatNumber(source.llmCallCount || source.requestCount || 0)} LLM calls</span>
             <span>${formatRelative(source.lastActiveAt)}</span>
           </div>
         </div>
         <div class="session-stats">
           <div class="session-stat"><div class="session-stat-value" style="color:var(--warning)">${formatNumber(source.totalTokens || 0)}</div><div class="session-stat-label">tokens</div></div>
-          <div class="session-stat"><div class="session-stat-value" style="color:var(--info)">${formatNumber(source.totalCachedInputTokens || 0)}</div><div class="session-stat-label">cached</div></div>
+          <div class="session-stat"><div class="session-stat-value" style="color:var(--warning)">${formatNumber(source.totalFreshInputTokens || 0)}</div><div class="session-stat-label">fresh</div></div>
+          <div class="session-stat"><div class="session-stat-value" style="color:var(--info)">${formatNumber(source.totalCachedInputTokens || 0)}</div><div class="session-stat-label">cache hit</div></div>
+          <div class="session-stat"><div class="session-stat-value" style="color:var(--accent)">${formatNumber(source.totalCacheWriteInputTokens || 0)}</div><div class="session-stat-label">cache write</div></div>
           <div class="session-stat"><div class="session-stat-value" style="color:var(--success)">${formatPercent(source.cacheHitRate || 0)}</div><div class="session-stat-label">cache hit</div></div>
           <div class="session-stat"><div class="session-stat-value">${formatNumber(source.subjectCount || 0)}</div><div class="session-stat-label">${pluralizeUsageKind(source.subjectKind, source.subjectCount)}</div></div>
           <div class="session-stat"><div class="session-stat-value">${formatNumber(source.contextCount || 0)}</div><div class="session-stat-label">${pluralizeUsageKind(source.contextKind || 'context', source.contextCount)}</div></div>
@@ -2514,12 +2527,14 @@ function renderUsageBreakdownTable(entries, kind, showRelatedSubjects) {
       <tr>
         <th>${escapeHtml(humanizeUsageKind(kind || 'record'))} ID</th>
         <th>Label</th>
-        <th>Input Tokens</th>
-        <th>Cached Input</th>
-        <th>Cache Hit</th>
+        <th>Total Input</th>
+        <th>Fresh Input</th>
+        <th>Cache Hit Input</th>
+        <th>Cache Write</th>
+        <th>Cache Hit Rate</th>
         <th>Output Tokens</th>
         <th>Total Tokens</th>
-        <th>Requests</th>
+        <th>LLM Calls</th>
         ${relatedHeader}
         <th>Last Active</th>
       </tr>
@@ -2530,11 +2545,13 @@ function renderUsageBreakdownTable(entries, kind, showRelatedSubjects) {
           <td class="config-key">${escapeHtml(entry.id)}</td>
           <td class="config-value">${escapeHtml(entry.label || '-')}</td>
           <td style="color:var(--info);font-family:var(--font-mono)">${formatNumber(entry.totalInputTokens)}</td>
+          <td style="color:var(--warning);font-family:var(--font-mono)">${formatNumber(entry.totalFreshInputTokens || 0)}</td>
           <td style="color:var(--info);font-family:var(--font-mono)">${formatNumber(entry.totalCachedInputTokens || 0)}</td>
+          <td style="color:var(--accent);font-family:var(--font-mono)">${formatNumber(entry.totalCacheWriteInputTokens || 0)}</td>
           <td style="color:var(--success);font-family:var(--font-mono)">${formatPercent(entry.cacheHitRate || 0)}</td>
           <td style="color:var(--success);font-family:var(--font-mono)">${formatNumber(entry.totalOutputTokens)}</td>
           <td style="color:var(--warning);font-weight:600;font-family:var(--font-mono)">${formatNumber(entry.totalTokens)}</td>
-          <td style="font-family:var(--font-mono)">${formatNumber(entry.requestCount)}</td>
+          <td style="font-family:var(--font-mono)">${formatNumber(entry.llmCallCount || entry.requestCount)}</td>
           ${showRelatedSubjects ? `<td style="font-family:var(--font-mono)">${formatNumber(entry.relatedSubjectCount || 0)}</td>` : ''}
           <td style="color:var(--text-muted);font-size:12px">${formatRelative(entry.lastActiveAt)}</td>
         </tr>

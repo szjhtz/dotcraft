@@ -262,7 +262,7 @@ public sealed class SubAgentProgressAggregatorTests : IAsyncLifetime
     {
         var entry = SubAgentProgressBridge.GetOrCreate("agent-A");
 
-        await using var aggregator = new SubAgentProgressAggregator(
+        var aggregator = new SubAgentProgressAggregator(
             _channel, ThreadId, TurnId, interval: TimeSpan.FromMilliseconds(40));
         aggregator.TrackLabel("agent-A");
 
@@ -277,7 +277,9 @@ public sealed class SubAgentProgressAggregatorTests : IAsyncLifetime
         // Third LLM call + complete
         entry.AddTokens(300, 150);
         entry.IsCompleted = true;
-        await Task.Delay(80);
+
+        // Force a final snapshot instead of relying on a timer tick under test load.
+        await aggregator.DisposeAsync();
 
         List<SubAgentProgressPayload> snapshots;
         lock (_capturedPayloads)

@@ -61,7 +61,12 @@ public sealed record SubAgentRunResult
     public string? SessionId { get; init; }
 }
 
-public sealed record SubAgentTokenUsage(long InputTokens, long OutputTokens);
+public sealed record SubAgentTokenUsage(
+    long InputTokens,
+    long OutputTokens,
+    long CachedInputTokens = 0,
+    long CacheWriteInputTokens = 0,
+    long ReasoningOutputTokens = 0);
 
 public sealed record SubAgentPreparedRun(
     SubAgentProfile Profile,
@@ -163,6 +168,9 @@ public sealed class NativeSubAgentRuntime(SubAgentManager subAgentManager) : ISu
         var tokenTracker = TokenTracker.Current;
         var beforeInput = tokenTracker?.SubAgentInputTokens ?? 0;
         var beforeOutput = tokenTracker?.SubAgentOutputTokens ?? 0;
+        var beforeCachedInput = tokenTracker?.SubAgentCachedInputTokens ?? 0;
+        var beforeCacheWriteInput = tokenTracker?.SubAgentCacheWriteInputTokens ?? 0;
+        var beforeReasoningOutput = tokenTracker?.SubAgentReasoningOutputTokens ?? 0;
 
         var text = await subAgentManager.SpawnAsync(
             request.Task,
@@ -173,9 +181,15 @@ public sealed class NativeSubAgentRuntime(SubAgentManager subAgentManager) : ISu
 
         var afterInput = tokenTracker?.SubAgentInputTokens ?? beforeInput;
         var afterOutput = tokenTracker?.SubAgentOutputTokens ?? beforeOutput;
+        var afterCachedInput = tokenTracker?.SubAgentCachedInputTokens ?? beforeCachedInput;
+        var afterCacheWriteInput = tokenTracker?.SubAgentCacheWriteInputTokens ?? beforeCacheWriteInput;
+        var afterReasoningOutput = tokenTracker?.SubAgentReasoningOutputTokens ?? beforeReasoningOutput;
         var tokensUsed = new SubAgentTokenUsage(
             Math.Max(0, afterInput - beforeInput),
-            Math.Max(0, afterOutput - beforeOutput));
+            Math.Max(0, afterOutput - beforeOutput),
+            Math.Max(0, afterCachedInput - beforeCachedInput),
+            Math.Max(0, afterCacheWriteInput - beforeCacheWriteInput),
+            Math.Max(0, afterReasoningOutput - beforeReasoningOutput));
         var isError = text.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
 
         return new SubAgentRunResult
@@ -836,8 +850,20 @@ public sealed class SubAgentCoordinator
             if (tokensUsed == null)
                 return;
 
-            progressEntry.AddTokens(tokensUsed.InputTokens, tokensUsed.OutputTokens);
-            TokenTracker.Current?.AddSubAgentTokens(tokensUsed.InputTokens, tokensUsed.OutputTokens);
+            progressEntry.AddTokens(
+                tokensUsed.InputTokens,
+                tokensUsed.OutputTokens,
+                tokensUsed.CachedInputTokens,
+                tokensUsed.CacheWriteInputTokens,
+                tokensUsed.ReasoningOutputTokens,
+                tokensUsed.InputTokens > 0 || tokensUsed.OutputTokens > 0 ? 1 : 0);
+            TokenTracker.Current?.AddSubAgentTokens(
+                tokensUsed.InputTokens,
+                tokensUsed.OutputTokens,
+                tokensUsed.CachedInputTokens,
+                tokensUsed.CacheWriteInputTokens,
+                tokensUsed.ReasoningOutputTokens,
+                tokensUsed.InputTokens > 0 || tokensUsed.OutputTokens > 0 ? 1 : 0);
         }
     }
 }

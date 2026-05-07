@@ -34,6 +34,7 @@ public sealed class SubAgentProgressChatClientTests
 
         Assert.Equal(100, entry.InputTokens);
         Assert.Equal(50, entry.OutputTokens);
+        Assert.Equal(1, entry.LlmCallCount);
     }
 
     [Fact]
@@ -75,10 +76,10 @@ public sealed class SubAgentProgressChatClientTests
         await client.GetResponseAsync([new ChatMessage(ChatRole.User, "round 2")]);
         await client.GetResponseAsync([new ChatMessage(ChatRole.User, "round 3")]);
 
-        // Snapshot deltas should accumulate: (100) + (200-100) + (300-200) = 300 input,
-        // and (50) + (100-50) + (150-100) = 150 output.
-        Assert.Equal(300, entry.InputTokens);
-        Assert.Equal(150, entry.OutputTokens);
+        // Each GetResponseAsync call is a separate LLM request, so request inputs sum directly.
+        Assert.Equal(600, entry.InputTokens);
+        Assert.Equal(300, entry.OutputTokens);
+        Assert.Equal(3, entry.LlmCallCount);
     }
 
     // -------------------------------------------------------------------------
@@ -120,6 +121,7 @@ public sealed class SubAgentProgressChatClientTests
         // After stream ends, tokens should be written
         Assert.Equal(200, entry.InputTokens);
         Assert.Equal(80, entry.OutputTokens);
+        Assert.Equal(1, entry.LlmCallCount);
     }
 
     [Fact]
@@ -177,10 +179,10 @@ public sealed class SubAgentProgressChatClientTests
         await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "2")]))
         { }
 
-        // Snapshot deltas across streams: (100) + (200-100) = 200 input,
-        // and (40) + (80-40) = 80 output.
-        Assert.Equal(200, entry.InputTokens);
-        Assert.Equal(80, entry.OutputTokens);
+        // Each stream is a separate LLM request, so request inputs sum directly.
+        Assert.Equal(300, entry.InputTokens);
+        Assert.Equal(120, entry.OutputTokens);
+        Assert.Equal(2, entry.LlmCallCount);
     }
 
     // -------------------------------------------------------------------------

@@ -526,6 +526,10 @@ public sealed class SessionService(
             {
                 InputTokens = tokensUsed.InputTokens,
                 OutputTokens = tokensUsed.OutputTokens,
+                CachedInputTokens = tokensUsed.CachedInputTokens,
+                CacheWriteInputTokens = tokensUsed.CacheWriteInputTokens,
+                ReasoningOutputTokens = tokensUsed.ReasoningOutputTokens,
+                LlmCallCount = tokensUsed.InputTokens > 0 || tokensUsed.OutputTokens > 0 ? 1 : 0,
                 TotalTokens = tokensUsed.InputTokens + tokensUsed.OutputTokens
             };
         }
@@ -922,6 +926,7 @@ public sealed class SessionService(
             var agentText = string.Empty;
             var reasoningText = string.Empty;
             var agentDeltaIndex = 0;
+            var mainTraceUsageBaseline = 0;
             Dictionary<int, SessionItem>? streamingToolCallItemsByIndex = null;
             Dictionary<int, string>? streamingToolNameByIndex = null;
             Dictionary<string, SessionItem>? streamingToolCallItemsByCallId = null;
@@ -1196,6 +1201,7 @@ public sealed class SessionService(
                 traceCollector?.BindThreadMainSession(threadId);
                 TracingChatClient.CurrentSessionKey = threadId;
                 TracingChatClient.ResetCallState(threadId);
+                mainTraceUsageBaseline = traceCollector?.GetTokenUsageCount(threadId) ?? 0;
                 tokenTracker = agentFactory.GetOrCreateTokenTracker(threadId);
                 TokenTracker.Current = tokenTracker;
 
@@ -1286,8 +1292,10 @@ public sealed class SessionService(
                 // Step 5g: Run agent
                 var pluginFunctionCallIds = new HashSet<string>(StringComparer.Ordinal);
                 var dynamicToolCallIds = new HashSet<string>(StringComparer.Ordinal);
-                long inputTokens = 0, outputTokens = 0, cachedInputTokens = 0, reasoningOutputTokens = 0;
-                long lastUsageInput = 0, lastUsageOutput = 0, lastUsageCachedInput = 0, lastUsageReasoningOutput = 0;
+                long inputTokens = 0, outputTokens = 0, cachedInputTokens = 0, cacheWriteInputTokens = 0, reasoningOutputTokens = 0;
+                var llmCallCount = 0;
+                int? currentUsageRequestIndex = null;
+                var usageAccumulator = new TokenUsageRequestAccumulator();
                 var pluginFunctionToolNames = GetPluginFunctionToolNames(threadId);
                 var dynamicToolNames = GetDynamicToolNames(threadId);
 
@@ -1387,6 +1395,10 @@ public sealed class SessionService(
                     await foreach (var update in agent.RunStreamingAsync(userMessage, session)
                         .WithCancellation(executionCt))
                     {
+                        var updateRequestIndex = TokenUsageRequestMetadata.TryGetRequestIndex(update.AsChatResponseUpdate());
+                        if (updateRequestIndex.HasValue)
+                            currentUsageRequestIndex = updateRequestIndex;
+
                         foreach (var responseContent in update.Contents)
                         {
                             switch (responseContent)
@@ -1663,46 +1675,46 @@ public sealed class SessionService(
                                 {
                                     var snapshot = TokenUsageExtractor.FromUsageContent(usage);
                                     var curIn = snapshot.InputTokens;
-                                    var curOut = snapshot.OutputTokens;
-                                    var curCachedIn = snapshot.CachedInputTokens;
-                                    var curReasoningOut = snapshot.ReasoningOutputTokens;
-                                    if (curIn > 0 || curOut > 0)
+                                    if (snapshot.InputTokens > 0 || snapshot.OutputTokens > 0)
                                     {
-                                        UsageSnapshotDelta.Compute(
-                                            curIn,
-                                            curOut,
-                                            ref lastUsageInput,
-                                            ref lastUsageOutput,
-                                            out var deltaIn,
-                                            out var deltaOut);
-                                        UsageSnapshotDelta.Compute(
-                                            curCachedIn,
-                                            curReasoningOut,
-                                            ref lastUsageCachedInput,
-                                            ref lastUsageReasoningOutput,
-                                            out var deltaCachedIn,
-                                            out var deltaReasoningOut);
-                                        if (deltaIn > 0 || deltaOut > 0 || deltaCachedIn > 0 || deltaReasoningOut > 0)
+                                        var usageDelta = usageAccumulator.ApplySnapshot(snapshot, currentUsageRequestIndex);
+                                        var delta = usageDelta.Usage;
+                                        if (delta.InputTokens > 0
+                                            || delta.OutputTokens > 0
+                                            || delta.CachedInputTokens > 0
+                                            || delta.CacheWriteInputTokens > 0
+                                            || delta.ReasoningOutputTokens > 0)
                                         {
-                                            inputTokens += deltaIn;
-                                            outputTokens += deltaOut;
-                                            cachedInputTokens += deltaCachedIn;
-                                            reasoningOutputTokens += deltaReasoningOut;
+                                            llmCallCount += usageDelta.LlmCallDelta;
+                                            inputTokens += delta.InputTokens;
+                                            outputTokens += delta.OutputTokens;
+                                            cachedInputTokens += delta.CachedInputTokens;
+                                            cacheWriteInputTokens += delta.CacheWriteInputTokens;
+                                            reasoningOutputTokens += delta.ReasoningOutputTokens;
                                             tokenTracker.UpdateWithStreamingDeltas(
-                                                deltaIn,
-                                                deltaOut,
-                                                deltaCachedIn,
-                                                deltaReasoningOut,
+                                                delta.InputTokens,
+                                                delta.OutputTokens,
+                                                delta.CachedInputTokens,
+                                                delta.CacheWriteInputTokens,
+                                                delta.ReasoningOutputTokens,
                                                 curIn);
                                             var contextUsage = await SaveContextUsageSnapshotAsync(
                                                 threadId,
                                                 tokenTracker.LastInputTokens,
                                                 CancellationToken.None);
                                             eventChannel.EmitUsageDelta(
-                                                deltaIn,
-                                                deltaOut,
+                                                delta.InputTokens,
+                                                delta.OutputTokens,
+                                                cachedInputTokens: delta.CachedInputTokens,
+                                                cacheWriteInputTokens: delta.CacheWriteInputTokens,
+                                                reasoningOutputTokens: delta.ReasoningOutputTokens,
+                                                llmCallDelta: usageDelta.LlmCallDelta,
                                                 totalInputTokens: tokenTracker.LastInputTokens,
                                                 totalOutputTokens: outputTokens,
+                                                contextInputTokens: tokenTracker.LastInputTokens,
+                                                turnInputTokens: inputTokens,
+                                                turnOutputTokens: outputTokens,
+                                                turnLlmCalls: llmCallCount,
                                                 contextUsage: contextUsage);
                                         }
                                     }
@@ -1733,7 +1745,11 @@ public sealed class SessionService(
                 var totalInput = inputTokens + tokenTracker.SubAgentInputTokens;
                 var totalOutput = outputTokens + tokenTracker.SubAgentOutputTokens;
                 var totalCachedInput = cachedInputTokens + tokenTracker.SubAgentCachedInputTokens;
+                var totalCacheWriteInput = cacheWriteInputTokens + tokenTracker.SubAgentCacheWriteInputTokens;
                 var totalReasoningOutput = reasoningOutputTokens + tokenTracker.SubAgentReasoningOutputTokens;
+                var mainTraceUsageDelta = Math.Max(
+                    0,
+                    (traceCollector?.GetTokenUsageCount(threadId) ?? mainTraceUsageBaseline) - mainTraceUsageBaseline);
                 if (totalInput > 0 || totalOutput > 0)
                 {
                     turn.TokenUsage = new TokenUsageInfo
@@ -1741,7 +1757,9 @@ public sealed class SessionService(
                         InputTokens = totalInput,
                         OutputTokens = totalOutput,
                         CachedInputTokens = Math.Clamp(totalCachedInput, 0, totalInput),
+                        CacheWriteInputTokens = Math.Clamp(totalCacheWriteInput, 0, totalInput),
                         ReasoningOutputTokens = totalReasoningOutput,
+                        LlmCallCount = Math.Max(llmCallCount, mainTraceUsageDelta) + tokenTracker.SubAgentLlmCallCount,
                         TotalTokens = totalInput + totalOutput
                     };
                 }
@@ -2434,7 +2452,9 @@ public sealed class SessionService(
             InputTokens = turn.TokenUsage.InputTokens,
             OutputTokens = turn.TokenUsage.OutputTokens,
             CachedInputTokens = turn.TokenUsage.CachedInputTokens,
-            ReasoningOutputTokens = turn.TokenUsage.ReasoningOutputTokens
+            CacheWriteInputTokens = turn.TokenUsage.CacheWriteInputTokens,
+            ReasoningOutputTokens = turn.TokenUsage.ReasoningOutputTokens,
+            LlmCallCount = turn.TokenUsage.LlmCallCount
         });
     }
 

@@ -196,6 +196,8 @@ public sealed class TraceCollector(TraceStore store)
             InputTokens = usage.InputTokens,
             OutputTokens = usage.OutputTokens,
             CachedInputTokens = usage.CachedInputTokens,
+            CacheWriteInputTokens = usage.CacheWriteInputTokens,
+            FreshInputTokens = usage.FreshInputTokens,
             NonCachedInputTokens = usage.NonCachedInputTokens,
             ReasoningOutputTokens = usage.ReasoningOutputTokens,
             TotalTokens = usage.TotalTokens
@@ -245,6 +247,9 @@ public sealed class TraceCollector(TraceStore store)
 
     public string? ResolveRootThreadId(string sessionKey)
         => store.DescribeSessionDeletion(sessionKey).RootThreadId;
+
+    public int GetTokenUsageCount(string sessionKey)
+        => store.GetSession(sessionKey)?.TokenUsageCount ?? 0;
 
     public ToolCallTimer StartToolTimer()
     {

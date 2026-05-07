@@ -1648,6 +1648,15 @@ Emitted each time the agent completes an LLM iteration and produces a `UsageCont
   "turnId": "turn_001",
   "inputTokens": 1200,
   "outputTokens": 350,
+  "cachedInputTokens": 0,
+  "cacheWriteInputTokens": 0,
+  "freshInputTokens": 1200,
+  "reasoningOutputTokens": 0,
+  "llmCallDelta": 1,
+  "contextInputTokens": 14820,
+  "turnInputTokens": 1200,
+  "turnOutputTokens": 350,
+  "turnLlmCalls": 1,
   "totalInputTokens": 14820,
   "totalOutputTokens": 2610,
   "contextUsage": {
@@ -1667,15 +1676,27 @@ Emitted each time the agent completes an LLM iteration and produces a `UsageCont
 | `turnId` | string | Active turn. |
 | `inputTokens` | integer | Input tokens consumed in this LLM iteration (delta, not cumulative). |
 | `outputTokens` | integer | Output tokens consumed in this LLM iteration (delta, not cumulative). |
-| `totalInputTokens` | integer | Optional. Persisted context-occupancy input-token snapshot for the thread. Drives the desktop context-usage ring without waiting for turn completion. It is not billing/cumulative thread usage. Absent when unavailable. |
-| `totalOutputTokens` | integer | Optional. Cumulative output tokens emitted so far in the current turn. It is not used for context-occupancy calculations; absent when unavailable. |
+| `cachedInputTokens` | integer | Cache-hit/cache-read input tokens consumed in this LLM iteration (delta, not cumulative). |
+| `cacheWriteInputTokens` | integer | Cache-creation/cache-write input tokens consumed in this LLM iteration (delta, not cumulative). |
+| `freshInputTokens` | integer | Derived fresh input delta: `max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens)`. |
+| `reasoningOutputTokens` | integer | Reasoning output tokens consumed in this LLM iteration (delta, not cumulative). |
+| `llmCallDelta` | integer | Optional. `1` when this delta starts a new LLM request, otherwise `0`. |
+| `contextInputTokens` | integer | Optional. Persisted context-occupancy input-token snapshot for the thread. Drives the desktop context-usage ring without waiting for turn completion. It is not billing/cumulative thread usage. |
+| `totalInputTokens` | integer | Optional. Backward-compatible alias of `contextInputTokens`; not billing/cumulative thread usage. |
+| `turnInputTokens` | integer | Optional. Cumulative billing input tokens emitted so far in the current turn. |
+| `totalOutputTokens` | integer | Optional. Backward-compatible cumulative output tokens emitted so far in the current turn. |
+| `turnOutputTokens` | integer | Optional. Cumulative billing output tokens emitted so far in the current turn. |
+| `turnLlmCalls` | integer | Optional. Cumulative LLM request count emitted so far in the current turn. |
 | `contextUsage` | object | Optional. Full `ContextUsageSnapshot` matching `totalInputTokens`, including thresholds needed to seed the desktop token ring. |
 
 **Emission rules**:
 
 - Emitted once per LLM iteration, immediately after the provider's `UsageContent` is processed.
-- Each notification carries only the delta for the current iteration. Clients must accumulate deltas locally.
-- The sum of all `item/usage/delta` notifications for a Turn's main agent equals the main-agent portion of `turn/completed.tokenUsage`.
+- Each notification carries only the delta for the current LLM request. Providers may emit cumulative usage snapshots within one request; Session Core normalizes those snapshots before emitting.
+- The sum of all `item/usage/delta` notifications for a Turn's main agent equals the main-agent billing portion of `turn/completed.tokenUsage`.
+- Context-window occupancy is separate: `contextInputTokens`/`totalInputTokens` is the latest main-agent request input snapshot, not the billing sum.
+- Example: if one Turn has request input snapshots `12000 | 20000 | 41000`, `turnInputTokens` reaches `73000`, while `contextInputTokens` remains `41000`.
+- Cache-hit accounting is cumulative by the same rule: `cachedInputTokens` deltas sum to the Turn's cache-hit input total, so dashboards can show how much of `turnInputTokens` came from cache hits.
 - SubAgent tokens are reported separately via `subagent/progress` and are not included in `item/usage/delta`.
 - Clients that do not need real-time token display can opt out via `optOutNotificationMethods: ["item/usage/delta"]` during `initialize`.
 
@@ -1696,6 +1717,7 @@ Server                                          Client
   |                                               |
   | turn/completed (notification)                 |
   |  tokenUsage: { inputTokens: 3300,             |
+  |    cachedInputTokens: 0, cacheWriteInputTokens: 0, |
   |    outputTokens: 830, totalTokens: 4130 }     |
   |<----------------------------------------------|
 ```

@@ -194,6 +194,10 @@ public sealed class AguiChannelService(
 
                 var prevInput  = traceStore?.GetSession(sessionKeyUsed)?.TotalInputTokens  ?? 0;
                 var prevOutput = traceStore?.GetSession(sessionKeyUsed)?.TotalOutputTokens ?? 0;
+                var prevCachedInput = traceStore?.GetSession(sessionKeyUsed)?.TotalCachedInputTokens ?? 0;
+                var prevCacheWriteInput = traceStore?.GetSession(sessionKeyUsed)?.TotalCacheWriteInputTokens ?? 0;
+                var prevReasoningOutput = traceStore?.GetSession(sessionKeyUsed)?.TotalReasoningOutputTokens ?? 0;
+                var prevLlmCalls = traceStore?.GetSession(sessionKeyUsed)?.TokenUsageCount ?? 0;
 
                 TracingChatClient.CurrentSessionKey = sessionKeyUsed;
                 TracingChatClient.ResetCallState(sessionKeyUsed);
@@ -202,7 +206,11 @@ public sealed class AguiChannelService(
                 var session     = traceStore?.GetSession(sessionKeyUsed);
                 var inputDelta  = (session?.TotalInputTokens  ?? 0) - prevInput;
                 var outputDelta = (session?.TotalOutputTokens ?? 0) - prevOutput;
-                if (inputDelta > 0 || outputDelta > 0)
+                var cachedInputDelta = (session?.TotalCachedInputTokens ?? 0) - prevCachedInput;
+                var cacheWriteInputDelta = (session?.TotalCacheWriteInputTokens ?? 0) - prevCacheWriteInput;
+                var reasoningOutputDelta = (session?.TotalReasoningOutputTokens ?? 0) - prevReasoningOutput;
+                var llmCallDelta = (session?.TokenUsageCount ?? 0) - prevLlmCalls;
+                if (inputDelta > 0 || outputDelta > 0 || cachedInputDelta > 0 || cacheWriteInputDelta > 0 || reasoningOutputDelta > 0)
                 {
                     var threadLabel = sessionKeyUsed.StartsWith("ag-ui:") ? sessionKeyUsed["ag-ui:".Length..] : sessionKeyUsed;
                     tokenUsageStore?.Record(new TokenUsageRecord
@@ -215,7 +223,11 @@ public sealed class AguiChannelService(
                         ThreadId = threadLabel,
                         SessionKey = sessionKeyUsed,
                         InputTokens = inputDelta,
-                        OutputTokens = outputDelta
+                        OutputTokens = outputDelta,
+                        CachedInputTokens = cachedInputDelta,
+                        CacheWriteInputTokens = cacheWriteInputDelta,
+                        ReasoningOutputTokens = reasoningOutputDelta,
+                        LlmCallCount = llmCallDelta
                     });
                 }
             }

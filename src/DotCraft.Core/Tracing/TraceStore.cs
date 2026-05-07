@@ -326,7 +326,7 @@ public sealed class TraceStore
 
     public TraceSummary GetSummary()
     {
-        long totalInput = 0, totalOutput = 0, totalCachedInput = 0, totalReasoningOutput = 0;
+        long totalInput = 0, totalOutput = 0, totalCachedInput = 0, totalCacheWriteInput = 0, totalReasoningOutput = 0;
         int totalRequests = 0, totalResponses = 0, totalToolCalls = 0, totalErrors = 0, totalContextCompactions = 0;
         long totalToolDuration = 0, maxToolDuration = 0;
 
@@ -335,6 +335,7 @@ public sealed class TraceStore
             totalInput += session.TotalInputTokens;
             totalOutput += session.TotalOutputTokens;
             totalCachedInput += session.TotalCachedInputTokens;
+            totalCacheWriteInput += session.TotalCacheWriteInputTokens;
             totalReasoningOutput += session.TotalReasoningOutputTokens;
             totalRequests += session.RequestCount;
             totalResponses += session.ResponseCount;
@@ -359,6 +360,7 @@ public sealed class TraceStore
             TotalInputTokens = totalInput,
             TotalOutputTokens = totalOutput,
             TotalCachedInputTokens = totalCachedInput,
+            TotalCacheWriteInputTokens = totalCacheWriteInput,
             TotalReasoningOutputTokens = totalReasoningOutput,
             TotalTokens = totalInput + totalOutput
         };
@@ -448,12 +450,15 @@ public sealed class TraceStore
                 ApplyPromptCacheChangeSummary(session, evt);
                 break;
             case TraceEventType.TokenUsage:
+                session.TokenUsageCount++;
                 if (evt.InputTokens.HasValue)
                     session.AddInputTokens(evt.InputTokens.Value);
                 if (evt.OutputTokens.HasValue)
                     session.AddOutputTokens(evt.OutputTokens.Value);
                 if (evt.CachedInputTokens.HasValue)
                     session.AddCachedInputTokens(evt.CachedInputTokens.Value);
+                if (evt.CacheWriteInputTokens.HasValue)
+                    session.AddCacheWriteInputTokens(evt.CacheWriteInputTokens.Value);
                 if (evt.ReasoningOutputTokens.HasValue)
                     session.AddReasoningOutputTokens(evt.ReasoningOutputTokens.Value);
                 break;
@@ -614,9 +619,11 @@ public sealed class TraceStore
                 error_count,
                 context_compaction_count,
                 thinking_count,
+                token_usage_count,
                 total_input_tokens,
                 total_output_tokens,
                 total_cached_input_tokens,
+                total_cache_write_input_tokens,
                 total_reasoning_output_tokens,
                 total_tool_duration_ms,
                 max_tool_duration_ms,
@@ -633,9 +640,11 @@ public sealed class TraceStore
                 $error_count,
                 $context_compaction_count,
                 $thinking_count,
+                $token_usage_count,
                 $total_input_tokens,
                 $total_output_tokens,
                 $total_cached_input_tokens,
+                $total_cache_write_input_tokens,
                 $total_reasoning_output_tokens,
                 $total_tool_duration_ms,
                 $max_tool_duration_ms,
@@ -652,9 +661,11 @@ public sealed class TraceStore
                 error_count = excluded.error_count,
                 context_compaction_count = excluded.context_compaction_count,
                 thinking_count = excluded.thinking_count,
+                token_usage_count = excluded.token_usage_count,
                 total_input_tokens = excluded.total_input_tokens,
                 total_output_tokens = excluded.total_output_tokens,
                 total_cached_input_tokens = excluded.total_cached_input_tokens,
+                total_cache_write_input_tokens = excluded.total_cache_write_input_tokens,
                 total_reasoning_output_tokens = excluded.total_reasoning_output_tokens,
                 total_tool_duration_ms = excluded.total_tool_duration_ms,
                 max_tool_duration_ms = excluded.max_tool_duration_ms,
@@ -671,9 +682,11 @@ public sealed class TraceStore
         command.Parameters.AddWithValue("$error_count", session.ErrorCount);
         command.Parameters.AddWithValue("$context_compaction_count", session.ContextCompactionCount);
         command.Parameters.AddWithValue("$thinking_count", session.ThinkingCount);
+        command.Parameters.AddWithValue("$token_usage_count", session.TokenUsageCount);
         command.Parameters.AddWithValue("$total_input_tokens", session.TotalInputTokens);
         command.Parameters.AddWithValue("$total_output_tokens", session.TotalOutputTokens);
         command.Parameters.AddWithValue("$total_cached_input_tokens", session.TotalCachedInputTokens);
+        command.Parameters.AddWithValue("$total_cache_write_input_tokens", session.TotalCacheWriteInputTokens);
         command.Parameters.AddWithValue("$total_reasoning_output_tokens", session.TotalReasoningOutputTokens);
         command.Parameters.AddWithValue("$total_tool_duration_ms", session.TotalToolDurationMs);
         command.Parameters.AddWithValue("$max_tool_duration_ms", session.MaxToolDurationMs);
@@ -741,6 +754,7 @@ public sealed class TraceStore
             ErrorCount = session.ErrorCount,
             ContextCompactionCount = session.ContextCompactionCount,
             ThinkingCount = session.ThinkingCount,
+            TokenUsageCount = session.TokenUsageCount,
             FinalSystemPrompt = session.FinalSystemPrompt,
             SystemPromptHash = session.SystemPromptHash,
             ToolSchemaHash = session.ToolSchemaHash,
@@ -757,6 +771,7 @@ public sealed class TraceStore
             session.TotalInputTokens,
             session.TotalOutputTokens,
             session.TotalCachedInputTokens,
+            session.TotalCacheWriteInputTokens,
             session.TotalReasoningOutputTokens,
             session.TotalToolDurationMs,
             session.MaxToolDurationMs);
@@ -794,6 +809,10 @@ public sealed class TraceSummary
     public long TotalOutputTokens { get; init; }
 
     public long TotalCachedInputTokens { get; init; }
+
+    public long TotalCacheWriteInputTokens { get; init; }
+
+    public long TotalFreshInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens - TotalCacheWriteInputTokens);
 
     public long TotalNonCachedInputTokens => Math.Max(0, TotalInputTokens - TotalCachedInputTokens);
 

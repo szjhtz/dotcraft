@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using DotCraft.Protocol;
+using DotCraft.Tracing;
 
 namespace DotCraft.Agents;
 
@@ -16,8 +17,9 @@ internal sealed class SubAgentProgressChatClient(
     IChatClient innerClient,
     SubAgentProgressBridge.ProgressEntry progressEntry) : DelegatingChatClient(innerClient)
 {
-    private long _lastSnapshotInput;
-    private long _lastSnapshotOutput;
+    private readonly TokenUsageRequestAccumulator _usageAccumulator = new();
+    private int _nextSyntheticRequestIndex;
+    private int? _currentUsageRequestIndex;
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> chatMessages,
@@ -28,21 +30,8 @@ internal sealed class SubAgentProgressChatClient(
 
         if (response.Usage != null)
         {
-            var curIn = response.Usage.InputTokenCount ?? 0;
-            var curOut = response.Usage.OutputTokenCount ?? 0;
-            if (curIn > 0 || curOut > 0)
-            {
-                UsageSnapshotDelta.Compute(
-                    curIn,
-                    curOut,
-                    ref _lastSnapshotInput,
-                    ref _lastSnapshotOutput,
-                    out var deltaIn,
-                    out var deltaOut);
-
-                if (deltaIn > 0 || deltaOut > 0)
-                    progressEntry.AddTokens(deltaIn, deltaOut);
-            }
+            _currentUsageRequestIndex = Interlocked.Increment(ref _nextSyntheticRequestIndex);
+            ApplyUsage(TokenUsageExtractor.FromResponse(response));
         }
 
         return response;
@@ -53,31 +42,46 @@ internal sealed class SubAgentProgressChatClient(
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        _currentUsageRequestIndex = Interlocked.Increment(ref _nextSyntheticRequestIndex);
         await foreach (var update in base.GetStreamingResponseAsync(chatMessages, options, cancellationToken))
         {
+            var updateRequestIndex = TokenUsageRequestMetadata.TryGetRequestIndex(update);
+            if (updateRequestIndex.HasValue)
+                _currentUsageRequestIndex = updateRequestIndex;
+
             foreach (var content in update.Contents)
             {
                 if (content is UsageContent usage)
                 {
-                    var curIn = usage.Details.InputTokenCount ?? 0;
-                    var curOut = usage.Details.OutputTokenCount ?? 0;
-                    if (curIn > 0 || curOut > 0)
-                    {
-                        UsageSnapshotDelta.Compute(
-                            curIn,
-                            curOut,
-                            ref _lastSnapshotInput,
-                            ref _lastSnapshotOutput,
-                            out var deltaIn,
-                            out var deltaOut);
-
-                        if (deltaIn > 0 || deltaOut > 0)
-                            progressEntry.AddTokens(deltaIn, deltaOut);
-                    }
+                    ApplyUsage(TokenUsageExtractor.FromUsageContent(usage));
                 }
             }
 
             yield return update;
+        }
+    }
+
+    private void ApplyUsage(TokenUsageSnapshot snapshot)
+    {
+        if (snapshot.InputTokens <= 0 && snapshot.OutputTokens <= 0)
+            return;
+
+        var usageDelta = _usageAccumulator.ApplySnapshot(snapshot, _currentUsageRequestIndex);
+        var delta = usageDelta.Usage;
+
+        if (delta.InputTokens > 0
+            || delta.OutputTokens > 0
+            || delta.CachedInputTokens > 0
+            || delta.CacheWriteInputTokens > 0
+            || delta.ReasoningOutputTokens > 0)
+        {
+            progressEntry.AddTokens(
+                delta.InputTokens,
+                delta.OutputTokens,
+                delta.CachedInputTokens,
+                delta.CacheWriteInputTokens,
+                delta.ReasoningOutputTokens,
+                usageDelta.LlmCallDelta);
         }
     }
 }

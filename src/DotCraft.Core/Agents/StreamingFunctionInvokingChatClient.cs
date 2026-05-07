@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using DotCraft.Context;
 using DotCraft.Protocol;
+using DotCraft.Tracing;
 using Microsoft.Extensions.AI;
 using OpenAiStreamingUpdate = OpenAI.Chat.StreamingChatCompletionUpdate;
 
@@ -172,9 +173,16 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
             var lastYieldedUpdateIndex = 0;
             var toolCallPreviewTrackers = new Dictionary<int, ToolCallTracker>();
             Dictionary<ChatResponseUpdate, IReadOnlyList<ToolCallArgumentsDeltaContent>>? previewContentsByUpdate = null;
+            var requestMarked = false;
 
             await foreach (var update in base.GetStreamingResponseAsync(samplingMessages, options, cancellationToken))
             {
+                if (!requestMarked)
+                {
+                    TokenUsageRequestMetadata.MarkRequestStart(update, iteration + 1);
+                    requestMarked = true;
+                }
+
                 var addedPreviewContents = AddToolCallArgumentPreviews(update, toolCallPreviewTrackers);
                 if (addedPreviewContents is { Count: > 0 })
                     (previewContentsByUpdate ??= [])[update] = addedPreviewContents;

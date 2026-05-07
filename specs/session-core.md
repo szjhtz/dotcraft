@@ -274,10 +274,15 @@ Fields:
 - `CompletedAt` (UTC timestamp, nullable)
   - Set when Status transitions to a terminal state (`Completed`, `Failed`, `Cancelled`).
 - `TokenUsage` (object, nullable)
-  - `InputTokens` (long)
+  - `InputTokens` (long): cumulative billing input across all LLM requests in the Turn.
   - `OutputTokens` (long)
+  - `CachedInputTokens` (long): cache-hit/cache-read input tokens.
+  - `CacheWriteInputTokens` (long): cache-creation/cache-write input tokens.
+  - `FreshInputTokens` (long, derived): `max(0, InputTokens - CachedInputTokens - CacheWriteInputTokens)`.
+  - `NonCachedInputTokens` (long, derived): `max(0, InputTokens - CachedInputTokens)`.
+  - `ReasoningOutputTokens` (long)
   - `TotalTokens` (long)
-  - Accumulated during the Turn from `UsageContent` in the streaming response.
+  - Accumulated across every model request in the Turn from `UsageContent` in the streaming response. This is billing usage, not context-window occupancy.
 - `Error` (string, nullable)
   - Human-readable error description when Status is `Failed`.
 
@@ -908,13 +913,25 @@ SessionEvent
     ```
     {
       "inputTokens": long,      // Input tokens consumed in this iteration
-      "outputTokens": long      // Output tokens consumed in this iteration
+      "outputTokens": long,     // Output tokens consumed in this iteration
+      "cachedInputTokens": long,
+      "cacheWriteInputTokens": long,
+      "freshInputTokens": long,
+      "reasoningOutputTokens": long,
+      "llmCallDelta": long,
+      "contextInputTokens": long,
+      "turnInputTokens": long,
+      "turnOutputTokens": long,
+      "turnLlmCalls": long
     }
     ```
 
   - **Emission rules**:
     - The event is emitted by Session Core immediately after processing a `UsageContent` from the agent's streaming output, provided the token counts are non-zero.
-    - Each emission carries only the delta for the current iteration, not cumulative totals. Clients must accumulate deltas locally to display running totals.
+    - Each emission carries only the delta for the current LLM request, not cumulative totals. `turnInputTokens`, `turnOutputTokens`, and `turnLlmCalls` are optional cumulative billing totals emitted for convenience.
+    - `contextInputTokens` is the latest main-agent request input snapshot used for context-window occupancy. It is not the sum of Turn input usage.
+    - Example: request snapshots `12000 | 20000 | 41000` produce `turnInputTokens = 73000` and `contextInputTokens = 41000`.
+    - Cache-hit totals follow the same request-sum rule, so dashboards can show how much of the cumulative input was cache-read input for billing verification.
     - At most one `usage/delta` event is emitted per LLM iteration (the `UsageContent` is emitted once at the end of each iteration by the provider, not per token).
     - The event is a sideband signal — it may interleave with `item/started`, `item/delta`, and `item/completed` events. This is expected behavior.
   - **Relationship to Turn.TokenUsage**: The sum of all `usage/delta` events for a Turn's main agent equals the main-agent portion of `Turn.TokenUsage`. SubAgent tokens are reported separately via `subagent/progress` and are added to `Turn.TokenUsage` at turn completion.

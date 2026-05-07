@@ -11,8 +11,11 @@ public readonly record struct TokenUsageSnapshot(
     long InputTokens,
     long OutputTokens,
     long CachedInputTokens,
-    long ReasoningOutputTokens)
+    long ReasoningOutputTokens,
+    long CacheWriteInputTokens = 0)
 {
+    public long FreshInputTokens => Math.Max(0, InputTokens - CachedInputTokens - CacheWriteInputTokens);
+
     public long NonCachedInputTokens => Math.Max(0, InputTokens - CachedInputTokens);
 
     public long TotalTokens => InputTokens + OutputTokens;
@@ -39,30 +42,54 @@ public static class TokenUsageExtractor
         object? metadata = null,
         object? rawRepresentation = null)
     {
-        var input = details?.InputTokenCount
-            ?? TryFindLong(metadata, TokenField.Input)
-            ?? TryFindLong(rawRepresentation, TokenField.Input)
-            ?? 0;
+        var promptInput = TryFindLong(metadata, TokenField.PromptInput)
+            ?? TryFindLong(rawRepresentation, TokenField.PromptInput);
+        var nativeInput = TryFindLong(metadata, TokenField.NativeInput)
+            ?? TryFindLong(rawRepresentation, TokenField.NativeInput);
         var output = details?.OutputTokenCount
             ?? TryFindLong(metadata, TokenField.Output)
             ?? TryFindLong(rawRepresentation, TokenField.Output)
             ?? 0;
+        var cacheRead = TryFindLong(metadata, TokenField.CacheReadInput)
+            ?? TryFindLong(rawRepresentation, TokenField.CacheReadInput);
         var cached = details?.CachedInputTokenCount
             ?? TryFindLong(details?.AdditionalCounts, TokenField.CachedInput)
+            ?? cacheRead
             ?? TryFindLong(metadata, TokenField.CachedInput)
             ?? TryFindLong(rawRepresentation, TokenField.CachedInput)
+            ?? 0;
+        var cacheWrite = TryFindLong(metadata, TokenField.CacheWriteInput)
+            ?? TryFindLong(rawRepresentation, TokenField.CacheWriteInput)
+            ?? TryFindLong(details?.AdditionalCounts, TokenField.CacheWriteInput)
             ?? 0;
         var reasoning = details?.ReasoningTokenCount
             ?? TryFindLong(details?.AdditionalCounts, TokenField.ReasoningOutput)
             ?? TryFindLong(metadata, TokenField.ReasoningOutput)
             ?? TryFindLong(rawRepresentation, TokenField.ReasoningOutput)
             ?? 0;
+        var input = details?.InputTokenCount
+            ?? promptInput
+            ?? nativeInput
+            ?? TryFindLong(metadata, TokenField.Input)
+            ?? TryFindLong(rawRepresentation, TokenField.Input)
+            ?? 0;
+
+        // Anthropic native usage reports input_tokens as only the non-cache portion
+        // after the last breakpoint. When no OpenAI-style prompt_tokens total is
+        // present, reconstruct total input from native cache read/write fields.
+        if (!promptInput.HasValue
+            && nativeInput.HasValue
+            && (cacheRead.GetValueOrDefault() > 0 || cacheWrite > 0))
+        {
+            input = nativeInput.Value + cacheRead.GetValueOrDefault() + cacheWrite;
+        }
 
         return new TokenUsageSnapshot(
             Math.Max(0, input),
             Math.Max(0, output),
             Math.Clamp(cached, 0, Math.Max(0, input)),
-            Math.Max(0, reasoning));
+            Math.Max(0, reasoning),
+            Math.Clamp(cacheWrite, 0, Math.Max(0, input)));
     }
 
     private static long? TryFindLong(object? value, TokenField field)
@@ -95,6 +122,28 @@ public static class TokenUsageExtractor
                 var nested = TryFindLongCore(entry.Value, field, visited);
                 if (nested.HasValue)
                     return nested.Value;
+            }
+        }
+
+        if (value is IEnumerable enumerable && value is not string)
+        {
+            foreach (var item in enumerable)
+            {
+                var itemType = item?.GetType();
+                if (itemType == null)
+                    continue;
+
+                var keyProperty = itemType.GetProperty("Key");
+                var valueProperty = itemType.GetProperty("Value");
+                if (keyProperty?.GetValue(item) is string key)
+                {
+                    var itemValue = valueProperty?.GetValue(item);
+                    if (IsFieldName(key, field) && TryConvertLong(itemValue, out var direct))
+                        return direct;
+                    var nestedValue = TryFindLongCore(itemValue, field, visited);
+                    if (nestedValue.HasValue)
+                        return nestedValue.Value;
+                }
             }
         }
 
@@ -198,8 +247,12 @@ public static class TokenUsageExtractor
         return field switch
         {
             TokenField.Input => normalized is "inputtokens" or "inputtokencount" or "prompttokens" or "prompttokencount",
-            TokenField.Output => normalized is "outputtokens" or "outputtokencount" or "completiontokens" or "completiontokencount",
-            TokenField.CachedInput => normalized is "cachedtokens" or "cachedinputtokens" or "cachedinputtokencount",
+            TokenField.NativeInput => normalized is "inputtokens" or "inputtokencount",
+            TokenField.PromptInput => normalized is "prompttokens" or "prompttokencount",
+            TokenField.Output => normalized is "outputtokens" or "outputtokencount" or "completiontokens" or "completiontokencount" or "candidatestokencount",
+            TokenField.CachedInput => normalized is "cachedtokens" or "cachedinputtokens" or "cachedinputtokencount" or "cachedcontenttokencount",
+            TokenField.CacheReadInput => normalized is "cachereadinputtokens" or "cachereadinputtokencount" or "cachedcontenttokencount",
+            TokenField.CacheWriteInput => normalized is "cachecreationinputtokens" or "cachewriteinputtokens" or "cachewriteinputtokencount",
             TokenField.ReasoningOutput => normalized is "reasoningtokens" or "reasoningoutputtokens" or "reasoningoutputtokencount" or "reasoningtokencount",
             _ => false
         };
@@ -211,8 +264,12 @@ public static class TokenUsageExtractor
     private enum TokenField
     {
         Input,
+        NativeInput,
+        PromptInput,
         Output,
         CachedInput,
+        CacheReadInput,
+        CacheWriteInput,
         ReasoningOutput
     }
 }

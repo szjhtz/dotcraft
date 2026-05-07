@@ -188,6 +188,14 @@ public sealed record SubAgentProgressEntry
     /// </summary>
     public long OutputTokens { get; init; }
 
+    public long CachedInputTokens { get; init; }
+
+    public long CacheWriteInputTokens { get; init; }
+
+    public long FreshInputTokens => Math.Max(0, InputTokens - CachedInputTokens - CacheWriteInputTokens);
+
+    public long ReasoningOutputTokens { get; init; }
+
     /// <summary>
     /// Whether the SubAgent has finished execution.
     /// </summary>
@@ -211,11 +219,49 @@ public sealed record UsageDeltaPayload
     public long OutputTokens { get; init; }
 
     /// <summary>
+    /// Cache-hit input tokens consumed in this LLM iteration (delta, not cumulative).
+    /// </summary>
+    public long CachedInputTokens { get; init; }
+
+    /// <summary>
+    /// Cache-write input tokens consumed in this LLM iteration (delta, not cumulative).
+    /// </summary>
+    public long CacheWriteInputTokens { get; init; }
+
+    /// <summary>
+    /// Fresh input tokens consumed in this LLM iteration (delta, not cumulative).
+    /// </summary>
+    public long FreshInputTokens => Math.Max(0, InputTokens - CachedInputTokens - CacheWriteInputTokens);
+
+    /// <summary>
+    /// Reasoning output tokens consumed in this LLM iteration (delta, not cumulative).
+    /// </summary>
+    public long ReasoningOutputTokens { get; init; }
+
+    /// <summary>
+    /// 1 when this delta starts a new LLM request, otherwise 0.
+    /// </summary>
+    public int LlmCallDelta { get; init; }
+
+    /// <summary>
     /// Optional persisted context-occupancy input-token snapshot for the thread
     /// at the time of the delta. Desktop clients use this to drive the
     /// context-usage ring without waiting for turn completion.
+    /// This is an alias of <see cref="ContextInputTokens"/> for compatibility,
+    /// not billing-cumulative input usage.
     /// </summary>
     public long? TotalInputTokens { get; init; }
+
+    /// <summary>
+    /// Optional persisted context-occupancy input-token snapshot for the thread.
+    /// This is current context window occupancy, not billing-cumulative usage.
+    /// </summary>
+    public long? ContextInputTokens { get; init; }
+
+    /// <summary>
+    /// Optional cumulative billing input tokens emitted so far in the current turn.
+    /// </summary>
+    public long? TurnInputTokens { get; init; }
 
     /// <summary>
     /// Optional cumulative output-token total emitted so far in the current
@@ -223,6 +269,16 @@ public sealed record UsageDeltaPayload
     /// context-occupancy calculations.
     /// </summary>
     public long? TotalOutputTokens { get; init; }
+
+    /// <summary>
+    /// Optional cumulative billing output tokens emitted so far in the current turn.
+    /// </summary>
+    public long? TurnOutputTokens { get; init; }
+
+    /// <summary>
+    /// Optional cumulative LLM request count emitted so far in the current turn.
+    /// </summary>
+    public int? TurnLlmCalls { get; init; }
 
     /// <summary>
     /// Optional full context-usage snapshot matching <see cref="TotalInputTokens"/>.

@@ -143,6 +143,10 @@ public sealed class ApiChannelService(
 
                     var inputBefore = capturedTraceStore?.GetSession(sessionKey)?.TotalInputTokens ?? 0;
                     var outputBefore = capturedTraceStore?.GetSession(sessionKey)?.TotalOutputTokens ?? 0;
+                    var cachedInputBefore = capturedTraceStore?.GetSession(sessionKey)?.TotalCachedInputTokens ?? 0;
+                    var cacheWriteInputBefore = capturedTraceStore?.GetSession(sessionKey)?.TotalCacheWriteInputTokens ?? 0;
+                    var reasoningOutputBefore = capturedTraceStore?.GetSession(sessionKey)?.TotalReasoningOutputTokens ?? 0;
+                    var llmCallsBefore = capturedTraceStore?.GetSession(sessionKey)?.TokenUsageCount ?? 0;
 
                     try
                     {
@@ -155,7 +159,11 @@ public sealed class ApiChannelService(
                             var session = capturedTraceStore.GetSession(sessionKey);
                             var inputDelta = (session?.TotalInputTokens ?? 0) - inputBefore;
                             var outputDelta = (session?.TotalOutputTokens ?? 0) - outputBefore;
-                            if (inputDelta > 0 || outputDelta > 0)
+                            var cachedInputDelta = (session?.TotalCachedInputTokens ?? 0) - cachedInputBefore;
+                            var cacheWriteInputDelta = (session?.TotalCacheWriteInputTokens ?? 0) - cacheWriteInputBefore;
+                            var reasoningOutputDelta = (session?.TotalReasoningOutputTokens ?? 0) - reasoningOutputBefore;
+                            var llmCallDelta = (session?.TokenUsageCount ?? 0) - llmCallsBefore;
+                            if (inputDelta > 0 || outputDelta > 0 || cachedInputDelta > 0 || cacheWriteInputDelta > 0 || reasoningOutputDelta > 0)
                             {
                                 capturedTokenUsageStore.Record(new TokenUsageRecord
                                 {
@@ -166,7 +174,11 @@ public sealed class ApiChannelService(
                                     SubjectLabel = sessionKey,
                                     SessionKey = sessionKey,
                                     InputTokens = inputDelta,
-                                    OutputTokens = outputDelta
+                                    OutputTokens = outputDelta,
+                                    CachedInputTokens = cachedInputDelta,
+                                    CacheWriteInputTokens = cacheWriteInputDelta,
+                                    ReasoningOutputTokens = reasoningOutputDelta,
+                                    LlmCallCount = llmCallDelta
                                 });
                             }
                         }

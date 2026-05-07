@@ -1,5 +1,6 @@
 using DotCraft.Context;
 using DotCraft.Protocol;
+using DotCraft.Tracing;
 
 namespace DotCraft.Tests.Protocol;
 
@@ -9,6 +10,62 @@ namespace DotCraft.Tests.Protocol;
 /// </summary>
 public sealed class UsageSnapshotDeltaTests
 {
+    [Fact]
+    public void RequestAccumulator_ExplicitRequestBoundaries_SumIncreasingRequestInputs()
+    {
+        var accumulator = new TokenUsageRequestAccumulator();
+        long totalInput = 0;
+        long totalCachedInput = 0;
+        long latestContextInput = 0;
+        var llmCalls = 0;
+
+        void Step(int requestIndex, long input, long cachedInput)
+        {
+            var delta = accumulator.ApplySnapshot(
+                new TokenUsageSnapshot(
+                    InputTokens: input,
+                    OutputTokens: 0,
+                    CachedInputTokens: cachedInput,
+                    ReasoningOutputTokens: 0),
+                requestIndex);
+            totalInput += delta.Usage.InputTokens;
+            totalCachedInput += delta.Usage.CachedInputTokens;
+            latestContextInput = input;
+            llmCalls += delta.LlmCallDelta;
+        }
+
+        Step(1, 12_000, 8_000);
+        Step(2, 20_000, 18_000);
+        Step(3, 41_000, 40_000);
+
+        Assert.Equal(73_000, totalInput);
+        Assert.Equal(66_000, totalCachedInput);
+        Assert.Equal(41_000, latestContextInput);
+        Assert.Equal(3, llmCalls);
+    }
+
+    [Fact]
+    public void RequestAccumulator_SameRequestCumulativeSnapshots_YieldFinalRequestTotal()
+    {
+        var accumulator = new TokenUsageRequestAccumulator();
+
+        var first = accumulator.ApplySnapshot(
+            new TokenUsageSnapshot(2_000, OutputTokens: 0, CachedInputTokens: 1_000, ReasoningOutputTokens: 0),
+            requestIndex: 1);
+        var second = accumulator.ApplySnapshot(
+            new TokenUsageSnapshot(2_100, OutputTokens: 50, CachedInputTokens: 1_100, ReasoningOutputTokens: 0),
+            requestIndex: 1);
+
+        Assert.Equal(2_000, first.Usage.InputTokens);
+        Assert.Equal(1, first.LlmCallDelta);
+        Assert.Equal(100, second.Usage.InputTokens);
+        Assert.Equal(100, second.Usage.CachedInputTokens);
+        Assert.Equal(50, second.Usage.OutputTokens);
+        Assert.Equal(0, second.LlmCallDelta);
+        Assert.Equal(2_100, first.Usage.InputTokens + second.Usage.InputTokens);
+        Assert.Equal(1_100, first.Usage.CachedInputTokens + second.Usage.CachedInputTokens);
+    }
+
     [Fact]
     public void MonotonicSnapshots_2000_2100_2100_YieldDeltasSummingToFinalInput()
     {
@@ -55,14 +112,24 @@ public sealed class UsageSnapshotDeltaTests
     public void TokenTracker_UpdateWithStreamingDeltas_AccumulatesTotalsAndKeepsLastInputSnapshot()
     {
         var tracker = new TokenTracker();
-        tracker.UpdateWithStreamingDeltas(2000, 0, 2000);
+        tracker.UpdateWithStreamingDeltas(2000, 0, 500, 100, 0, 2000);
         Assert.Equal(2000, tracker.TotalInputTokens);
+        Assert.Equal(500, tracker.TotalCachedInputTokens);
+        Assert.Equal(100, tracker.TotalCacheWriteInputTokens);
         Assert.Equal(2000, tracker.LastInputTokens);
 
-        tracker.UpdateWithStreamingDeltas(100, 50, 2100);
-        Assert.Equal(2100, tracker.TotalInputTokens);
+        tracker.UpdateWithStreamingDeltas(51000, 50, 40000, 0, 0, 51000);
+        Assert.Equal(53000, tracker.TotalInputTokens);
+        Assert.Equal(40500, tracker.TotalCachedInputTokens);
+        Assert.Equal(100, tracker.TotalCacheWriteInputTokens);
         Assert.Equal(50, tracker.TotalOutputTokens);
-        Assert.Equal(2100, tracker.LastInputTokens);
+        Assert.Equal(51000, tracker.LastInputTokens);
+
+        tracker.AddSubAgentTokens(1000, 200, 900, 50, 0, llmCallCount: 2);
+        Assert.Equal(1000, tracker.SubAgentInputTokens);
+        Assert.Equal(900, tracker.SubAgentCachedInputTokens);
+        Assert.Equal(50, tracker.SubAgentCacheWriteInputTokens);
+        Assert.Equal(2, tracker.SubAgentLlmCallCount);
     }
 
     [Fact]

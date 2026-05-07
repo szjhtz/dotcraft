@@ -228,9 +228,11 @@ public sealed class StateRuntime
                     error_count INTEGER NOT NULL DEFAULT 0,
                     context_compaction_count INTEGER NOT NULL DEFAULT 0,
                     thinking_count INTEGER NOT NULL DEFAULT 0,
+                    token_usage_count INTEGER NOT NULL DEFAULT 0,
                     total_input_tokens INTEGER NOT NULL DEFAULT 0,
                     total_output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
                     total_reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tool_duration_ms INTEGER NOT NULL DEFAULT 0,
                     max_tool_duration_ms INTEGER NOT NULL DEFAULT 0,
@@ -287,6 +289,7 @@ public sealed class StateRuntime
                     input_tokens INTEGER NOT NULL,
                     output_tokens INTEGER NOT NULL,
                     cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
                     reasoning_output_tokens INTEGER NOT NULL DEFAULT 0
                 );
 
@@ -306,8 +309,12 @@ public sealed class StateRuntime
                     context_label TEXT,
                     thread_id TEXT,
                     session_key TEXT,
+                    llm_call_count INTEGER NOT NULL DEFAULT 1,
                     input_tokens INTEGER NOT NULL,
-                    output_tokens INTEGER NOT NULL
+                    output_tokens INTEGER NOT NULL,
+                    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    reasoning_output_tokens INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_dashboard_usage_source_ts
@@ -327,8 +334,13 @@ public sealed class StateRuntime
             EnsureColumn(connection, "thread_spawn_edges", "supports_resume", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(connection, "thread_spawn_edges", "supports_close", "INTEGER NOT NULL DEFAULT 1");
             EnsureColumn(connection, "trace_sessions", "total_cached_input_tokens", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(connection, "trace_sessions", "token_usage_count", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(connection, "trace_sessions", "total_cache_write_input_tokens", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(connection, "trace_sessions", "total_reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(connection, "token_usage_records", "cache_write_input_tokens", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(connection, "dashboard_usage_records", "cached_input_tokens", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(connection, "dashboard_usage_records", "cache_write_input_tokens", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(connection, "dashboard_usage_records", "llm_call_count", "INTEGER NOT NULL DEFAULT 1");
             EnsureColumn(connection, "dashboard_usage_records", "reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0");
 
             _initialized = true;

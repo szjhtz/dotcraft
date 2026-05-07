@@ -122,6 +122,9 @@ internal sealed class SubAgentProgressAggregator : IAsyncDisposable
                 CurrentToolDisplay = progress?.CurrentToolDisplay ?? progress?.LastToolDisplay,
                 InputTokens = progress?.InputTokens ?? 0,
                 OutputTokens = progress?.OutputTokens ?? 0,
+                CachedInputTokens = progress?.CachedInputTokens ?? 0,
+                CacheWriteInputTokens = progress?.CacheWriteInputTokens ?? 0,
+                ReasoningOutputTokens = progress?.ReasoningOutputTokens ?? 0,
                 IsCompleted = progress?.IsCompleted ?? false
             });
         }

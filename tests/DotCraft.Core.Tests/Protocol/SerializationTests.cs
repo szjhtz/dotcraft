@@ -491,8 +491,12 @@ public class SerializationTests
         {
             InputTokens = 1200,
             OutputTokens = 350,
+            CachedInputTokens = 900,
+            LlmCallDelta = 1,
             TotalInputTokens = 14_820,
-            TotalOutputTokens = 2_610
+            TotalOutputTokens = 2_610,
+            TurnInputTokens = 73_000,
+            TurnLlmCalls = 3
         };
 
         var json = JsonSerializer.Serialize(payload, Opts);
@@ -501,10 +505,17 @@ public class SerializationTests
         Assert.NotNull(deserialized);
         Assert.Equal(1200, deserialized!.InputTokens);
         Assert.Equal(350, deserialized.OutputTokens);
+        Assert.Equal(900, deserialized.CachedInputTokens);
+        Assert.Equal(300, deserialized.FreshInputTokens);
+        Assert.Equal(1, deserialized.LlmCallDelta);
         Assert.Equal(14_820, deserialized.TotalInputTokens);
         Assert.Equal(2_610, deserialized.TotalOutputTokens);
+        Assert.Equal(73_000, deserialized.TurnInputTokens);
+        Assert.Equal(3, deserialized.TurnLlmCalls);
         Assert.Contains("\"totalInputTokens\":14820", json, StringComparison.Ordinal);
         Assert.Contains("\"totalOutputTokens\":2610", json, StringComparison.Ordinal);
+        Assert.Contains("\"turnInputTokens\":73000", json, StringComparison.Ordinal);
+        Assert.Contains("\"turnLlmCalls\":3", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -857,23 +868,31 @@ public class SerializationTests
     [Fact]
     public void TokenUsageInfo_Addition()
     {
-        var a = new TokenUsageInfo { InputTokens = 100, OutputTokens = 50, TotalTokens = 150 };
-        var b = new TokenUsageInfo { InputTokens = 200, OutputTokens = 80, TotalTokens = 280 };
+        var a = new TokenUsageInfo { InputTokens = 100, OutputTokens = 50, CachedInputTokens = 20, CacheWriteInputTokens = 5, LlmCallCount = 1, TotalTokens = 150 };
+        var b = new TokenUsageInfo { InputTokens = 200, OutputTokens = 80, CachedInputTokens = 30, CacheWriteInputTokens = 7, LlmCallCount = 2, TotalTokens = 280 };
         var sum = a + b;
         Assert.Equal(300, sum.InputTokens);
         Assert.Equal(130, sum.OutputTokens);
+        Assert.Equal(50, sum.CachedInputTokens);
+        Assert.Equal(12, sum.CacheWriteInputTokens);
+        Assert.Equal(3, sum.LlmCallCount);
+        Assert.Equal(238, sum.FreshInputTokens);
         Assert.Equal(430, sum.TotalTokens);
     }
 
     [Fact]
     public void TokenUsageInfo_RoundTrip()
     {
-        var usage = new TokenUsageInfo { InputTokens = 1200, OutputTokens = 800, TotalTokens = 2000 };
+        var usage = new TokenUsageInfo { InputTokens = 1200, OutputTokens = 800, CachedInputTokens = 300, CacheWriteInputTokens = 100, LlmCallCount = 2, TotalTokens = 2000 };
         var json = JsonSerializer.Serialize(usage, Opts);
         var deserialized = JsonSerializer.Deserialize<TokenUsageInfo>(json, Opts);
         Assert.NotNull(deserialized);
         Assert.Equal(usage.InputTokens, deserialized.InputTokens);
         Assert.Equal(usage.OutputTokens, deserialized.OutputTokens);
+        Assert.Equal(usage.CachedInputTokens, deserialized.CachedInputTokens);
+        Assert.Equal(usage.CacheWriteInputTokens, deserialized.CacheWriteInputTokens);
+        Assert.Equal(usage.LlmCallCount, deserialized.LlmCallCount);
+        Assert.Equal(usage.FreshInputTokens, deserialized.FreshInputTokens);
         Assert.Equal(usage.TotalTokens, deserialized.TotalTokens);
     }
 

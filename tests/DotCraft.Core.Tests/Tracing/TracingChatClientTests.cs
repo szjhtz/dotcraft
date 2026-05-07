@@ -179,6 +179,12 @@ public sealed class TracingChatClientTests
                     CachedInputTokenCount = 64,
                     ReasoningTokenCount = 7
                 })
+                {
+                    AdditionalProperties = new AdditionalPropertiesDictionary
+                    {
+                        ["cache_creation_input_tokens"] = 12
+                    }
+                }
             ])
         ], "trace-cached");
 
@@ -188,10 +194,35 @@ public sealed class TracingChatClientTests
         Assert.Equal(100, usage.InputTokens);
         Assert.Equal(20, usage.OutputTokens);
         Assert.Equal(64, usage.CachedInputTokens);
+        Assert.Equal(12, usage.CacheWriteInputTokens);
+        Assert.Equal(24, usage.FreshInputTokens);
         Assert.Equal(36, usage.NonCachedInputTokens);
         Assert.Equal(7, usage.ReasoningOutputTokens);
         Assert.Equal(64, session?.TotalCachedInputTokens);
+        Assert.Equal(12, session?.TotalCacheWriteInputTokens);
+        Assert.Equal(24, session?.TotalFreshInputTokens);
         Assert.Equal(0.64, session?.CacheHitRate);
+    }
+
+    [Fact]
+    public async Task StreamingUsage_MultipleRequestBoundaries_RecordEachRequestAndCacheHitTotals()
+    {
+        var store = await RunStreamingAsync([
+            UsageUpdate(requestIndex: 1, input: 12_000, output: 1, cachedInput: 8_000),
+            UsageUpdate(requestIndex: 2, input: 20_000, output: 2, cachedInput: 18_000),
+            UsageUpdate(requestIndex: 3, input: 41_000, output: 8, cachedInput: 40_000)
+        ], "trace-multi-request-usage");
+
+        var usageEvents = EventsOfType(store, "trace-multi-request-usage", TraceEventType.TokenUsage);
+        var session = store.GetSession("trace-multi-request-usage");
+
+        Assert.Equal([12_000, 20_000, 41_000], usageEvents.Select(e => e.InputTokens).ToArray());
+        Assert.Equal([8_000, 18_000, 40_000], usageEvents.Select(e => e.CachedInputTokens).ToArray());
+        Assert.Equal(3, session?.TokenUsageCount);
+        Assert.Equal(73_000, session?.TotalInputTokens);
+        Assert.Equal(66_000, session?.TotalCachedInputTokens);
+        Assert.Equal(7_000, session?.TotalFreshInputTokens);
+        Assert.Equal(11, session?.TotalOutputTokens);
     }
 
     [Fact]
@@ -214,6 +245,94 @@ public sealed class TracingChatClientTests
         Assert.Equal(9, usage.OutputTokens);
         Assert.Equal(72, usage.CachedInputTokens);
         Assert.Equal(3, usage.ReasoningOutputTokens);
+    }
+
+    [Fact]
+    public void TokenUsageExtractor_ReadsOpenAiStylePromptCacheShape()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+            {
+              "usage": {
+                "prompt_tokens": 2006,
+                "completion_tokens": 300,
+                "prompt_tokens_details": { "cached_tokens": 1920 }
+              }
+            }
+            """);
+
+        var usage = TokenUsageExtractor.FromUsageDetails(null, rawRepresentation: doc.RootElement);
+
+        Assert.Equal(2006, usage.InputTokens);
+        Assert.Equal(300, usage.OutputTokens);
+        Assert.Equal(1920, usage.CachedInputTokens);
+        Assert.Equal(0, usage.CacheWriteInputTokens);
+        Assert.Equal(86, usage.FreshInputTokens);
+    }
+
+    [Fact]
+    public void TokenUsageExtractor_ReconstructsAnthropicNativeTotalInput()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+            {
+              "usage": {
+                "input_tokens": 50,
+                "cache_read_input_tokens": 100000,
+                "cache_creation_input_tokens": 5000,
+                "output_tokens": 25
+              }
+            }
+            """);
+
+        var usage = TokenUsageExtractor.FromUsageDetails(null, rawRepresentation: doc.RootElement);
+
+        Assert.Equal(105050, usage.InputTokens);
+        Assert.Equal(100000, usage.CachedInputTokens);
+        Assert.Equal(5000, usage.CacheWriteInputTokens);
+        Assert.Equal(50, usage.FreshInputTokens);
+        Assert.Equal(25, usage.OutputTokens);
+    }
+
+    [Fact]
+    public void TokenUsageExtractor_DoesNotDoubleCountLiteLlmPromptTokensWithCacheCreation()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+            {
+              "usage": {
+                "prompt_tokens": 2006,
+                "completion_tokens": 300,
+                "prompt_tokens_details": { "cached_tokens": 1200 },
+                "cache_creation_input_tokens": 456
+              }
+            }
+            """);
+
+        var usage = TokenUsageExtractor.FromUsageDetails(null, rawRepresentation: doc.RootElement);
+
+        Assert.Equal(2006, usage.InputTokens);
+        Assert.Equal(1200, usage.CachedInputTokens);
+        Assert.Equal(456, usage.CacheWriteInputTokens);
+        Assert.Equal(350, usage.FreshInputTokens);
+    }
+
+    [Fact]
+    public void TokenUsageExtractor_ReadsGeminiUsageMetadataCachedContentTokens()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+            {
+              "usage_metadata": {
+                "prompt_token_count": 4096,
+                "cached_content_token_count": 1024,
+                "candidates_token_count": 128
+              }
+            }
+            """);
+
+        var usage = TokenUsageExtractor.FromUsageDetails(null, rawRepresentation: doc.RootElement);
+
+        Assert.Equal(4096, usage.InputTokens);
+        Assert.Equal(128, usage.OutputTokens);
+        Assert.Equal(1024, usage.CachedInputTokens);
+        Assert.Equal(3072, usage.FreshInputTokens);
     }
 
     private static async Task<TraceStore> RunStreamingAsync(
@@ -264,6 +383,25 @@ public sealed class TracingChatClientTests
         string sessionKey,
         TraceEventType type)
         => store.GetEvents(sessionKey).Where(e => e.Type == type).ToList();
+
+    private static ChatResponseUpdate UsageUpdate(int requestIndex, long input, long output, long cachedInput)
+        => new()
+        {
+            Role = ChatRole.Assistant,
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [TokenUsageRequestMetadata.RequestIndexKey] = requestIndex
+            },
+            Contents =
+            [
+                new UsageContent(new UsageDetails
+                {
+                    InputTokenCount = input,
+                    OutputTokenCount = output,
+                    CachedInputTokenCount = cachedInput
+                })
+            ]
+        };
 
     private sealed class FakeStreamingChatClient(
         ChatResponseUpdate[] updates,
