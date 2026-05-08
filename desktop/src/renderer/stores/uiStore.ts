@@ -32,6 +32,9 @@ interface DetailRevealOptions {
 /** Main content area: conversation vs auxiliary surfaces (Skills, Automations, Settings). */
 export type ActiveMainView = 'conversation' | 'skills' | 'automations' | 'settings' | 'channels'
 
+/** Secondary surface inside the plugin/skill catalog view. */
+export type PluginCatalogSurface = 'plugins' | 'skills'
+
 /** Automations view: Tasks (orchestrator) vs Cron (scheduled jobs). */
 export type AutomationsTab = 'tasks' | 'cron'
 
@@ -51,6 +54,8 @@ export interface WelcomeDraft {
 export interface UIState {
   /** Which primary view fills the center column (conversation panel slot). */
   activeMainView: ActiveMainView
+  /** Active tab inside the plugin/skill catalog view. */
+  pluginCatalogSurface: PluginCatalogSurface
   /** Active tab inside Automations view (spec §21.1). */
   automationsTab: AutomationsTab
   /** User preference for whether the sidebar is collapsed when width allows it. */
@@ -118,6 +123,7 @@ export interface UIState {
 
 interface UIStore extends UIState {
   setActiveMainView(view: ActiveMainView): void
+  setPluginCatalogSurface(surface: PluginCatalogSurface): void
   /** Deselect current thread and open Welcome composer in conversation view. */
   goToNewChat(): void
   setAutomationsTab(tab: AutomationsTab): void
@@ -222,6 +228,7 @@ export function resolveResponsivePanels(
 
 export const useUIStore = create<UIStore & InternalState>((set, get) => ({
   activeMainView: 'conversation',
+  pluginCatalogSurface: 'plugins',
   automationsTab: 'tasks',
   sidebarPreferredCollapsed: false,
   sidebarCollapsed: false,
@@ -246,6 +253,10 @@ export const useUIStore = create<UIStore & InternalState>((set, get) => ({
 
   setActiveMainView(view) {
     set({ activeMainView: view })
+  },
+
+  setPluginCatalogSurface(surface) {
+    set({ pluginCatalogSurface: surface })
   },
 
   goToNewChat() {

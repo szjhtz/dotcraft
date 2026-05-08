@@ -31,6 +31,13 @@ public sealed class CompactionConfig
     public int ContextWindow { get; set; } = 256_000;
 
     /// <summary>
+    /// Upper bound applied to inferred model context-window catalog values.
+    /// Explicit <see cref="ContextWindow"/> values are preserved.
+    /// </summary>
+    [ConfigField(Min = 1000, Hint = "Maximum inferred model context window in tokens.")]
+    public int MaxContextWindow { get; set; } = 256_000;
+
+    /// <summary>
     /// Tokens reserved for the summary output so auto-compact triggers before
     /// the prefix + expected summary exceed the window.
     /// </summary>
@@ -130,6 +137,7 @@ public sealed class CompactionConfig
         AutoCompactEnabled = AutoCompactEnabled,
         ReactiveCompactEnabled = ReactiveCompactEnabled,
         ContextWindow = ContextWindow,
+        MaxContextWindow = MaxContextWindow,
         SummaryReserveTokens = SummaryReserveTokens,
         AutoCompactBufferTokens = AutoCompactBufferTokens,
         WarningBufferTokens = WarningBufferTokens,

@@ -6,7 +6,7 @@ import type { MessageKey } from '../../../shared/locales'
 import { usePluginStore, type PluginDiagnosticEntry, type PluginEntry } from '../../stores/pluginStore'
 import { useConnectionStore } from '../../stores/connectionStore'
 import { useSkillsStore } from '../../stores/skillsStore'
-import { useUIStore } from '../../stores/uiStore'
+import { useUIStore, type PluginCatalogSurface } from '../../stores/uiStore'
 import { addToast } from '../../stores/toastStore'
 import { PillSwitch } from '../ui/PillSwitch'
 import { useConfirmDialog } from '../ui/ConfirmDialog'
@@ -23,7 +23,7 @@ import { RefreshIcon } from '../ui/AppIcons'
 import { PluginCatalogItem, PluginIcon, pluginSourceLabel, pluginSubtitle, pluginTitle } from './PluginCatalogItem'
 import { PluginInstallDialog } from './PluginInstallDialog'
 
-type Surface = 'plugins' | 'skills'
+type Surface = PluginCatalogSurface
 type PluginMode = 'browse' | 'manage'
 type PublisherFilter = 'dotcraft' | 'all'
 type CategoryFilter = string
@@ -55,7 +55,8 @@ export function PluginsView(): JSX.Element {
     fetchSkills,
     toggleSkillEnabled
   } = useSkillsStore()
-  const [surface, setSurface] = useState<Surface>('plugins')
+  const surface = useUIStore((s) => s.pluginCatalogSurface)
+  const setSurface = useUIStore((s) => s.setPluginCatalogSurface)
   const [mode, setMode] = useState<PluginMode>('browse')
   const [query, setQuery] = useState('')
   const [skillManageQuery, setSkillManageQuery] = useState('')

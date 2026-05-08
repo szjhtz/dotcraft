@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LocaleProvider } from '../contexts/LocaleContext'
 import { ToolCallCard } from '../components/conversation/ToolCallCard'
 import { useConversationStore } from '../stores/conversationStore'
+import { usePluginStore } from '../stores/pluginStore'
 import { useSkillsStore } from '../stores/skillsStore'
 import { useUIStore } from '../stores/uiStore'
 import { useViewerTabStore } from '../stores/viewerTabStore'
@@ -319,7 +320,12 @@ describe('ToolCallCard shell rendering', () => {
       skillContent: null,
       contentLoading: false
     })
-    useUIStore.setState({ activeMainView: 'conversation' })
+    useUIStore.setState({ activeMainView: 'conversation', pluginCatalogSurface: 'plugins' })
+    usePluginStore.setState({
+      selectedPluginId: null,
+      selectedPlugin: null,
+      detailLoading: false
+    })
     useViewerTabStore.setState({
       byThread: new Map(),
       currentThreadId: null,
@@ -857,6 +863,24 @@ describe('ToolCallCard shell rendering', () => {
         }
       ]
     })
+    usePluginStore.setState({
+      selectedPluginId: 'previous-plugin',
+      selectedPlugin: {
+        id: 'previous-plugin',
+        displayName: 'Previous Plugin',
+        enabled: true,
+        installed: true,
+        installable: false,
+        removable: false,
+        source: 'local',
+        rootPath: '',
+        functions: [],
+        skills: [],
+        mcpServers: [],
+        lspServers: []
+      },
+      detailLoading: false
+    })
 
     const { container } = renderWithLocale(<ToolCallCard item={item} turnId="turn-1" />)
 
@@ -872,6 +896,8 @@ describe('ToolCallCard shell rendering', () => {
     })
 
     expect(useUIStore.getState().activeMainView).toBe('skills')
+    expect(useUIStore.getState().pluginCatalogSurface).toBe('skills')
+    expect(usePluginStore.getState().selectedPlugin).toBeNull()
     expect(useSkillsStore.getState().selectedSkillName).toBe('demo-skill')
     expect(sendRequest).toHaveBeenCalledWith('skills/list', { includeUnavailable: true })
     expect(sendRequest).toHaveBeenCalledWith('skills/view', { name: 'demo-skill' })
@@ -1042,6 +1068,7 @@ describe('ToolCallCard shell rendering', () => {
     })
 
     expect(useUIStore.getState().activeMainView).toBe('skills')
+    expect(useUIStore.getState().pluginCatalogSurface).toBe('skills')
     expect(useSkillsStore.getState().selectedSkillName).toBe('browser-use')
     expect(sendRequest).toHaveBeenCalledWith('skills/list', { includeUnavailable: true })
     expect(sendRequest).toHaveBeenCalledWith('skills/view', { name: 'browser-use' })

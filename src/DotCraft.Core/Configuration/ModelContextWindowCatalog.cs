@@ -27,10 +27,12 @@ internal static class ModelContextWindowCatalog
         if (hasExplicitContextWindow)
             return;
 
-        config.Compaction.ContextWindow = Resolve(
-            config.Model,
-            CatalogPathForConfig(globalConfigPath),
-            CatalogPathForConfig(workspaceConfigPath));
+        config.Compaction.ContextWindow = ApplyMaxContextWindow(
+            Resolve(
+                config.Model,
+                CatalogPathForConfig(globalConfigPath),
+                CatalogPathForConfig(workspaceConfigPath)),
+            config.Compaction.MaxContextWindow);
     }
 
     public static CompactionConfig ResolveCompactionConfig(AppConfig config, string? model)
@@ -41,10 +43,12 @@ internal static class ModelContextWindowCatalog
         if (config.CompactionContextWindowExplicit)
             return compaction;
 
-        compaction.ContextWindow = Resolve(
-            model,
-            CatalogPathForConfig(config.GlobalConfigPath),
-            CatalogPathForConfig(config.WorkspaceConfigPath));
+        compaction.ContextWindow = ApplyMaxContextWindow(
+            Resolve(
+                model,
+                CatalogPathForConfig(config.GlobalConfigPath),
+                CatalogPathForConfig(config.WorkspaceConfigPath)),
+            compaction.MaxContextWindow);
         return compaction;
     }
 
@@ -207,6 +211,14 @@ internal static class ModelContextWindowCatalog
         return string.IsNullOrWhiteSpace(directory)
             ? null
             : Path.Combine(directory, FileName);
+    }
+
+    private static int ApplyMaxContextWindow(int contextWindow, int maxContextWindow)
+    {
+        if (maxContextWindow < MinContextWindow)
+            return contextWindow;
+
+        return Math.Min(contextWindow, maxContextWindow);
     }
 
     private static bool TryReadContextWindow(JsonElement element, out int value)

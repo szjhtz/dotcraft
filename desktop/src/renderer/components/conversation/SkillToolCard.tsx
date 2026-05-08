@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { translate, type AppLocale } from '../../../shared/locales'
+import { usePluginStore } from '../../stores/pluginStore'
 import { useSkillsStore } from '../../stores/skillsStore'
 import { useUIStore } from '../../stores/uiStore'
 import { SkillAvatar } from '../skills/SkillAvatar'
@@ -25,6 +26,7 @@ export function SkillToolCard({
   children
 }: SkillToolCardProps): JSX.Element {
   const setActiveMainView = useUIStore((s) => s.setActiveMainView)
+  const setPluginCatalogSurface = useUIStore((s) => s.setPluginCatalogSurface)
   const fetchSkills = useSkillsStore((s) => s.fetchSkills)
   const selectSkill = useSkillsStore((s) => s.selectSkill)
   const skills = useSkillsStore((s) => s.skills)
@@ -45,6 +47,8 @@ export function SkillToolCard({
   }, [fetchSkills, normalizedSkillName, skillEntry, skillsLoading])
 
   async function openSkill(): Promise<void> {
+    usePluginStore.getState().clearSelection()
+    setPluginCatalogSurface('skills')
     setActiveMainView('skills')
     await fetchSkills()
     await selectSkill(skillName)

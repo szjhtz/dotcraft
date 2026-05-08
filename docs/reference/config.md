@@ -32,6 +32,7 @@
 | `Compaction.AutoCompactEnabled` | 启用基于阈值的自动压缩 | `true` |
 | `Compaction.ReactiveCompactEnabled` | 启用对 `prompt_too_long` 错误的反应式压缩 | `true` |
 | `Compaction.ContextWindow` | 模型上下文窗口（Token）。未显式配置时，会按当前有效模型（含线程级 model override）从模型上下文窗口映射表推导；未知模型使用 `256000` | 模型映射值 / `256000` |
+| `Compaction.MaxContextWindow` | 从模型映射表推导上下文窗口时使用的上限；显式配置 `Compaction.ContextWindow` 时保留显式值 | `256000` |
 | `Compaction.SummaryReserveTokens` | 为摘要输出预留的 Token | `20000` |
 | `Compaction.AutoCompactBufferTokens` | 低于硬上限多少 Token 时触发自动压缩 | `13000` |
 | `Compaction.WarningBufferTokens` | 到达自动阈值前多少 Token 发出 warning | `20000` |
@@ -48,7 +49,7 @@
 
 ### 模型上下文窗口映射
 
-DotCraft 内置一份常见模型的上下文窗口映射表，并会在 `Compaction.ContextWindow` 未显式配置时按当前有效模型自动选择；线程级 model override 会覆盖工作区默认模型参与匹配。可以通过 JSON 文件补充或覆盖映射：
+DotCraft 内置一份常见模型的上下文窗口映射表，并会在 `Compaction.ContextWindow` 未显式配置时按当前有效模型自动选择；线程级 model override 会覆盖工作区默认模型参与匹配。推导出的模型窗口会被 `Compaction.MaxContextWindow` 限制，默认最高使用 `256000`。可以通过 JSON 文件补充或覆盖映射：
 
 - 全局：`~/.craft/model-context-windows.json`
 - 工作区：`.craft/model-context-windows.json`

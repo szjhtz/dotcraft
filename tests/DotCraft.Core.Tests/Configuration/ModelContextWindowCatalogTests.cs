@@ -112,6 +112,29 @@ public sealed class ModelContextWindowCatalogTests : IDisposable
     }
 
     [Fact]
+    public void ResolveCompactionConfig_CapsInferredModelWindow()
+    {
+        var config = new AppConfig
+        {
+            Model = "mimo-v2.5-pro",
+            Compaction =
+            {
+                MaxContextWindow = 300_000
+            }
+        };
+        ModelContextWindowCatalog.ApplyToConfig(
+            config,
+            System.Text.Json.Nodes.JsonNode.Parse("""{ "Model": "mimo-v2.5-pro" }""")!,
+            globalConfigPath: null,
+            workspaceConfigPath: null);
+
+        var compaction = ModelContextWindowCatalog.ResolveCompactionConfig(config, "gateway/xiaomi/mimo-v2.5-pro");
+
+        Assert.Equal(300_000, config.Compaction.ContextWindow);
+        Assert.Equal(300_000, compaction.ContextWindow);
+    }
+
+    [Fact]
     public void ResolveCompactionConfig_PreservesExplicitContextWindow()
     {
         var config = new AppConfig
@@ -119,7 +142,8 @@ public sealed class ModelContextWindowCatalogTests : IDisposable
             Model = "mimo-v2.5-pro",
             Compaction = new DotCraft.Context.Compaction.CompactionConfig
             {
-                ContextWindow = 123_000
+                ContextWindow = 123_000,
+                MaxContextWindow = 100_000
             }
         };
         ModelContextWindowCatalog.ApplyToConfig(
@@ -193,7 +217,10 @@ public sealed class ModelContextWindowCatalogTests : IDisposable
     {
         var configPath = WriteConfig("workspace", """
             {
-              "Model": "my-model"
+              "Model": "my-model",
+              "Compaction": {
+                "MaxContextWindow": 400000
+              }
             }
             """);
         WriteCatalog("workspace", """
