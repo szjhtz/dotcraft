@@ -37,6 +37,16 @@ describe('threadStore.setThreadList', () => {
     expect(useThreadStore.getState().threadList).toEqual(threads)
   })
 
+  it('filters internal helper threads from the thread list', () => {
+    useThreadStore.getState().setThreadList([
+      makeThreadSummary('visible'),
+      makeThreadSummary('welcome', { originChannel: 'welcome-suggest' }),
+      makeThreadSummary('metadata', { metadata: { 'dotcraft.internal': 'background-helper' } })
+    ])
+
+    expect(useThreadStore.getState().threadList.map((thread) => thread.id)).toEqual(['visible'])
+  })
+
   it('replaces existing list', () => {
     useThreadStore.getState().setThreadList([makeThreadSummary('old')])
     useThreadStore.getState().setThreadList([makeThreadSummary('new1'), makeThreadSummary('new2')])
@@ -111,6 +121,15 @@ describe('threadStore.addThread', () => {
     expect(useThreadStore.getState().threadList).toHaveLength(1)
   })
 
+  it('does not add internal helper threads', () => {
+    useThreadStore.getState().addThread(makeThreadSummary('welcome', { originChannel: 'welcome-suggest' }))
+    useThreadStore.getState().addThread(
+      makeThreadSummary('commit', { metadata: { 'dotcraft.internal': 'commit-suggest' } })
+    )
+
+    expect(useThreadStore.getState().threadList).toEqual([])
+  })
+
   it('skips duplicate thread id (idempotent)', () => {
     const t = makeThreadSummary('same-id')
     useThreadStore.getState().addThread(t)
@@ -130,6 +149,21 @@ describe('threadStore.addThread', () => {
     useThreadStore.getState().addThread(makeThreadSummary('existing'))
     expect(useThreadStore.getState().threadList).toHaveLength(1)
     expect(useThreadStore.getState().threadList[0].id).toBe('existing')
+  })
+})
+
+describe('threadStore.upsertThreads', () => {
+  it('filters internal helper threads from upserts', () => {
+    useThreadStore.getState().setThreadList([makeThreadSummary('visible', { displayName: 'Old' })])
+
+    useThreadStore.getState().upsertThreads([
+      makeThreadSummary('visible', { displayName: 'New' }),
+      makeThreadSummary('welcome', { originChannel: 'welcome-suggest' }),
+      makeThreadSummary('metadata', { metadata: { 'dotcraft.internal': 'background-helper' } })
+    ])
+
+    expect(useThreadStore.getState().threadList.map((thread) => thread.id)).toEqual(['visible'])
+    expect(useThreadStore.getState().threadList[0].displayName).toBe('New')
   })
 })
 

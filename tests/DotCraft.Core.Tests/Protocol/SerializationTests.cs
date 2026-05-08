@@ -12,79 +12,6 @@ public class SerializationTests
     private static readonly JsonSerializerOptions Opts = SessionJsonOptions.Default;
 
     // -------------------------------------------------------------------------
-    // Enum serialization
-    // -------------------------------------------------------------------------
-
-    [Theory]
-    [InlineData(ThreadStatus.Active, "Active")]
-    [InlineData(ThreadStatus.Paused, "Paused")]
-    [InlineData(ThreadStatus.Archived, "Archived")]
-    public void ThreadStatus_SerializesAsString(ThreadStatus status, string expected)
-    {
-        var json = JsonSerializer.Serialize(status, Opts);
-        Assert.Equal($"\"{expected}\"", json);
-    }
-
-    [Theory]
-    [InlineData(TurnStatus.Running, "Running")]
-    [InlineData(TurnStatus.Completed, "Completed")]
-    [InlineData(TurnStatus.WaitingApproval, "WaitingApproval")]
-    [InlineData(TurnStatus.Failed, "Failed")]
-    [InlineData(TurnStatus.Cancelled, "Cancelled")]
-    public void TurnStatus_SerializesAsString(TurnStatus status, string expected)
-    {
-        var json = JsonSerializer.Serialize(status, Opts);
-        Assert.Equal($"\"{expected}\"", json);
-    }
-
-    [Theory]
-    [InlineData(ItemType.UserMessage, "UserMessage")]
-    [InlineData(ItemType.AgentMessage, "AgentMessage")]
-    [InlineData(ItemType.ReasoningContent, "ReasoningContent")]
-    [InlineData(ItemType.ToolExecution, "ToolExecution")]
-    [InlineData(ItemType.ToolCall, "ToolCall")]
-    [InlineData(ItemType.ToolResult, "ToolResult")]
-    [InlineData(ItemType.ApprovalRequest, "ApprovalRequest")]
-    [InlineData(ItemType.ApprovalResponse, "ApprovalResponse")]
-    [InlineData(ItemType.Error, "Error")]
-    [InlineData(ItemType.SystemNotice, "SystemNotice")]
-    public void ItemType_SerializesAsString(ItemType type, string expected)
-    {
-        var json = JsonSerializer.Serialize(type, Opts);
-        Assert.Equal($"\"{expected}\"", json);
-    }
-
-    [Theory]
-    [InlineData(ItemStatus.Started, "Started")]
-    [InlineData(ItemStatus.Streaming, "Streaming")]
-    [InlineData(ItemStatus.Completed, "Completed")]
-    public void ItemStatus_SerializesAsString(ItemStatus status, string expected)
-    {
-        var json = JsonSerializer.Serialize(status, Opts);
-        Assert.Equal($"\"{expected}\"", json);
-    }
-
-    [Theory]
-    [InlineData(HistoryMode.Server, "Server")]
-    [InlineData(HistoryMode.Client, "Client")]
-    public void HistoryMode_SerializesAsString(HistoryMode mode, string expected)
-    {
-        var json = JsonSerializer.Serialize(mode, Opts);
-        Assert.Equal($"\"{expected}\"", json);
-    }
-
-    [Theory]
-    [InlineData(SessionEventType.ThreadCreated, "ThreadCreated")]
-    [InlineData(SessionEventType.TurnStarted, "TurnStarted")]
-    [InlineData(SessionEventType.ItemDelta, "ItemDelta")]
-    [InlineData(SessionEventType.ApprovalRequested, "ApprovalRequested")]
-    public void SessionEventType_SerializesAsString(SessionEventType type, string expected)
-    {
-        var json = JsonSerializer.Serialize(type, Opts);
-        Assert.Equal($"\"{expected}\"", json);
-    }
-
-    // -------------------------------------------------------------------------
     // SessionItem round-trips
     // -------------------------------------------------------------------------
 
@@ -779,53 +706,6 @@ public class SerializationTests
         Assert.Equal(ThreadStatus.Paused, payload.NewStatus);
     }
 
-    // -------------------------------------------------------------------------
-    // SessionIdentity equality
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public void SessionIdentity_Equality_ByAllFields()
-    {
-        var a = new SessionIdentity
-        {
-            ChannelName = "qq",
-            UserId = "user123",
-            ChannelContext = "group_456",
-            WorkspacePath = "/workspace"
-        };
-
-        var b = new SessionIdentity
-        {
-            ChannelName = "qq",
-            UserId = "user123",
-            ChannelContext = "group_456",
-            WorkspacePath = "/workspace"
-        };
-
-        Assert.Equal(a, b);
-        Assert.Equal(a.GetHashCode(), b.GetHashCode());
-    }
-
-    [Fact]
-    public void SessionIdentity_Inequality_DifferentChannel()
-    {
-        var a = new SessionIdentity { ChannelName = "qq", UserId = "user123", WorkspacePath = "/w" };
-        var b = new SessionIdentity { ChannelName = "acp", UserId = "user123", WorkspacePath = "/w" };
-        Assert.NotEqual(a, b);
-    }
-
-    [Fact]
-    public void SessionIdentity_Inequality_DifferentContext()
-    {
-        var a = new SessionIdentity { ChannelName = "qq", UserId = "u1", ChannelContext = "g1", WorkspacePath = "/w" };
-        var b = new SessionIdentity { ChannelName = "qq", UserId = "u1", ChannelContext = "g2", WorkspacePath = "/w" };
-        Assert.NotEqual(a, b);
-    }
-
-    // -------------------------------------------------------------------------
-    // SessionIdGenerator format validation
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void NewThreadId_HasCorrectFormat()
     {
@@ -836,22 +716,6 @@ public class SerializationTests
         Assert.Equal(3, parts.Length);
         Assert.Equal(8, parts[1].Length); // yyyyMMdd
         Assert.Equal(6, parts[2].Length);
-    }
-
-    [Fact]
-    public void NewTurnId_HasCorrectFormat()
-    {
-        Assert.Equal("turn_001", SessionIdGenerator.NewTurnId(1));
-        Assert.Equal("turn_042", SessionIdGenerator.NewTurnId(42));
-        Assert.Equal("turn_999", SessionIdGenerator.NewTurnId(999));
-    }
-
-    [Fact]
-    public void NewItemId_HasCorrectFormat()
-    {
-        Assert.Equal("item_001", SessionIdGenerator.NewItemId(1));
-        Assert.Equal("item_010", SessionIdGenerator.NewItemId(10));
-        Assert.Equal("item_100", SessionIdGenerator.NewItemId(100));
     }
 
     [Fact]

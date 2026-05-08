@@ -28,7 +28,8 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
                 archived_at,
                 history_mode,
                 turn_count,
-                first_user_message
+                first_user_message,
+                metadata_json
             ) VALUES (
                 $thread_id,
                 $rollout_path,
@@ -43,7 +44,8 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
                 $archived_at,
                 $history_mode,
                 $turn_count,
-                $first_user_message
+                $first_user_message,
+                $metadata_json
             )
             ON CONFLICT(thread_id) DO UPDATE SET
                 rollout_path = excluded.rollout_path,
@@ -58,7 +60,8 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
                 archived_at = excluded.archived_at,
                 history_mode = excluded.history_mode,
                 turn_count = excluded.turn_count,
-                first_user_message = excluded.first_user_message
+                first_user_message = excluded.first_user_message,
+                metadata_json = excluded.metadata_json
             """;
         command.Parameters.AddWithValue("$thread_id", thread.Id);
         command.Parameters.AddWithValue("$rollout_path", rolloutPath);
@@ -74,6 +77,7 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
         command.Parameters.AddWithValue("$history_mode", thread.HistoryMode.ToString());
         command.Parameters.AddWithValue("$turn_count", summary.TurnCount);
         command.Parameters.AddWithValue("$first_user_message", (object?)firstUserMessage ?? DBNull.Value);
+        command.Parameters.AddWithValue("$metadata_json", JsonSerializer.Serialize(summary.Metadata));
         command.ExecuteNonQuery();
     }
 
@@ -93,7 +97,8 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
                 status,
                 created_at,
                 updated_at,
-                turn_count
+                turn_count,
+                metadata_json
             FROM threads
             ORDER BY updated_at DESC, thread_id DESC
             """;
@@ -115,11 +120,29 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
                 Status = Enum.TryParse<ThreadStatus>(reader.GetString(6), out var status) ? status : ThreadStatus.Active,
                 CreatedAt = DateTimeOffset.Parse(reader.GetString(7)),
                 LastActiveAt = DateTimeOffset.Parse(reader.GetString(8)),
-                TurnCount = reader.GetInt32(9)
+                TurnCount = reader.GetInt32(9),
+                Metadata = reader.IsDBNull(10)
+                    ? []
+                    : ParseMetadata(reader.GetString(10))
             });
         }
 
         return list;
+    }
+
+    private static Dictionary<string, string> ParseMetadata(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     public string? GetRolloutPath(string threadId)

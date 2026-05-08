@@ -461,6 +461,13 @@ public sealed class AppServerRequestHandler(
             ct,
             p.IncludeSubAgents ?? false);
 
+        if (p.IncludeInternal != true)
+        {
+            threads = threads
+                .Where(t => !ThreadVisibility.IsInternal(t))
+                .ToList();
+        }
+
         if (!string.IsNullOrEmpty(p.ChannelName))
         {
             threads = threads

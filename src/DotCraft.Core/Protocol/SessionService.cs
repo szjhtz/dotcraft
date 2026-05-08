@@ -2785,6 +2785,7 @@ public sealed class SessionService(
                             turn,
                             nextItemSequence,
                             broker);
+                        ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.MemoryConsolidated);
                         broker.PublishSystemEvent("consolidated");
                         break;
 

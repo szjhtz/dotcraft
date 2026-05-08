@@ -678,6 +678,8 @@ public sealed class ThreadListParams
 
     public bool? IncludeSubAgents { get; set; }
 
+    public bool? IncludeInternal { get; set; }
+
     /// <summary>
     /// When set, only threads whose <c>originChannel</c> matches (case-insensitive) are returned.
     /// </summary>

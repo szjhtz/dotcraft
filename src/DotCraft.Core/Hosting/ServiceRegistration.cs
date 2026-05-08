@@ -138,10 +138,7 @@ public static class ServiceRegistration
                 WelcomeSuggestionConstants.ToolProfileName,
                 new[]
                 {
-                    new WelcomeSuggestionToolProvider(
-                        sp.GetRequiredService<SessionPersistenceService>(),
-                        sp.GetRequiredService<MemoryStore>(),
-                        workspacePath)
+                    new WelcomeSuggestionToolProvider(sp.GetRequiredService<MemoryStore>())
                 });
             return reg;
         });

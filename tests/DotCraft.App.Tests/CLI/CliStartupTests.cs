@@ -33,17 +33,4 @@ public sealed class CliStartupTests
 
         Assert.Equal(WorkspaceStartupDecision.MissingWorkspace, decision);
     }
-
-    [Fact]
-    public async Task WriteUsageAsync_IncludesExecAndSubcommands()
-    {
-        using var writer = new StringWriter();
-
-        await CliStartup.WriteUsageAsync(writer);
-
-        var usage = writer.ToString();
-        Assert.Contains("dotcraft exec <prompt>", usage, StringComparison.Ordinal);
-        Assert.Contains("dotcraft exec -", usage, StringComparison.Ordinal);
-        Assert.Contains("dotcraft app-server | gateway | hub | acp | setup | skill", usage, StringComparison.Ordinal);
-    }
 }

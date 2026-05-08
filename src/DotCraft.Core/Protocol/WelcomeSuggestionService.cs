@@ -33,8 +33,6 @@ public sealed class WelcomeSuggestionService(
 {
     private const int DefaultMaxItems = 4;
     private const int MaxItemsLimit = 4;
-    internal const int RecentThreadLimit = 12;
-    private const int MaxSnippetCount = 20;
     private const int MinSnippetLength = 15;
     private const int MaxSnippetLength = 300;
     private const int MaxAgentSummaryChars = 220;
@@ -43,13 +41,12 @@ public sealed class WelcomeSuggestionService(
     internal const int MemoryCharsLimit = 5_000;
     internal const int HistoryTailCharsLimit = 3_000;
     internal const int TotalMemoryCharsLimit = 8_000;
-    private const int MinimumSnippetsForDynamicSuggestions = 2;
     private static readonly TimeSpan SuggestTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan RefreshDebounce = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MinRefreshInterval = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan PersistedWriteTimeout = TimeSpan.FromSeconds(5);
-    private const int PersistedCacheSchemaVersion = 1;
+    private const int PersistedCacheSchemaVersion = 2;
     private static readonly Regex FileExtensionPattern = new(@"\.[A-Za-z0-9]{1,6}\b", RegexOptions.Compiled);
     private static readonly Regex PathPattern = new(@"[A-Za-z0-9_.\-]+[\\/][A-Za-z0-9_.\-]+", RegexOptions.Compiled);
     private static readonly Regex BacktickPattern = new(@"\x60[^\x60]+\x60", RegexOptions.Compiled);
@@ -457,61 +454,25 @@ public sealed class WelcomeSuggestionService(
         }
     }
 
-    private async Task<WelcomeSuggestionEvidence> BuildEvidenceAsync(
+    private Task<WelcomeSuggestionEvidence> BuildEvidenceAsync(
         string workspacePath,
         int maxItems,
         CancellationToken cancellationToken)
     {
-        var summaries = (await persistence.LoadIndexAsync(cancellationToken).ConfigureAwait(false))
-            .Where(summary =>
-                string.Equals(NormalizeWorkspacePath(summary.WorkspacePath), workspacePath, StringComparison.OrdinalIgnoreCase)
-                && summary.Status != ThreadStatus.Archived
-                && !IsInternalThread(summary))
-            .OrderByDescending(summary => summary.LastActiveAt)
-            .Take(RecentThreadLimit)
-            .ToList();
-
-        var snippets = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var summary in summaries)
-        {
-            var thread = await persistence.LoadThreadAsync(summary.Id, cancellationToken).ConfigureAwait(false);
-            if (thread == null)
-                continue;
-
-            foreach (var snippet in ExtractUserSnippets(thread))
-            {
-                if (snippets.Count >= MaxSnippetCount)
-                    break;
-                var key = NormalizeForDedup(snippet);
-                if (!seen.Add(key))
-                    continue;
-                snippets.Add(snippet);
-            }
-
-            if (snippets.Count >= MaxSnippetCount)
-                break;
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
         var memoryText = TrimToLimit(memoryStore.ReadLongTerm(), MemoryCharsLimit);
         var historyText = ReadHistoryTailFromFile(memoryStore.HistoryFilePath, HistoryTailCharsLimit);
         var combinedMemory = CombineMemory(memoryText, historyText, TotalMemoryCharsLimit);
         var fingerprint = BuildFingerprint(
             workspacePath,
             maxItems,
-            summaries,
-            snippets,
             memoryStore.LongTermFilePath,
             memoryStore.HistoryFilePath,
             combinedMemory);
 
-        return new WelcomeSuggestionEvidence(
-            summaries,
-            snippets,
-            combinedMemory,
+        return Task.FromResult(new WelcomeSuggestionEvidence(
             fingerprint,
-            $"{fingerprint}:{maxItems}",
-            snippets.Count >= MinimumSnippetsForDynamicSuggestions || !string.IsNullOrWhiteSpace(combinedMemory));
+            !string.IsNullOrWhiteSpace(combinedMemory)));
     }
 
     private bool IsWelcomeSuggestionsEnabled(string workspacePath)
@@ -530,7 +491,7 @@ public sealed class WelcomeSuggestionService(
     }
 
     private static string BuildGenerationPrompt(int maxItems) =>
-        $"Inspect recent workspace history and memory, infer the likely next tasks, and call {WelcomeSuggestionMethods.ToolName} exactly once with exactly {maxItems} concrete suggestions. If you cannot produce {maxItems} concrete suggestions, do not call the tool.";
+        $"Inspect workspace MEMORY.md and HISTORY.md, infer the likely next tasks, and call {WelcomeSuggestionMethods.ToolName} exactly once with exactly {maxItems} concrete suggestions. If you cannot produce {maxItems} concrete suggestions from memory evidence, do not call the tool.";
 
     private static List<WelcomeSuggestionItem> ParseSuggestionItems(JsonObject? arguments, int maxItems)
     {
@@ -806,8 +767,6 @@ public sealed class WelcomeSuggestionService(
     private static string BuildFingerprint(
         string workspacePath,
         int maxItems,
-        IReadOnlyList<ThreadSummary> threads,
-        IReadOnlyList<string> snippets,
         string memoryPath,
         string historyPath,
         string memoryContext)
@@ -815,10 +774,6 @@ public sealed class WelcomeSuggestionService(
         var sb = new StringBuilder();
         sb.AppendLine(workspacePath);
         sb.AppendLine($"maxItems:{maxItems}");
-        foreach (var thread in threads)
-            sb.AppendLine($"{thread.Id}|{thread.LastActiveAt:O}");
-        foreach (var snippet in snippets)
-            sb.AppendLine($"snippet:{snippet}");
         sb.AppendLine($"memoryMtime:{GetFileTimestamp(memoryPath):O}");
         sb.AppendLine($"historyMtime:{GetFileTimestamp(historyPath):O}");
         sb.AppendLine(memoryContext);
@@ -848,11 +803,7 @@ public sealed class WelcomeSuggestionService(
     }
 
     private sealed record WelcomeSuggestionEvidence(
-        IReadOnlyList<ThreadSummary> Threads,
-        IReadOnlyList<string> Snippets,
-        string MemoryContext,
         string Fingerprint,
-        string CacheKey,
         bool HasSufficientContext);
 
     private sealed record WelcomeSuggestionCacheEntry(

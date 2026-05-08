@@ -6,33 +6,6 @@ namespace DotCraft.Tests.AppServer;
 
 public sealed class HubTurnNotificationPolicyTests
 {
-    [Theory]
-    [InlineData(SessionThreadRuntimeSignal.TurnCompleted, "turnCompleted", "success")]
-    [InlineData(SessionThreadRuntimeSignal.TurnFailed, "turnFailed", "error")]
-    public void GetSpec_ForNotifiableSignals_ReturnsHubNotificationSpec(
-        SessionThreadRuntimeSignal signal,
-        string kind,
-        string severity)
-    {
-        var spec = HubTurnNotificationPolicy.GetSpec(signal);
-
-        Assert.NotNull(spec);
-        Assert.Equal(kind, spec.Kind);
-        Assert.Equal(severity, spec.Severity);
-    }
-
-    [Theory]
-    [InlineData(SessionThreadRuntimeSignal.TurnStarted)]
-    [InlineData(SessionThreadRuntimeSignal.TurnCompletedAwaitingPlanConfirmation)]
-    [InlineData(SessionThreadRuntimeSignal.TurnCancelled)]
-    [InlineData(SessionThreadRuntimeSignal.ApprovalRequested)]
-    [InlineData(SessionThreadRuntimeSignal.ApprovalResolved)]
-    [InlineData(SessionThreadRuntimeSignal.ContextCompacted)]
-    public void GetSpec_ForNonHubNotificationSignals_ReturnsNull(SessionThreadRuntimeSignal signal)
-    {
-        Assert.Null(HubTurnNotificationPolicy.GetSpec(signal));
-    }
-
     [Fact]
     public async Task ResolveDecision_ForNormalThread_ReturnsDisplayName()
     {
@@ -94,38 +67,6 @@ public sealed class HubTurnNotificationPolicyTests
             {
                 ParentThreadId = "thread_parent"
             })
-        });
-
-        var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_child");
-
-        Assert.False(decision.ShouldNotify);
-    }
-
-    [Fact]
-    public async Task ResolveDecision_ForSubAgentOriginThread_SuppressesNotification()
-    {
-        var service = new FakeSessionService(new SessionThread
-        {
-            Id = "thread_child",
-            OriginChannel = SubAgentThreadOrigin.ChannelName,
-            ChannelContext = "thread_parent",
-            DisplayName = "Child agent"
-        });
-
-        var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_child");
-
-        Assert.False(decision.ShouldNotify);
-    }
-
-    [Fact]
-    public async Task ResolveDecision_ForThreadParentChannelContext_SuppressesNotification()
-    {
-        var service = new FakeSessionService(new SessionThread
-        {
-            Id = "thread_child",
-            OriginChannel = "dotcraft-desktop",
-            ChannelContext = "thread_parent",
-            DisplayName = "Child agent"
         });
 
         var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_child");

@@ -8,53 +8,25 @@ namespace DotCraft.Tests.Acp;
 public sealed class AcpBridgeHandlerCapabilityTests
 {
     [Fact]
-    public void BuildAcpExtensionCapability_Null_ReturnsNull()
+    public void BuildAcpExtensionCapability_MapsDeclaredCapabilities()
     {
-        Assert.Null(AcpBridgeHandler.BuildAcpExtensionCapability(null));
-    }
+        var caps = new ClientCapabilities
+        {
+            Fs = new FsCapabilities
+            {
+                ReadTextFile = true,
+                WriteTextFile = true
+            },
+            Terminal = new TerminalCapabilities { Create = true },
+            Extensions = ["_unity", "foo"]
+        };
 
-    [Fact]
-    public void BuildAcpExtensionCapability_EmptyCaps_ReturnsNull()
-    {
-        var caps = new ClientCapabilities();
-        Assert.Null(AcpBridgeHandler.BuildAcpExtensionCapability(caps));
-    }
-
-    [Fact]
-    public void BuildAcpExtensionCapability_FsRead_Maps()
-    {
-        var caps = new ClientCapabilities { Fs = new FsCapabilities { ReadTextFile = true } };
         var ext = AcpBridgeHandler.BuildAcpExtensionCapability(caps);
+
         Assert.NotNull(ext);
         Assert.True(ext!.FsReadTextFile);
-        Assert.Null(ext.FsWriteTextFile);
-    }
-
-    [Fact]
-    public void BuildAcpExtensionCapability_FsWrite_Maps()
-    {
-        var caps = new ClientCapabilities { Fs = new FsCapabilities { WriteTextFile = true } };
-        var ext = AcpBridgeHandler.BuildAcpExtensionCapability(caps);
-        Assert.NotNull(ext);
-        Assert.True(ext!.FsWriteTextFile);
-    }
-
-    [Fact]
-    public void BuildAcpExtensionCapability_Terminal_Maps()
-    {
-        var caps = new ClientCapabilities { Terminal = new TerminalCapabilities { Create = true } };
-        var ext = AcpBridgeHandler.BuildAcpExtensionCapability(caps);
-        Assert.NotNull(ext);
-        Assert.True(ext!.TerminalCreate);
-    }
-
-    [Fact]
-    public void BuildAcpExtensionCapability_CustomExtensions_Maps()
-    {
-        var caps = new ClientCapabilities { Extensions = ["_unity", "foo"] };
-        var ext = AcpBridgeHandler.BuildAcpExtensionCapability(caps);
-        Assert.NotNull(ext);
-        Assert.NotNull(ext!.Extensions);
+        Assert.True(ext.FsWriteTextFile);
+        Assert.True(ext.TerminalCreate);
         Assert.Equal(["_unity", "foo"], ext.Extensions);
     }
 }

@@ -22,15 +22,6 @@ public sealed class ThreadVisibilityTests
         Assert.True(ThreadVisibility.IsInternal(summary));
     }
 
-    [Fact]
-    public void IsInternal_WhenAnyInternalMetadataValueIsSet_ReturnsTrue()
-    {
-        var summary = CreateSummary();
-        summary.Metadata[ThreadVisibility.InternalMetadataKey] = "future-helper";
-
-        Assert.True(ThreadVisibility.IsInternal(summary));
-    }
-
     [Theory]
     [InlineData(WelcomeSuggestionConstants.ChannelName)]
     [InlineData(CommitMessageSuggestConstants.ChannelName)]

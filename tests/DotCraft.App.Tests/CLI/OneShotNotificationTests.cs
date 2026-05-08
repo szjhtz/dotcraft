@@ -5,55 +5,62 @@ namespace DotCraft.Tests.CLI;
 
 public sealed class OneShotNotificationTests
 {
-    [Fact]
-    public void From_AgentMessageDelta_ReturnsDeltaText()
+    [Theory]
+    [MemberData(nameof(NotificationCases))]
+    public void From_AppServerNotification_ReturnsOneShotNotification(
+        string json,
+        string expectedKind,
+        string expectedText,
+        bool exactText)
     {
-        using var doc = JsonDocument.Parse("""
+        using var doc = JsonDocument.Parse(json);
+
+        var notification = OneShotNotification.From(doc);
+
+        Assert.Equal(expectedKind, notification.Kind.ToString());
+        if (exactText)
+            Assert.Equal(expectedText, notification.Text);
+        else
+            Assert.Contains(expectedText, notification.Text, StringComparison.Ordinal);
+    }
+
+    public static IEnumerable<object[]> NotificationCases()
+    {
+        yield return
+        [
+            """
             {"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread_1","delta":"hello"}}
-            """);
-
-        var notification = OneShotNotification.From(doc);
-
-        Assert.Equal(OneShotNotificationKind.AgentDelta, notification.Kind);
-        Assert.Equal("hello", notification.Text);
-    }
-
-    [Fact]
-    public void From_TurnFailed_ReturnsFailureText()
-    {
-        using var doc = JsonDocument.Parse("""
+            """,
+            nameof(OneShotNotificationKind.AgentDelta),
+            "hello",
+            true
+        ];
+        yield return
+        [
+            """
             {"jsonrpc":"2.0","method":"turn/failed","params":{"threadId":"thread_1","error":"boom"}}
-            """);
-
-        var notification = OneShotNotification.From(doc);
-
-        Assert.Equal(OneShotNotificationKind.Failed, notification.Kind);
-        Assert.Equal("boom", notification.Text);
-    }
-
-    [Fact]
-    public void From_AgentMessageCompleted_ReturnsFinalText()
-    {
-        using var doc = JsonDocument.Parse("""
+            """,
+            nameof(OneShotNotificationKind.Failed),
+            "boom",
+            true
+        ];
+        yield return
+        [
+            """
             {"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread_1","item":{"type":"agentMessage","text":"final answer"}}}
-            """);
-
-        var notification = OneShotNotification.From(doc);
-
-        Assert.Equal(OneShotNotificationKind.AgentCompleted, notification.Kind);
-        Assert.Equal("final answer", notification.Text);
-    }
-
-    [Fact]
-    public void From_ToolStart_ReturnsProgressText()
-    {
-        using var doc = JsonDocument.Parse("""
+            """,
+            nameof(OneShotNotificationKind.AgentCompleted),
+            "final answer",
+            true
+        ];
+        yield return
+        [
+            """
             {"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread_1","item":{"type":"toolCall","payload":{"name":"Shell"}}}}
-            """);
-
-        var notification = OneShotNotification.From(doc);
-
-        Assert.Equal(OneShotNotificationKind.Progress, notification.Kind);
-        Assert.Contains("Shell", notification.Text, StringComparison.Ordinal);
+            """,
+            nameof(OneShotNotificationKind.Progress),
+            "Shell",
+            false
+        ];
     }
 }

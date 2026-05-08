@@ -87,7 +87,7 @@ const MESSAGES_EN = {
   'settings.personalization.description': 'Customize suggestions for this workspace.',
   'settings.personalization.welcomeSuggestions': 'Enable suggestions',
   'settings.personalization.welcomeSuggestionsHint':
-    'Show suggestions based on recent sessions and memory.',
+    'Show suggestions based on workspace memory.',
   'settings.personalization.welcomeSuggestionsSaveFailed': 'Failed to save welcome suggestions setting: {{error}}',
   'settings.personalization.selfLearning': 'Enable self-learning',
   'settings.personalization.selfLearningHint':
@@ -1903,7 +1903,7 @@ const MESSAGES_ZH: Record<MessageId, string> = {
   'settings.personalization.description': '自定义当前工作区的建议。',
   'settings.personalization.welcomeSuggestions': '启用建议',
   'settings.personalization.welcomeSuggestionsHint':
-    '基于最近会话和记忆显示建议。',
+    '基于工作区记忆显示建议。',
   'settings.personalization.welcomeSuggestionsSaveFailed': '保存欢迎建议设置失败：{{error}}',
   'settings.personalization.selfLearning': '启用自我学习',
   'settings.personalization.selfLearningHint':

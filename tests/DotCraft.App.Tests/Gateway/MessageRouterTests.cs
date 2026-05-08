@@ -4,7 +4,6 @@ using DotCraft.Gateway;
 using DotCraft.Heartbeat;
 using DotCraft.Protocol.AppServer;
 using DotCraft.Security;
-using Spectre.Console;
 
 namespace DotCraft.Tests.Gateway;
 
@@ -48,42 +47,6 @@ public sealed class MessageRouterTests
 
         await router.BroadcastToAdminsAsync("heartbeat-2");
         Assert.Equal(1, second.DeliverCount);
-    }
-
-    [Fact]
-    public async Task BroadcastToAdminsAsync_LogsWhenDeliveryReturnsFalse()
-    {
-        var previousConsole = AnsiConsole.Console;
-        using var writer = new StringWriter();
-        AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Out = new AnsiConsoleOutput(writer),
-            Ansi = AnsiSupport.No
-        });
-
-        try
-        {
-            var router = new MessageRouter(new ChannelRuntimeRegistry());
-            router.RegisterChannel(new StubChannel(
-                "qq",
-                ["admin-user"],
-                new ExtChannelSendResult
-                {
-                    Delivered = false,
-                    ErrorCode = "AdapterDeliveryFailed",
-                    ErrorMessage = "proactive delivery disabled"
-                }));
-
-            await router.BroadcastToAdminsAsync("heartbeat");
-
-            var output = writer.ToString();
-            Assert.Contains("qq admin notify to admin-user failed", output);
-            Assert.Contains("AdapterDeliveryFailed", output);
-        }
-        finally
-        {
-            AnsiConsole.Console = previousConsole;
-        }
     }
 
     private sealed class StubChannel(

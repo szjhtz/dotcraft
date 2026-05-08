@@ -313,7 +313,7 @@ public sealed class PromptCachingChatClient(
         }
 
         if (content is FunctionResultContent result &&
-            TryGetToolResultText(result, out var text) &&
+            TryGetToolResultWireText(result, out var text) &&
             !string.IsNullOrEmpty(text))
         {
             contentKind = "function_result";
@@ -350,7 +350,10 @@ public sealed class PromptCachingChatClient(
                 break;
             case FunctionResultContent result:
                 AppendString(builder, result.CallId);
-                AppendCanonicalObject(builder, result.Result);
+                if (TryGetToolResultWireText(result, out var toolResultText))
+                    AppendString(builder, toolResultText);
+                else
+                    AppendCanonicalObject(builder, result.Result);
                 if (result.Exception != null)
                     AppendString(builder, result.Exception.GetType().FullName + ":" + result.Exception.Message);
                 break;
@@ -513,7 +516,7 @@ public sealed class PromptCachingChatClient(
         out FunctionResultContent cachedResult)
     {
         cachedResult = result;
-        if (!TryGetToolResultText(result, out var text))
+        if (!TryGetToolResultWireText(result, out var text))
             return false;
 
         cachedResult = new FunctionResultContent(result.CallId, result.Result)
@@ -525,12 +528,33 @@ public sealed class PromptCachingChatClient(
         return true;
     }
 
-    private static bool TryGetToolResultText(FunctionResultContent result, out string text)
+    private static bool TryGetToolResultWireText(FunctionResultContent result, out string text)
     {
         if (result.Result is string value)
         {
             text = value;
             return true;
+        }
+
+        if (result.Result is IEnumerable<AIContent> contents)
+        {
+            var textContents = new List<AIContent>();
+
+            foreach (var content in contents)
+            {
+                if (content is not TextContent)
+                {
+                    text = string.Empty;
+                    return false;
+                }
+
+                textContents.Add(content);
+            }
+
+            text = textContents.Count == 0
+                ? string.Empty
+                : JsonSerializer.Serialize(textContents, AIJsonUtilities.DefaultOptions);
+            return text.Length > 0;
         }
 
         text = string.Empty;

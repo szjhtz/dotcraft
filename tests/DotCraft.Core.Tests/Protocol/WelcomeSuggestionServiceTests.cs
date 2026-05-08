@@ -180,7 +180,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         Assert.NotEmpty(_sessionService.LastSubmittedContent);
         Assert.Null(_sessionService.LastSubmittedMessages);
         Assert.Contains(
-            "Inspect recent workspace history and memory, infer the likely next tasks",
+            "Inspect workspace MEMORY.md and HISTORY.md, infer the likely next tasks",
             string.Concat(_sessionService.LastSubmittedContent.OfType<TextContent>().Select(item => item.Text)));
 
         var remainingThreads = await _threadStore.LoadIndexAsync();
@@ -189,62 +189,6 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
             string.Equals(summary.OriginChannel, WelcomeSuggestionConstants.ChannelName, StringComparison.OrdinalIgnoreCase));
         Assert.Contains(remainingThreads, summary => summary.Id == thread.Id);
         Assert.Equal(initialActiveFileCount, Directory.EnumerateFiles(Path.Combine(_craftPath, "threads", "active"), "*.jsonl").Count());
-    }
-
-    [Fact]
-    public async Task ReadWelcomeThreadHistory_ReturnsSnippets_AgentSummary_AndDominantIntents()
-    {
-        var thread = await _sessionService.CreateThreadAsync(CreateIdentity());
-        var turnId = SessionIdGenerator.NewTurnId(1);
-        thread.Turns.Add(new SessionTurn
-        {
-            Id = turnId,
-            ThreadId = thread.Id,
-            Status = TurnStatus.Completed,
-            StartedAt = DateTimeOffset.UtcNow,
-            CompletedAt = DateTimeOffset.UtcNow,
-            Items =
-            [
-                new SessionItem
-                {
-                    Id = SessionIdGenerator.NewItemId(1),
-                    TurnId = turnId,
-                    Type = ItemType.UserMessage,
-                    Status = ItemStatus.Completed,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    CompletedAt = DateTimeOffset.UtcNow,
-                    Payload = new UserMessagePayload
-                    {
-                        Text = "Trace how welcome suggestions reuse workspace memory and thread history in Desktop."
-                    }
-                },
-                new SessionItem
-                {
-                    Id = SessionIdGenerator.NewItemId(2),
-                    TurnId = turnId,
-                    Type = ItemType.AgentMessage,
-                    Status = ItemStatus.Completed,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    CompletedAt = DateTimeOffset.UtcNow,
-                    Payload = new AgentMessagePayload
-                    {
-                        Text = "The likely implementation path is to reuse the welcome suggestion service and tighten the prompt plus evidence extraction."
-                    }
-                }
-            ]
-        });
-
-        await _threadStore.SaveThreadAsync(thread);
-        var methods = new WelcomeSuggestionToolMethods(_persistence, _memoryStore, _workspacePath);
-
-        var resultJson = await methods.ReadWelcomeThreadHistory(thread.Id);
-        var result = JsonSerializer.Deserialize<WelcomeThreadHistoryResult>(resultJson, JsonOptions)!;
-
-        Assert.Equal(thread.Id, result.ThreadId);
-        Assert.NotEmpty(result.UserSnippets);
-        Assert.Contains("workspace memory", result.UserSnippets[0], StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("implementation path", result.AgentSummary, StringComparison.OrdinalIgnoreCase);
-        Assert.NotEmpty(result.DominantIntents);
     }
 
     [Fact]
@@ -258,7 +202,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
             Welcome suggestion output should mention concrete modules like WelcomeSuggestionService.cs or settings keys in .craft/config.json instead of generic onboarding.
             """);
 
-        var methods = new WelcomeSuggestionToolMethods(_persistence, _memoryStore, _workspacePath);
+        var methods = new WelcomeSuggestionToolMethods(_memoryStore);
 
         var resultJson = await methods.ReadWelcomeWorkspaceMemory();
         var result = JsonSerializer.Deserialize<WelcomeWorkspaceMemoryResult>(resultJson, JsonOptions)!;
@@ -269,20 +213,9 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
     [Fact]
     public async Task WelcomeSuggestionTools_ReturnJsonStrings()
     {
-        await CreateThreadWithMessagesAsync(
-            "Review workspace welcome suggestions and make the next prompts concrete.");
         _memoryStore.WriteLongTerm("Desktop welcome suggestions should use workspace memory.");
 
-        var methods = new WelcomeSuggestionToolMethods(_persistence, _memoryStore, _workspacePath);
-
-        var listJson = await methods.ListRecentWorkspaceThreads();
-        var list = JsonSerializer.Deserialize<List<WelcomeSuggestionThreadSummary>>(listJson, JsonOptions)!;
-        Assert.NotEmpty(list);
-        Assert.Contains(list, item => !string.IsNullOrWhiteSpace(item.Id));
-
-        var historyJson = await methods.ReadWelcomeThreadHistory(list[0].Id);
-        var history = JsonSerializer.Deserialize<WelcomeThreadHistoryResult>(historyJson, JsonOptions)!;
-        Assert.Equal(list[0].Id, history.ThreadId);
+        var methods = new WelcomeSuggestionToolMethods(_memoryStore);
 
         var memoryJson = await methods.ReadWelcomeWorkspaceMemory();
         var memory = JsonSerializer.Deserialize<WelcomeWorkspaceMemoryResult>(memoryJson, JsonOptions)!;
@@ -292,11 +225,9 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
     [Fact]
     public void WelcomeSuggestionTools_ExposeStringReturnSchema()
     {
-        var methods = new WelcomeSuggestionToolMethods(_persistence, _memoryStore, _workspacePath);
+        var methods = new WelcomeSuggestionToolMethods(_memoryStore);
         var toolMethods = new[]
         {
-            nameof(WelcomeSuggestionToolMethods.ListRecentWorkspaceThreads),
-            nameof(WelcomeSuggestionToolMethods.ReadWelcomeThreadHistory),
             nameof(WelcomeSuggestionToolMethods.ReadWelcomeWorkspaceMemory)
         };
 
@@ -310,10 +241,6 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
             var function = methodName switch
             {
-                nameof(WelcomeSuggestionToolMethods.ListRecentWorkspaceThreads) =>
-                    AIFunctionFactory.Create(methods.ListRecentWorkspaceThreads),
-                nameof(WelcomeSuggestionToolMethods.ReadWelcomeThreadHistory) =>
-                    AIFunctionFactory.Create(methods.ReadWelcomeThreadHistory),
                 nameof(WelcomeSuggestionToolMethods.ReadWelcomeWorkspaceMemory) =>
                     AIFunctionFactory.Create(methods.ReadWelcomeWorkspaceMemory),
                 _ => throw new InvalidOperationException(methodName)
@@ -363,11 +290,103 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ScheduleRefresh_WithThreadHistoryOnly_SkipsModelGeneration()
+    {
+        await CreateThreadWithMessagesAsync(
+            "Review how welcome suggestions are generated from workspace history and memory.",
+            "Tighten the prompt so suggestions mention specific modules and tasks.");
+
+        var submitCount = 0;
+        _sessionService.SubmitInputHandler = (_, _, _) =>
+        {
+            Interlocked.Increment(ref submitCount);
+            return [];
+        };
+
+        var service = CreateService();
+        service.ScheduleRefresh(_workspacePath);
+        await Task.Delay(1500);
+
+        Assert.Equal(0, submitCount);
+    }
+
+    [Fact]
+    public async Task ScheduleRefresh_WithMemoryOnlyEvidence_GeneratesPersistedCache()
+    {
+        _memoryStore.WriteLongTerm("The workspace is reducing Desktop welcome suggestion cost by using memory-only evidence.");
+        _memoryStore.AppendHistory("Decision: refresh welcome suggestions after successful memory consolidation.");
+
+        _sessionService.SubmitInputHandler = (threadId, _, _) =>
+        {
+            return
+            [
+                new SessionEvent
+                {
+                    EventId = "evt_memory_only",
+                    EventType = SessionEventType.ItemCompleted,
+                    ThreadId = threadId,
+                    TurnId = "turn_memory_only",
+                    ItemId = "item_memory_only",
+                    Timestamp = DateTimeOffset.UtcNow,
+                    Payload = new SessionItem
+                    {
+                        Id = "item_memory_only",
+                        TurnId = "turn_memory_only",
+                        Type = ItemType.ToolCall,
+                        Status = ItemStatus.Completed,
+                        CreatedAt = DateTimeOffset.UtcNow,
+                        CompletedAt = DateTimeOffset.UtcNow,
+                        Payload = new ToolCallPayload
+                        {
+                            ToolName = WelcomeSuggestionMethods.ToolName,
+                            CallId = "call_memory_only",
+                            Arguments = new JsonObject
+                            {
+                                ["items"] = BuildConcreteItems()
+                            }
+                        }
+                    }
+                }
+            ];
+        };
+
+        var service = CreateService();
+        service.ScheduleRefresh(_workspacePath);
+        await WaitForAsync(() => File.Exists(GetPersistedCachePath()), timeoutMs: 7000);
+
+        var result = await service.SuggestAsync(new WelcomeSuggestionsParams
+        {
+            Identity = CreateIdentity(),
+            MaxItems = 4
+        });
+
+        Assert.Equal("dynamic", result.Source);
+        Assert.Equal(4, result.Items.Count);
+    }
+
+    [Fact]
+    public async Task SuggestAsync_WithOldPersistedCacheSchema_ReturnsNone()
+    {
+        await WritePersistedCacheAsync("old-thread-history-snapshot", schemaVersion: 1);
+
+        var service = CreateService();
+        var result = await service.SuggestAsync(new WelcomeSuggestionsParams
+        {
+            Identity = CreateIdentity(),
+            MaxItems = 4
+        });
+
+        Assert.Equal("none", result.Source);
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
     public async Task SuggestAsync_WhenModelReturnsGenericSuggestions_ReturnsNone()
     {
         await CreateThreadWithMessagesAsync(
             "Review how welcome suggestions are generated from workspace history and memory.",
             "Tighten the prompt so suggestions mention specific modules and tasks.");
+        _memoryStore.WriteLongTerm("Workspace memory says welcome suggestions should be concrete and implementation-specific.");
 
         _sessionService.SubmitInputHandler = (threadId, _, _) =>
         {
@@ -451,6 +470,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         await CreateThreadWithMessagesAsync(
             "Review how welcome suggestions reuse workspace history and memory in Desktop.",
             "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+        _memoryStore.WriteLongTerm("Desktop welcome suggestions should be refreshed from memory only.");
 
         var service = CreateService();
         service.ScheduleRefresh(_workspacePath);
@@ -466,6 +486,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         await CreateThreadWithMessagesAsync(
             "Review how welcome suggestions reuse workspace history and memory in Desktop.",
             "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+        _memoryStore.WriteLongTerm("Desktop welcome suggestions should be refreshed from memory only.");
 
         var submitCount = 0;
         _sessionService.SubmitInputHandler = (_, _, _) =>
@@ -529,6 +550,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         await CreateThreadWithMessagesAsync(
             "Review how welcome suggestions reuse workspace history and memory in Desktop.",
             "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+        _memoryStore.WriteLongTerm("Desktop welcome suggestions should be refreshed from memory only.");
 
         _sessionService.SubmitInputHandler = (_, _, _) => [];
 
@@ -549,11 +571,12 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ScheduleRefresh_OnTurnCompleted_WritesPersistedCache_AndSubsequentSuggestServesIt()
+    public async Task ScheduleRefresh_OnMemoryConsolidated_WritesPersistedCache_AndSubsequentSuggestServesIt()
     {
         await CreateThreadWithMessagesAsync(
             "Review how welcome suggestions reuse workspace history and memory in Desktop.",
             "Trace the welcome suggestion service and tighten its cache refresh behavior.");
+        _memoryStore.WriteLongTerm("Desktop welcome suggestions should use only MEMORY.md and HISTORY.md.");
 
         _sessionService.SubmitInputHandler = (threadId, _, _) =>
         {
@@ -634,6 +657,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         await CreateThreadWithMessagesAsync(
             "Review welcome suggestion debounce behavior.",
             "Ensure repeated turn-complete signals coalesce into one refresh.");
+        _memoryStore.WriteLongTerm("Welcome suggestion refreshes are triggered after memory consolidation.");
 
         var submitCount = 0;
         _sessionService.SubmitInputHandler = (_, _, _) =>
@@ -764,13 +788,13 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
     private string GetPersistedCachePath() =>
         Path.Combine(_workspacePath, ".craft", "cache", "welcome-suggestions.json");
 
-    private async Task WritePersistedCacheAsync(string fingerprint)
+    private async Task WritePersistedCacheAsync(string fingerprint, int schemaVersion = 2)
     {
         var cachePath = GetPersistedCachePath();
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
         var payload = new
         {
-            SchemaVersion = 1,
+            SchemaVersion = schemaVersion,
             Result = new WelcomeSuggestionsResult
             {
                 Source = "dynamic",

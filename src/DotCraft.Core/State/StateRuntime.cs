@@ -144,7 +144,8 @@ public sealed class StateRuntime
                     archived_at TEXT,
                     history_mode TEXT NOT NULL,
                     turn_count INTEGER NOT NULL DEFAULT 0,
-                    first_user_message TEXT
+                    first_user_message TEXT,
+                    metadata_json TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC, thread_id DESC);
@@ -330,6 +331,7 @@ public sealed class StateRuntime
                 """;
             command.ExecuteNonQuery();
             EnsureColumn(connection, "thread_spawn_edges", "runtime_type", "TEXT");
+            EnsureColumn(connection, "threads", "metadata_json", "TEXT");
             EnsureColumn(connection, "thread_spawn_edges", "supports_send_input", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(connection, "thread_spawn_edges", "supports_resume", "INTEGER NOT NULL DEFAULT 0");
             EnsureColumn(connection, "thread_spawn_edges", "supports_close", "INTEGER NOT NULL DEFAULT 1");

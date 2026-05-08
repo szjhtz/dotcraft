@@ -1182,6 +1182,21 @@ describe('thread lifecycle notification dispatch', () => {
     expect(useThreadStore.getState().threadList.some((t) => t.id === 'thread_del_1')).toBe(false)
   })
 
+  it('does not add internal helper threads on thread/started', () => {
+    dispatchThreadLifecycle({
+      method: 'thread/started',
+      params: {
+        thread: {
+          ...minimalThread('welcome-internal'),
+          originChannel: 'welcome-suggest',
+          metadata: { 'dotcraft.internal': 'welcome-suggest' }
+        }
+      }
+    })
+
+    expect(useThreadStore.getState().threadList).toEqual([])
+  })
+
   it('removes subagent descendants when a parent is deleted or archived', () => {
     dispatchThreadLifecycle({
       method: 'thread/started',

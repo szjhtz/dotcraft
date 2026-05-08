@@ -6,13 +6,6 @@ namespace DotCraft.Tests.Processes;
 public sealed class ManagedChildProcessTests
 {
     [Fact]
-    public async Task Start_AndDispose_DoesNotThrow()
-    {
-        await using var child = ManagedChildProcess.Start(CreateLongRunningStartInfo());
-        Assert.False(child.Process.HasExited);
-    }
-
-    [Fact]
     public async Task Start_OnWindows_BindsProcessToJobObject()
     {
         if (!OperatingSystem.IsWindows())

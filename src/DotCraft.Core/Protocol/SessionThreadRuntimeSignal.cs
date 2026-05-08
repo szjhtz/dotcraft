@@ -17,4 +17,9 @@ public enum SessionThreadRuntimeSignal
     /// clear any "context almost full" warning indicator.
     /// </summary>
     ContextCompacted,
+    /// <summary>
+    /// A successful long-term memory consolidation just completed.
+    /// Hosts may use this to trigger memory-derived follow-up maintenance.
+    /// </summary>
+    MemoryConsolidated,
 }

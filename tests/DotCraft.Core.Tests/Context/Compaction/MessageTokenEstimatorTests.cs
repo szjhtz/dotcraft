@@ -6,20 +6,6 @@ namespace DotCraft.Tests.Context.Compaction;
 public sealed class MessageTokenEstimatorTests
 {
     [Fact]
-    public void RoughTokenCount_EmptyReturnsZero()
-    {
-        Assert.Equal(0, MessageTokenEstimator.RoughTokenCount(null));
-        Assert.Equal(0, MessageTokenEstimator.RoughTokenCount(string.Empty));
-    }
-
-    [Fact]
-    public void RoughTokenCount_ScalesByFourCharsPerToken()
-    {
-        // 12 chars / 4 = 3 tokens
-        Assert.Equal(3, MessageTokenEstimator.RoughTokenCount("abcdefghijkl"));
-    }
-
-    [Fact]
     public void EstimateContent_Text()
     {
         var content = new TextContent("hello world"); // 11 chars -> ceil(11/4) = 3
@@ -58,11 +44,5 @@ public sealed class MessageTokenEstimatorTests
         };
         // 3 * 4/3 = 4
         Assert.Equal(4, MessageTokenEstimator.Estimate(messages));
-    }
-
-    [Fact]
-    public void Estimate_EmptyReturnsZero()
-    {
-        Assert.Equal(0, MessageTokenEstimator.Estimate(Array.Empty<ChatMessage>()));
     }
 }

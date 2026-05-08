@@ -104,6 +104,49 @@ public sealed class PromptCachingChatClientTests
     }
 
     [Fact]
+    public void Prepare_WithTextContentToolResult_MarksToolResultWithoutMutatingOriginal()
+    {
+        var client = CreateClient("claude-opus-4-1");
+        var toolResultContents = (IList<AIContent>)[new TextContent("file contents")];
+        var originalResult = new FunctionResultContent("call_1", toolResultContents);
+        var tool = new ChatMessage(ChatRole.Tool, (IList<AIContent>)[originalResult]);
+
+        var prepared = client.Prepare([
+            new ChatMessage(ChatRole.User, "hello"),
+            tool
+        ], null);
+
+        Assert.NotSame(tool, prepared.Messages[1]);
+        var result = Assert.IsType<FunctionResultContent>(Assert.Single(prepared.Messages[1].Contents));
+        Assert.NotSame(originalResult, result);
+        Assert.Equal("call_1", result.CallId);
+        Assert.Same(toolResultContents, result.Result);
+        AssertCacheControl(result, expectedTtl: null);
+        Assert.Null(originalResult.AdditionalProperties);
+    }
+
+    [Fact]
+    public void Prepare_WithMixedToolResult_DoesNotMarkToolResult()
+    {
+        var client = CreateClient("claude-opus-4-1");
+        var originalResult = new FunctionResultContent(
+            "call_1",
+            (IList<AIContent>)[
+                new TextContent("text"),
+                new DataContent(new BinaryData([1, 2, 3]), "image/png")
+            ]);
+        var tool = new ChatMessage(ChatRole.Tool, (IList<AIContent>)[originalResult]);
+
+        var prepared = client.Prepare([
+            new ChatMessage(ChatRole.User, "hello"),
+            tool
+        ], null);
+
+        Assert.Same(tool, prepared.Messages[1]);
+        Assert.Null(originalResult.AdditionalProperties);
+    }
+
+    [Fact]
     public void Prepare_ForNonMatchingModel_LeavesMessagesAndOptionsUnchanged()
     {
         var client = CreateClient("gpt-4o-mini");
@@ -260,6 +303,59 @@ public sealed class PromptCachingChatClientTests
         var content = message.GetProperty("content");
         Assert.Equal(JsonValueKind.Array, content.ValueKind);
         Assert.Equal("result text", content[0].GetProperty("text").GetString());
+        Assert.Equal("ephemeral", content[0].GetProperty(PromptCachingChatClient.CacheControlKey).GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void OpenAIAdapter_TextContentToolResultMovesCacheControlToTextBlock()
+    {
+        var client = CreateClient("claude-opus-4-1");
+        var toolResultContents = (IList<AIContent>)[
+            new TextContent("line one"),
+            new TextContent("line two")
+        ];
+        var expectedWireText = JsonSerializer.Serialize(toolResultContents, AIJsonUtilities.DefaultOptions);
+        ChatMessage[] messages = [
+            new ChatMessage(ChatRole.User, "hello"),
+            new ChatMessage(ChatRole.Assistant, (IList<AIContent>)[
+                new FunctionCallContent("call_1", "ReadFile", new Dictionary<string, object?>())
+            ]),
+            new ChatMessage(ChatRole.Tool, (IList<AIContent>)[
+                new FunctionResultContent("call_1", toolResultContents)
+            ])
+        ];
+        var unmarkedOpenAiMessage = OpenAI.Chat.MicrosoftExtensionsAIChatExtensions
+            .AsOpenAIChatMessages(messages, null)
+            .Last();
+        var unmarkedJson = ModelReaderWriter.Write(unmarkedOpenAiMessage).ToString();
+        using var unmarkedDocument = JsonDocument.Parse(unmarkedJson);
+
+        var prepared = client.Prepare(messages, null);
+
+        var openAiMessage = OpenAI.Chat.MicrosoftExtensionsAIChatExtensions
+            .AsOpenAIChatMessages(prepared.Messages, prepared.Options)
+            .Last();
+        var json = ModelReaderWriter.Write(openAiMessage).ToString();
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.Equal("tool", root.GetProperty("role").GetString());
+        Assert.Equal("call_1", root.GetProperty("tool_call_id").GetString());
+        Assert.Equal(
+            unmarkedDocument.RootElement.GetProperty("content").GetString(),
+            root.GetProperty("content").GetString());
+        Assert.Equal(expectedWireText, root.GetProperty("content").GetString());
+        Assert.Equal("ephemeral", root.GetProperty(PromptCachingChatClient.CacheControlKey).GetProperty("type").GetString());
+
+        var rewritten = PromptCacheControlPipelinePolicy.RewriteJson(
+            $$"""{"messages":[{{json}}]}""");
+        Assert.NotNull(rewritten);
+        using var rewrittenDocument = JsonDocument.Parse(rewritten);
+        var message = rewrittenDocument.RootElement.GetProperty("messages")[0];
+        Assert.False(message.TryGetProperty(PromptCachingChatClient.CacheControlKey, out _));
+        var content = message.GetProperty("content");
+        Assert.Equal(JsonValueKind.Array, content.ValueKind);
+        Assert.Equal(expectedWireText, content[0].GetProperty("text").GetString());
         Assert.Equal("ephemeral", content[0].GetProperty(PromptCachingChatClient.CacheControlKey).GetProperty("type").GetString());
     }
 
@@ -429,7 +525,7 @@ public sealed class PromptCachingChatClientTests
         var capture = new CaptureChatClient();
         var client = CreateClient("claude-opus-4-1", capture: capture);
         var tool = new ChatMessage(ChatRole.Tool, (IList<AIContent>)[
-            new FunctionResultContent("call_1", "file contents")
+            new FunctionResultContent("call_1", (IList<AIContent>)[new TextContent("file contents")])
         ]);
 
         await client.GetResponseAsync([

@@ -4,12 +4,16 @@ namespace DotCraft.Tests.CLI;
 
 public sealed class CommandLineArgsTests
 {
-    [Fact]
-    public void Parse_DefaultArgs_UsesNoMode()
+    [Theory]
+    [InlineData("", CommandLineArgs.RunMode.None)]
+    [InlineData("gateway", CommandLineArgs.RunMode.Gateway)]
+    [InlineData("hub", CommandLineArgs.RunMode.Hub)]
+    public void Parse_ModeOnlySubcommands_UseExpectedMode(string command, CommandLineArgs.RunMode expectedMode)
     {
-        var args = CommandLineArgs.Parse([]);
+        string[] argv = string.IsNullOrEmpty(command) ? [] : [command];
+        var args = CommandLineArgs.Parse(argv);
 
-        Assert.Equal(CommandLineArgs.RunMode.None, args.Mode);
+        Assert.Equal(expectedMode, args.Mode);
         Assert.False(args.ReservesStdout);
     }
 
@@ -52,24 +56,6 @@ public sealed class CommandLineArgsTests
         Assert.Equal("secret", args.Token);
         Assert.Equal("hello", args.ExecPrompt);
         Assert.True(args.ReservesStdout);
-    }
-
-    [Fact]
-    public void Parse_GatewaySubcommand_UsesGatewayMode()
-    {
-        var args = CommandLineArgs.Parse(["gateway"]);
-
-        Assert.Equal(CommandLineArgs.RunMode.Gateway, args.Mode);
-        Assert.False(args.ReservesStdout);
-    }
-
-    [Fact]
-    public void Parse_HubSubcommand_UsesHubMode()
-    {
-        var args = CommandLineArgs.Parse(["hub"]);
-
-        Assert.Equal(CommandLineArgs.RunMode.Hub, args.Mode);
-        Assert.False(args.ReservesStdout);
     }
 
     [Fact]

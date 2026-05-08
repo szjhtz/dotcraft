@@ -28,15 +28,11 @@ public sealed class AcpBridgeHandlerWireRoutingTests
         using var doc = JsonDocument.Parse(json);
         Assert.False(doc.RootElement.TryGetProperty("threadId", out _));
         Assert.Equal("/workspace/a.txt", doc.RootElement.GetProperty("path").GetString());
-    }
 
-    [Fact]
-    public void ParamsForIdeExtForward_WithoutThreadId_Passthrough()
-    {
-        var wire = JsonSerializer.SerializeToElement(new { path = "/b" }, JsonOptions);
-        var ide = AcpBridgeHandler.ParamsForIdeExtForward(wire);
-        var json = JsonSerializer.Serialize(ide, JsonOptions);
-        using var doc = JsonDocument.Parse(json);
-        Assert.Equal("/b", doc.RootElement.GetProperty("path").GetString());
+        var withoutThreadId = JsonSerializer.SerializeToElement(new { path = "/b" }, JsonOptions);
+        var passthrough = AcpBridgeHandler.ParamsForIdeExtForward(withoutThreadId);
+        var passthroughJson = JsonSerializer.Serialize(passthrough, JsonOptions);
+        using var passthroughDoc = JsonDocument.Parse(passthroughJson);
+        Assert.Equal("/b", passthroughDoc.RootElement.GetProperty("path").GetString());
     }
 }

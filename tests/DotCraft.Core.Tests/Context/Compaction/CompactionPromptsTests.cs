@@ -17,26 +17,12 @@ public sealed class CompactionPromptsTests
     }
 
     [Fact]
-    public void FormatCompactSummary_EmptyReturnsEmpty()
-    {
-        Assert.Equal(string.Empty, CompactionPrompts.FormatCompactSummary(""));
-    }
-
-    [Fact]
     public void GetCompactPrompt_IncludesNoToolsReminder()
     {
         var prompt = CompactionPrompts.GetCompactPrompt(Language.English);
         Assert.Contains("Do NOT call any tools", prompt, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("<analysis>", prompt);
         Assert.Contains("<summary>", prompt);
-    }
-
-    [Fact]
-    public void GetPartialCompactPrompt_DifferentFromFull()
-    {
-        var full = CompactionPrompts.GetCompactPrompt(Language.English);
-        var partial = CompactionPrompts.GetPartialCompactPrompt(Language.English);
-        Assert.NotEqual(full, partial);
     }
 
     [Fact]

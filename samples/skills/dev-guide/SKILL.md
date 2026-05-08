@@ -43,6 +43,14 @@ A test is meaningful only when (applies to C# xUnit and TypeScript tests equally
 - It does not merely restate implementation details via excessive mocking; prefer state/output assertions unless interaction itself is the contract.
 - It is not written just to inflate coverage numbers.
 
+DotCraft.Core C# xUnit tests:
+
+- Test observable behavior through public APIs, persisted state, wire payloads, or user-visible results; do not test private implementation shape.
+- When using TDD, work in vertical slices: write one behavior test, make the smallest useful implementation pass, then repeat.
+- For protocol, session, and persistence behavior, prefer real temp stores/services and small fakes over mocks; use interaction assertions only when the interaction is the contract.
+- Do not add tests for trivial formatters, getters, record equality, text passthrough, description/prompt wording, framework behavior, or coverage inflation.
+- Use theories to consolidate repetitive variants only when each row protects a meaningful externally visible case.
+
 Pre-commit: run the relevant full suites for touched areas (`dotnet test` for C#, and corresponding `npm test`/`cargo test` where applicable). Do not commit with known failures.
 
 ### Language Preference

@@ -6,25 +6,11 @@ namespace DotCraft.App.Tests.Acp;
 
 public sealed class AcpBridgeHandlerExtractTextTests
 {
-    [Fact]
-    public void ExtractTextFromPayload_JsonElementObject_ReturnsText()
+    [Theory]
+    [MemberData(nameof(TextPayloadCases))]
+    public void ExtractTextFromPayload_ReturnsTextForSupportedPayloads(object payload, string expected)
     {
-        var el = JsonSerializer.SerializeToElement(new { text = "hello" });
-        Assert.Equal("hello", AcpBridgeHandler.ExtractTextFromPayload(el));
-    }
-
-    [Fact]
-    public void ExtractTextFromPayload_UserMessagePayload_ReturnsText()
-    {
-        var p = new UserMessagePayload { Text = "typed" };
-        Assert.Equal("typed", AcpBridgeHandler.ExtractTextFromPayload(p));
-    }
-
-    [Fact]
-    public void ExtractTextFromPayload_AgentMessagePayload_ReturnsText()
-    {
-        var p = new AgentMessagePayload { Text = "agent" };
-        Assert.Equal("agent", AcpBridgeHandler.ExtractTextFromPayload(p));
+        Assert.Equal(expected, AcpBridgeHandler.ExtractTextFromPayload(payload));
     }
 
     [Fact]
@@ -32,5 +18,12 @@ public sealed class AcpBridgeHandlerExtractTextTests
     {
         var el = JsonSerializer.SerializeToElement(new { other = 1 });
         Assert.Null(AcpBridgeHandler.ExtractTextFromPayload(el));
+    }
+
+    public static IEnumerable<object[]> TextPayloadCases()
+    {
+        yield return [JsonSerializer.SerializeToElement(new { text = "hello" }), "hello"];
+        yield return [new UserMessagePayload { Text = "typed" }, "typed"];
+        yield return [new AgentMessagePayload { Text = "agent" }, "agent"];
     }
 }

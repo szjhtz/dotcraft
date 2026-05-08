@@ -69,6 +69,12 @@ public sealed class SessionServiceMemoryConsolidationTests : IDisposable
         await using var agentFactory = CreateAgentFactory(chatClient, consolidator);
         var svc = CreateService(agentFactory, chatClient);
         var thread = await svc.CreateThreadAsync(MakeIdentity());
+        var runtimeSignals = new List<SessionThreadRuntimeSignal>();
+        svc.ThreadRuntimeSignalForBroadcast = (threadId, signal) =>
+        {
+            if (threadId == thread.Id)
+                runtimeSignals.Add(signal);
+        };
         completedThreadId = thread.Id;
 
         var subscription = CollectThreadEventsAsync(
@@ -83,10 +89,43 @@ public sealed class SessionServiceMemoryConsolidationTests : IDisposable
         Assert.Contains(threadEvents, e => IsSystemEvent(e, "consolidated"));
         Assert.Contains(threadEvents, IsMemoryNotice);
         Assert.True(startSawPersistedTurn);
+        Assert.Contains(SessionThreadRuntimeSignal.MemoryConsolidated, runtimeSignals);
 
         var reloaded = await svc.GetThreadAsync(thread.Id);
         var notice = Assert.Single(reloaded.Turns.Single().Items, item => item.Type == ItemType.SystemNotice);
         Assert.Equal("memoryConsolidated", notice.AsSystemNotice?.Kind);
+    }
+
+    [Theory]
+    [InlineData(MemoryConsolidationOutcome.Skipped)]
+    [InlineData(MemoryConsolidationOutcome.Failed)]
+    public async Task SubmitInputAsync_WhenConsolidationDoesNotWriteMemory_DoesNotEmitMemoryConsolidatedSignal(
+        MemoryConsolidationOutcome outcome)
+    {
+        var result = outcome == MemoryConsolidationOutcome.Skipped
+            ? MemoryConsolidationResult.Skipped("no changes")
+            : MemoryConsolidationResult.Failed("provider unavailable");
+        var consolidator = new FakeMemoryConsolidator(result);
+        var chatClient = new StaticChatClient("ok");
+        await using var agentFactory = CreateAgentFactory(chatClient, consolidator);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+        var runtimeSignals = new List<SessionThreadRuntimeSignal>();
+        svc.ThreadRuntimeSignalForBroadcast = (threadId, signal) =>
+        {
+            if (threadId == thread.Id)
+                runtimeSignals.Add(signal);
+        };
+
+        var subscription = CollectThreadEventsAsync(
+            svc,
+            thread.Id,
+            events => events.Any(IsConsolidationTerminal));
+
+        await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("remember blue")]));
+        await subscription;
+
+        Assert.DoesNotContain(SessionThreadRuntimeSignal.MemoryConsolidated, runtimeSignals);
     }
 
     [Fact]

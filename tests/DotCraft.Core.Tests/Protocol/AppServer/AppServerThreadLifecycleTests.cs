@@ -452,6 +452,38 @@ public sealed class AppServerThreadLifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task ThreadList_ExcludesInternalThreadsByDefault()
+    {
+        await _h.Service.CreateThreadAsync(_h.Identity);
+        var internalThread = await _h.Service.CreateThreadAsync(new SessionIdentity
+        {
+            ChannelName = WelcomeSuggestionConstants.ChannelName,
+            UserId = WelcomeSuggestionConstants.InternalUserId,
+            WorkspacePath = _h.Identity.WorkspacePath,
+            ChannelContext = _h.Identity.ChannelContext
+        });
+        internalThread.Metadata[ThreadVisibility.InternalMetadataKey] = WelcomeSuggestionConstants.InternalMetadataValue;
+
+        var msg = _h.BuildRequest(AppServerMethods.ThreadList, new
+        {
+            identity = new
+            {
+                channelName = _h.Identity.ChannelName,
+                userId = _h.Identity.UserId,
+                workspacePath = _h.Identity.WorkspacePath
+            },
+            crossChannelOrigins = new[] { WelcomeSuggestionConstants.ChannelName }
+        });
+        await _h.ExecuteRequestAsync(msg);
+
+        var doc = await _h.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(doc);
+        var data = doc.RootElement.GetProperty("result").GetProperty("data");
+        Assert.Equal(1, data.GetArrayLength());
+        Assert.DoesNotContain(data.EnumerateArray(), item => item.GetProperty("id").GetString() == internalThread.Id);
+    }
+
+    [Fact]
     public async Task ThreadList_EmptyWorkspace_ReturnsEmpty()
     {
         var msg = _h.BuildRequest(AppServerMethods.ThreadList, new

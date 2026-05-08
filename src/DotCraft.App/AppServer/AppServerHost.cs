@@ -929,6 +929,9 @@ public sealed class AppServerHost(
     /// </summary>
     private void BroadcastThreadStarted(SessionThread thread)
     {
+        if (ThreadVisibility.IsInternal(thread))
+            return;
+
         var notification = new
         {
             jsonrpc = "2.0",
@@ -1029,6 +1032,12 @@ public sealed class AppServerHost(
 
     private void OnThreadRuntimeSignal(string threadId, SessionThreadRuntimeSignal signal)
     {
+        if (signal == SessionThreadRuntimeSignal.MemoryConsolidated)
+        {
+            _runtime.WelcomeSuggestionService.ScheduleRefresh(_runtime.Paths.WorkspacePath, threadId);
+            return;
+        }
+
         while (true)
         {
             _threadRuntime.TryGetValue(threadId, out var previous);
@@ -1075,8 +1084,6 @@ public sealed class AppServerHost(
 
             if (_threadRuntime.TryAdd(threadId, next) || _threadRuntime.TryUpdate(threadId, next, previous))
             {
-                if (signal == SessionThreadRuntimeSignal.TurnCompleted)
-                    _runtime.WelcomeSuggestionService.ScheduleRefresh(_runtime.Paths.WorkspacePath, threadId);
                 BroadcastThreadRuntime(threadId, next.ToWire());
                 RequestHubTurnNotification(threadId, signal);
                 return;

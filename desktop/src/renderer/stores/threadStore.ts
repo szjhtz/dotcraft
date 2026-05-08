@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { ThreadSummary, Thread, ThreadStatus, ThreadRuntimeSnapshot } from '../types/thread'
 import { useViewerTabStore } from './viewerTabStore'
 import { getSubAgentParentThreadId, isSubAgentThread } from '../utils/subAgentThreads'
+import { isInternalThread } from '../utils/internalThreads'
 export type { ThreadRuntimeSnapshot } from '../types/thread'
 
 export interface ParkedApproval {
@@ -119,7 +120,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
 
   setThreadList(threads) {
     set((state) => {
-      const threadIds = new Set(threads.map((thread) => thread.id))
+      const visibleThreads = threads.filter((thread) => !isInternalThread(thread))
+      const threadIds = new Set(visibleThreads.map((thread) => thread.id))
       const runtimeSnapshots = filterMapToThreadList(state.runtimeSnapshots, threadIds)
       const parkedApprovals = filterMapToThreadList(state.parkedApprovals, threadIds)
       const runningTurnThreadIds = filterSetToThreadList(state.runningTurnThreadIds, threadIds)
@@ -130,7 +132,7 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
       )
       const unreadCompletedThreadIds = filterSetToThreadList(state.unreadCompletedThreadIds, threadIds)
 
-      for (const thread of threads) {
+      for (const thread of visibleThreads) {
         const runtime = thread.runtime
         if (!runtime) continue
 
@@ -172,7 +174,7 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
       }
 
       return {
-        threadList: threads,
+        threadList: visibleThreads,
         runtimeSnapshots,
         runningTurnThreadIds,
         parkedApprovals,
@@ -185,15 +187,17 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
 
   addThread(thread) {
     set((state) => {
+      if (isInternalThread(thread)) return state
       if (state.threadList.some((t) => t.id === thread.id)) return state
       return { threadList: [thread, ...state.threadList] }
     })
   },
 
   upsertThreads(threads) {
-    if (threads.length === 0) return
+    const visibleThreads = threads.filter((thread) => !isInternalThread(thread))
+    if (visibleThreads.length === 0) return
     set((state) => {
-      const incoming = new Map(threads.map((thread) => [thread.id, thread]))
+      const incoming = new Map(visibleThreads.map((thread) => [thread.id, thread]))
       const seen = new Set<string>()
       const threadList = state.threadList.map((thread) => {
         const next = incoming.get(thread.id)
@@ -201,12 +205,12 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         seen.add(thread.id)
         return { ...thread, ...next }
       })
-      const missing = threads.filter((thread) => !seen.has(thread.id))
+      const missing = visibleThreads.filter((thread) => !seen.has(thread.id))
       const runtimeSnapshots = new Map(state.runtimeSnapshots)
       const runningTurnThreadIds = new Set(state.runningTurnThreadIds)
       const unreadCompletedThreadIds = new Set(state.unreadCompletedThreadIds)
 
-      for (const thread of threads) {
+      for (const thread of visibleThreads) {
         const runtime = thread.runtime
         if (!runtime) continue
         const snapshot: ThreadRuntimeSnapshot = {

@@ -435,6 +435,20 @@ public sealed class ThreadStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadIndex_PreservesThreadMetadata()
+    {
+        var thread = CreateThread();
+        thread.Metadata[ThreadVisibility.InternalMetadataKey] = "background-helper";
+        await _store.SaveThreadAsync(thread);
+
+        var index = await _store.LoadIndexAsync();
+        var summary = Assert.Single(index);
+
+        Assert.True(ThreadVisibility.IsInternal(summary));
+        Assert.Equal("background-helper", summary.Metadata[ThreadVisibility.InternalMetadataKey]);
+    }
+
+    [Fact]
     public async Task LoadIndex_AfterDeletingThread_ExcludesDeleted()
     {
         var t1 = CreateThread();

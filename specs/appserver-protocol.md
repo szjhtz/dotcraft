@@ -593,6 +593,7 @@ List threads matching a given identity.
 | `identity` | SessionIdentity | yes | Identity to filter by. |
 | `includeArchived` | boolean | no | Default `false`. When `true`, archived threads are included in the result set alongside non-archived threads. |
 | `includeSubAgents` | boolean | no | Default `false`. When `true`, session-backed subagent child threads may be included in the mixed result set. Children whose parent is archived are still hidden unless `includeArchived` is also true. Widget-style clients should prefer `subagent/children/list` for a parent thread. |
+| `includeInternal` | boolean | no | Default `false`. When `false`, DotCraft-owned helper threads marked with `dotcraft.internal` metadata or known internal origins are excluded. This should only be enabled by diagnostics. |
 | `crossChannelOrigins` | string[] \| null | no | When **omitted** or JSON `null`, no cross-channel origin list is applied. When present as an array (possibly empty), non-empty values additionally return threads whose `originChannel` is in the list with the same `workspacePath` and `userId` as `identity`, ignoring `channelContext`. See [Session Core §9.5](session-core.md#95-cross-channel-resume-protocol). |
 | `channelName` | string | no | When set, post-filters results to threads whose persisted `originChannel` matches (case-insensitive). Same as existing filter. |
 
@@ -1091,7 +1092,7 @@ Suggest a git commit message from the **source thread’s** recent conversation 
 
 Return welcome-screen quick suggestions for the current workspace. This method is intended for clients that render an empty or ready-to-start conversation state and want to show a small set of prompts that feel relevant to the user's recent work.
 
-The result is advisory and read-only. The server may derive these suggestions from recent workspace thread history, workspace-scoped long-term memory, or other workspace-local evidence, but the exact generation strategy is server-owned and not part of the wire contract.
+The result is advisory and read-only. The server derives these suggestions from workspace-scoped memory artifacts such as `MEMORY.md` and `HISTORY.md`; it should not inspect full conversation history on this path.
 
 **Direction**: client → server (request)
 
@@ -1128,10 +1129,10 @@ The result is advisory and read-only. The server may derive these suggestions fr
 - `source = "dynamic"` means the server returned workspace-specific personalized suggestions.
 - `source = "none"` means the server intentionally did not return personalized suggestions for this call. Typical reasons include insufficient workspace evidence, a workspace-level preference disabling the feature, or transient generation unavailability.
 - When `source = "none"`, `items` may be an empty list. Client-owned default suggestions remain out of band and are not serialized by this method.
-- The server may inspect workspace-local history and memory through internal read-only mechanisms before generating suggestions, but those inspection steps are implementation-defined and not part of the wire contract.
+- The server may inspect workspace-local memory through internal read-only mechanisms before generating suggestions, but those inspection steps are implementation-defined and not part of the wire contract.
 - Servers may cache results for a short period and return the same `fingerprint` across repeated calls while the underlying workspace evidence has not materially changed.
 - Servers SHOULD serve this method from a persisted workspace cache and SHOULD NOT trigger synchronous model generation from this request path. The persisted cache is a cross-process restart snapshot of the most recent successful dynamic result; it should not be deleted on normal client shutdown, and failed, canceled, or insufficient-context refresh attempts should leave the previous snapshot available.
-- Cache refresh should run asynchronously when workspace evidence changes (for example, after turn completions). If the current evidence fingerprint already matches the persisted snapshot, the server may skip regeneration.
+- Cache refresh should run asynchronously after successful long-term memory consolidation. If the current memory evidence fingerprint already matches the persisted snapshot, the server may skip regeneration.
 
 **Errors** (non-exhaustive): missing `identity.workspacePath`; unsupported capability; invalid `maxItems`; workspace not available.
 
