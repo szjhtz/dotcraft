@@ -503,6 +503,13 @@ public sealed class AppConfig
         /// </summary>
         [ConfigField(Min = 0, Hint = "bytes, default 10485760 (10 MB)")]
         public int MaxFileSize { get; set; } = 10 * 1024 * 1024;
+
+        /// <summary>
+        /// Optional ripgrep executable path used to accelerate GrepFiles.
+        /// Empty means use DOTCRAFT_RG_PATH, then rg on PATH, then the built-in fallback.
+        /// </summary>
+        [ConfigField(Hint = "Optional rg executable path. Empty = DOTCRAFT_RG_PATH, then PATH, then built-in fallback.")]
+        public string RipgrepPath { get; set; } = string.Empty;
     }
 
     [ConfigSection("Tools.Shell", DisplayName = "Tools > Shell", Order = 21)]

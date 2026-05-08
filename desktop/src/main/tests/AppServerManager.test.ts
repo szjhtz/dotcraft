@@ -12,6 +12,10 @@ vi.mock('fs', () => ({
   existsSync: vi.fn((p: string) => p === '/usr/bin/dotcraft')
 }))
 
+vi.mock('@vscode/ripgrep', () => ({
+  rgPath: 'C:/DotCraft/resources/app.asar/node_modules/@vscode/ripgrep/bin/rg.exe'
+}))
+
 import { AppServerManager, resolveBinaryLocation } from '../AppServerManager'
 import { APP_SERVER_READY_POLL_MS, waitForReadyz } from '../appServerReady'
 import { spawn, execFileSync } from 'child_process'
@@ -101,6 +105,9 @@ describe('AppServerManager', () => {
       ['app-server'],
       expect.objectContaining({
         cwd: '/home/user/project',
+        env: expect.objectContaining({
+          DOTCRAFT_RG_PATH: 'C:/DotCraft/resources/app.asar.unpacked/node_modules/@vscode/ripgrep/bin/rg.exe'
+        }),
         stdio: ['pipe', 'pipe', 'inherit']
       })
     )

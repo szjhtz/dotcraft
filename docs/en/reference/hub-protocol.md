@@ -144,7 +144,10 @@ Example request:
     "name": "my-client",
     "version": "0.1.0"
   },
-  "startIfMissing": true
+  "startIfMissing": true,
+  "runtimeTools": {
+    "ripgrepPath": "/absolute/path/to/rg"
+  }
 }
 ```
 
@@ -188,6 +191,8 @@ Important fields:
 
 If `startIfMissing` is `false`, clients can inspect state without creating a new process.
 
+`runtimeTools.ripgrepPath` is an optional local runtime hint. Desktop can use it to pass its bundled `rg` executable to AppServer for faster `GrepFiles`; Hub only forwards the path as an environment variable to the managed process and does not echo it in status responses.
+
 ### APIProxy Sidecar
 
 Desktop may ask Hub to start an APIProxy sidecar before the managed AppServer:
@@ -217,7 +222,7 @@ Stop request:
 }
 ```
 
-Restart uses the same body and may also include `apiProxy`.
+Restart uses the same body and may also include `apiProxy` and `runtimeTools`.
 
 ### Notifications
 

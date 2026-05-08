@@ -305,6 +305,8 @@ If APIProxy is requested and cannot be started or probed, Hub must fail the ensu
 
 Hub-managed APIProxy does not change the remote AppServer protocol, does not proxy normal conversation traffic, and does not manage TypeScript social channel adapters. Built-in TypeScript channels remain a separate AppServer/adapter lifecycle concern.
 
+Desktop and other local clients may pass local runtime tool hints, such as a resolved bundled `rg` path, in `POST /v1/appservers/ensure` or restart requests. Hub forwards these hints only as AppServer process environment variables and must not expose them as service endpoints or status payloads.
+
 Hub must not silently rewrite unrelated user-configured ports for native channels, webhook modules, or future integrations unless a service explicitly participates in Hub-managed runtime overrides.
 
 ---

@@ -7,7 +7,7 @@ import { promises as fs } from 'fs'
 import * as path from 'path'
 import { translate, DEFAULT_LOCALE, type AppLocale } from '../shared/locales'
 import { watch as fsWatch, type FSWatcher } from 'fs'
-import { rgPath as rawRgPath } from '@vscode/ripgrep'
+import { resolveBundledRipgrepPath } from './ripgrepRuntime'
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
@@ -86,7 +86,7 @@ function ripgrepQuietFallbackMs(): number {
 function resolveRgPath(): string {
   const override = process.env.DOTCRAFT_RG_PATH_OVERRIDE
   if (override !== undefined) return override
-  return rawRgPath.replace(/\bapp\.asar\b/g, 'app.asar.unpacked')
+  return resolveBundledRipgrepPath()
 }
 
 const FILE_INDEX_WORKER_SOURCE = String.raw`

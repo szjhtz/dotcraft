@@ -82,6 +82,35 @@ describe('HubClient AppServer management', () => {
     })
   })
 
+  it('sends runtime tool hints when ensuring AppServer', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workspacePath: 'E:/repo',
+          canonicalWorkspacePath: 'E:/repo',
+          state: 'running',
+          endpoints: {
+            appServerWebSocket: 'ws://127.0.0.1:9000/ws'
+          },
+          serviceStatus: {},
+          startedByHub: true
+        })
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new HubClient().ensureAppServer('E:/repo', {
+      runtimeTools: { ripgrepPath: 'C:/App/resources/rg.exe' }
+    })
+
+    const ensureInit = fetchMock.mock.calls[1][1] as RequestInit
+    expect(JSON.parse(String(ensureInit.body))).toMatchObject({
+      workspacePath: 'E:/repo',
+      runtimeTools: { ripgrepPath: 'C:/App/resources/rg.exe' }
+    })
+  })
+
   it('sends disabled APIProxy sidecar options when ensuring AppServer without proxy', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true })
@@ -117,7 +146,7 @@ describe('HubClient AppServer management', () => {
     })
   })
 
-  it('sends disabled APIProxy sidecar options when restarting AppServer without proxy', async () => {
+  it('sends disabled APIProxy sidecar options and runtime tools when restarting AppServer', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({
@@ -135,12 +164,17 @@ describe('HubClient AppServer management', () => {
       })
     vi.stubGlobal('fetch', fetchMock)
 
-    await new HubClient().restartAppServer('E:/repo', { enabled: false })
+    await new HubClient().restartAppServer(
+      'E:/repo',
+      { enabled: false },
+      { ripgrepPath: 'C:/App/resources/rg.exe' }
+    )
 
     const restartInit = fetchMock.mock.calls[1][1] as RequestInit
     expect(JSON.parse(String(restartInit.body))).toMatchObject({
       workspacePath: 'E:/repo',
-      apiProxy: { enabled: false }
+      apiProxy: { enabled: false },
+      runtimeTools: { ripgrepPath: 'C:/App/resources/rg.exe' }
     })
   })
 })

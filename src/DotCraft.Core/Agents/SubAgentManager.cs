@@ -56,6 +56,8 @@ public sealed class SubAgentManager
 
     private readonly bool _requireApprovalOutsideWorkspace;
 
+    private readonly string? _ripgrepPath;
+
     public SubAgentManager(
         ChatClient chatClient, 
         string workspaceRoot, 
@@ -69,7 +71,8 @@ public sealed class SubAgentManager
         PathBlacklist? blacklist = null,
         SandboxSessionManager? sandboxManager = null,
         IApprovalService? approvalService = null,
-        TraceCollector? traceCollector = null)
+        TraceCollector? traceCollector = null,
+        string? ripgrepPath = null)
     {
         _chatClient = chatClient;
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
@@ -84,6 +87,7 @@ public sealed class SubAgentManager
         _blacklist = blacklist;
         _shellTimeout = shellTimeout;
         _requireApprovalOutsideWorkspace = requireApprovalOutsideWorkspace;
+        _ripgrepPath = ripgrepPath;
 
         if (sandboxManager != null)
         {
@@ -230,7 +234,8 @@ public sealed class SubAgentManager
                 requireApprovalOutsideWorkspace: _requireApprovalOutsideWorkspace,
                 maxFileSize: SubAgentFileMaxSize,
                 approvalService: approvalService,
-                blacklist: _blacklist
+                blacklist: _blacklist,
+                ripgrepPath: _ripgrepPath
             );
 
             var shellTools = new ShellTools(

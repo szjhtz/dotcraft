@@ -98,6 +98,7 @@ import {
 } from './proxyOAuthCallbackForwarder'
 import { ensureTrayProcess, runTrayProcess } from './trayManager'
 import { configureAppIdentity } from './appIdentity'
+import { resolveDotCraftRuntimeTools } from './ripgrepRuntime'
 
 // ─── Single-process state ─────────────────────────────────────────────────────
 // Each Electron process owns exactly one window and one AppServer connection.
@@ -794,7 +795,7 @@ function buildCallbacks(): IpcHandlerCallbacks {
         binaryPath: sharedSettings.appServerBinaryPath
       })
       const apiProxy = await prepareHubApiProxySidecar(currentWorkspacePath)
-      const restarted = await hubClient.restartAppServer(currentWorkspacePath, apiProxy)
+      const restarted = await hubClient.restartAppServer(currentWorkspacePath, apiProxy, resolveDotCraftRuntimeTools())
       updateProxyStatusFromHubResponse(restarted, apiProxy)
       await connectViaWebSocket(currentWorkspacePath, getManagedAppServerEndpoint(restarted))
       startHubEventSubscription(currentWorkspacePath, hubClient)
@@ -811,7 +812,7 @@ function buildCallbacks(): IpcHandlerCallbacks {
         binaryPath: sharedSettings.appServerBinaryPath
       })
       const apiProxy = await prepareHubApiProxySidecar(currentWorkspacePath)
-      const restarted = await hubClient.restartAppServer(currentWorkspacePath, apiProxy)
+      const restarted = await hubClient.restartAppServer(currentWorkspacePath, apiProxy, resolveDotCraftRuntimeTools())
       updateProxyStatusFromHubResponse(restarted, apiProxy)
       await connectViaWebSocket(currentWorkspacePath, getManagedAppServerEndpoint(restarted))
       startHubEventSubscription(currentWorkspacePath, hubClient)
@@ -1006,7 +1007,10 @@ async function connectToAppServer(workspacePath: string): Promise<void> {
       binarySource: resolveBinarySource(sharedSettings),
       binaryPath: sharedSettings.appServerBinaryPath
     })
-    const ensured = await hubClient.ensureAppServer(workspacePath, { apiProxy })
+    const ensured = await hubClient.ensureAppServer(workspacePath, {
+      apiProxy,
+      runtimeTools: resolveDotCraftRuntimeTools()
+    })
     if (currentWorkspacePath !== workspacePath || isAppQuitting) return
 
     updateProxyStatusFromHubResponse(ensured, apiProxy)

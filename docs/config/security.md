@@ -69,6 +69,7 @@ DotCraft 会在执行 Shell 命令前分析路径，覆盖 Unix 绝对路径、�
 |--------|------|--------|
 | `Tools.File.RequireApprovalOutsideWorkspace` | 工作区外文件操作是否需要审批 | `true` |
 | `Tools.File.MaxFileSize` | 最大可读取文件大小（字节） | `10485760` |
+| `Tools.File.RipgrepPath` | 可选的 `rg` 可执行文件路径；为空时依次尝试 `DOTCRAFT_RG_PATH`、`PATH` 和内置回退 | `""` |
 | `Tools.Shell.RequireApprovalOutsideWorkspace` | 工作区外 Shell 命令是否需要审批 | `true` |
 | `Tools.Shell.Timeout` | Shell 命令超时时间（秒） | `300` |
 | `Tools.Shell.MaxOutputLength` | Shell 命令最大输出长度（字符） | `10000` |

@@ -112,7 +112,7 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
 
             ThrowIfExternalLockIsLive(entry, craftPath);
 
-            var plan = BuildServicePlan(canonical, craftPath, request.ApiProxy);
+            var plan = BuildServicePlan(canonical, craftPath, request.ApiProxy, request.RuntimeTools);
             entry.State = HubAppServerStates.Starting;
             entry.LastError = null;
             entry.RecentStderr = null;
@@ -275,6 +275,7 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
     public async Task<HubAppServerResponse> RestartAsync(
         string workspacePath,
         HubApiProxySidecarRequest? apiProxy,
+        HubRuntimeToolsRequest? runtimeTools,
         CancellationToken cancellationToken)
     {
         apiProxy ??= TryCreateApiProxyRequestFromEntry(workspacePath);
@@ -283,7 +284,8 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         {
             WorkspacePath = workspacePath,
             StartIfMissing = true,
-            ApiProxy = apiProxy
+            ApiProxy = apiProxy,
+            RuntimeTools = runtimeTools
         }, cancellationToken);
     }
 
@@ -324,7 +326,8 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
     private ServicePlan BuildServicePlan(
         string canonicalWorkspacePath,
         string craftPath,
-        HubApiProxySidecarRequest? apiProxy)
+        HubApiProxySidecarRequest? apiProxy,
+        HubRuntimeToolsRequest? runtimeTools)
     {
         var configPath = Path.Combine(craftPath, "config.json");
         var config = AppConfig.LoadWithGlobalFallback(configPath);
@@ -368,8 +371,17 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         AddOptionalModuleService(config, "Api", "api", null, ManagedAppServerEnvironment.ApiHost, ManagedAppServerEnvironment.ApiPort, endpoints, status, environment, usedPorts, canonicalWorkspacePath);
         AddOptionalModuleService(config, "AgUi", "agui", "Path", ManagedAppServerEnvironment.AguiHost, ManagedAppServerEnvironment.AguiPort, endpoints, status, environment, usedPorts, canonicalWorkspacePath);
         AddApiProxyService(apiProxy, endpoints, status, environment);
+        AddRuntimeTools(runtimeTools, environment);
 
         return new ServicePlan(environment, endpoints, status, wsProbeUrl, wsToken);
+    }
+
+    internal static void AddRuntimeTools(
+        HubRuntimeToolsRequest? runtimeTools,
+        Dictionary<string, string?> environment)
+    {
+        if (!string.IsNullOrWhiteSpace(runtimeTools?.RipgrepPath))
+            environment["DOTCRAFT_RG_PATH"] = runtimeTools.RipgrepPath.Trim();
     }
 
     private static void AddApiProxyService(

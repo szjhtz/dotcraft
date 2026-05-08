@@ -40,6 +40,10 @@ export interface HubApiProxySidecarRequest {
   apiKey?: string
 }
 
+export interface HubRuntimeToolsRequest {
+  ripgrepPath?: string
+}
+
 export interface HubStatusResponse {
   hubVersion: string
   pid: number
@@ -125,6 +129,7 @@ export class HubClient {
     options: {
       clientName?: string
       apiProxy?: HubApiProxySidecarRequest
+      runtimeTools?: HubRuntimeToolsRequest
     } = {}
   ): Promise<HubAppServerResponse> {
     const hub = await this.ensureHub()
@@ -138,7 +143,8 @@ export class HubClient {
           workspacePath,
           client: { name: clientName, version: process.env.npm_package_version ?? '0.1.0' },
           startIfMissing: true,
-          apiProxy: options.apiProxy
+          apiProxy: options.apiProxy,
+          runtimeTools: options.runtimeTools
         })
       }
     )
@@ -146,7 +152,8 @@ export class HubClient {
 
   async restartAppServer(
     workspacePath: string,
-    apiProxy?: HubApiProxySidecarRequest
+    apiProxy?: HubApiProxySidecarRequest,
+    runtimeTools?: HubRuntimeToolsRequest
   ): Promise<HubAppServerResponse> {
     const hub = await this.ensureHub()
     return this.requestJson<HubAppServerResponse>(
@@ -154,7 +161,7 @@ export class HubClient {
       '/v1/appservers/restart',
       {
         method: 'POST',
-        body: JSON.stringify({ workspacePath, apiProxy })
+        body: JSON.stringify({ workspacePath, apiProxy, runtimeTools })
       }
     )
   }

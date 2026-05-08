@@ -94,6 +94,18 @@ public sealed class ManagedAppServerRegistryTests : IDisposable
         Assert.False(File.Exists(lockPath + ".guard"));
     }
 
+    [Fact]
+    public void AddRuntimeTools_ForwardsRipgrepPathAsEnvironmentOverride()
+    {
+        var env = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        ManagedAppServerRegistry.AddRuntimeTools(
+            new HubRuntimeToolsRequest { RipgrepPath = " C:/Tools/rg.exe " },
+            env);
+
+        Assert.Equal("C:/Tools/rg.exe", env["DOTCRAFT_RG_PATH"]);
+    }
+
     private string Touch(string fileName)
     {
         Directory.CreateDirectory(_tempDir);

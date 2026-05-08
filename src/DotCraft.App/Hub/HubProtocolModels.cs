@@ -19,6 +19,8 @@ public sealed class EnsureAppServerRequest
     public bool StartIfMissing { get; set; } = true;
 
     public HubApiProxySidecarRequest? ApiProxy { get; set; }
+
+    public HubRuntimeToolsRequest? RuntimeTools { get; set; }
 }
 
 public sealed class WorkspacePathRequest
@@ -26,6 +28,8 @@ public sealed class WorkspacePathRequest
     public string WorkspacePath { get; set; } = string.Empty;
 
     public HubApiProxySidecarRequest? ApiProxy { get; set; }
+
+    public HubRuntimeToolsRequest? RuntimeTools { get; set; }
 }
 
 public sealed class HubClientInfo
@@ -46,6 +50,11 @@ public sealed class HubApiProxySidecarRequest
     public string? Endpoint { get; set; }
 
     public string? ApiKey { get; set; }
+}
+
+public sealed class HubRuntimeToolsRequest
+{
+    public string? RipgrepPath { get; set; }
 }
 
 public sealed class HubNotificationRequest

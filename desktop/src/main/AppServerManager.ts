@@ -5,6 +5,7 @@ import { join, resolve as resolvePath } from 'path'
 import { existsSync } from 'fs'
 import { execFileSync } from 'child_process'
 import type { BinarySource } from './settings'
+import { buildDotCraftRuntimeEnv } from './ripgrepRuntime'
 
 export type AppServerManagerEvent =
   | 'started'
@@ -200,6 +201,7 @@ export class AppServerManager extends EventEmitter {
     const useStdio = !this._listenUrl || this._listenUrl.startsWith('ws+stdio://')
     const proc = spawn(binaryPath, args, {
       cwd: this._workspacePath,
+      env: { ...process.env, ...buildDotCraftRuntimeEnv() },
       stdio: useStdio ? ['pipe', 'pipe', 'inherit'] : ['ignore', 'inherit', 'inherit'],
       windowsHide: true
     })

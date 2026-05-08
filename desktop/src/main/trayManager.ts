@@ -11,6 +11,7 @@ import {
 } from './settings'
 import { tryAcquireTrayLock, type TrayLockHandle } from './trayLock'
 import { normalizeLocale, translate, type AppLocale } from '../shared/locales'
+import { resolveDotCraftRuntimeTools } from './ripgrepRuntime'
 
 interface TrayState {
   appServers: HubAppServerResponse[]
@@ -116,7 +117,7 @@ function buildAppServerMenu(
         label: L('tray.restartAppServer'),
         enabled: Boolean(workspacePath),
         click: async () => {
-          await hubClient.restartAppServer(workspacePath)
+          await hubClient.restartAppServer(workspacePath, undefined, resolveDotCraftRuntimeTools())
           refresh()
         }
       },

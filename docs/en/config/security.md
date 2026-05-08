@@ -69,6 +69,7 @@ File tools also expand `~`, `$HOME`, `${HOME}`, and `%ENV%` so workspace boundar
 |-------|-------------|---------|
 | `Tools.File.RequireApprovalOutsideWorkspace` | Whether file operations outside the workspace require approval | `true` |
 | `Tools.File.MaxFileSize` | Maximum readable file size in bytes | `10485760` |
+| `Tools.File.RipgrepPath` | Optional `rg` executable path; empty tries `DOTCRAFT_RG_PATH`, then `PATH`, then the built-in fallback | `""` |
 | `Tools.Shell.RequireApprovalOutsideWorkspace` | Whether shell commands outside the workspace require approval | `true` |
 | `Tools.Shell.Timeout` | Shell command timeout in seconds | `300` |
 | `Tools.Shell.MaxOutputLength` | Maximum shell output length in characters | `10000` |

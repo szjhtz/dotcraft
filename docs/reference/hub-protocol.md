@@ -144,7 +144,10 @@ Hub 是同一操作系统用户下的本地协调器，不是跨用户安全边�
     "name": "my-client",
     "version": "0.1.0"
   },
-  "startIfMissing": true
+  "startIfMissing": true,
+  "runtimeTools": {
+    "ripgrepPath": "/absolute/path/to/rg"
+  }
 }
 ```
 
@@ -188,6 +191,8 @@ Hub 是同一操作系统用户下的本地协调器，不是跨用户安全边�
 
 如果 `startIfMissing` 为 `false`，客户端可以查看状态，而不会创建新进程。
 
+`runtimeTools.ripgrepPath` 是可选的本机运行时提示。Desktop 可用它把内嵌的 `rg` 可执行文件路径传给 AppServer，以加速 `GrepFiles`；Hub 只把该路径作为环境变量传给托管进程，不会在状态响应中回显。
+
 ### APIProxy 辅助进程
 
 Desktop 可以要求 Hub 在托管 AppServer 之前启动 APIProxy 辅助进程：
@@ -217,7 +222,7 @@ Desktop 可以要求 Hub 在托管 AppServer 之前启动 APIProxy 辅助进程�
 }
 ```
 
-重启使用相同的请求体，也可以包含 `apiProxy`。
+重启使用相同的请求体，也可以包含 `apiProxy` 和 `runtimeTools`。
 
 ### 通知请求
 

@@ -21,7 +21,8 @@ public sealed class FileTools(
     IApprovalService? approvalService = null,
     PathBlacklist? blacklist = null,
     IReadOnlyList<string>? trustedReadPaths = null,
-    LspServerManager? lspServerManager = null)
+    LspServerManager? lspServerManager = null,
+    string? ripgrepPath = null)
 {
     private const int DefaultReadLimit = 2000;
     
@@ -75,6 +76,7 @@ public sealed class FileTools(
         approvalService,
         blacklist,
         trustedReadPaths);
+    private readonly RipgrepFileSearcher _ripgrep = new(ripgrepPath);
 
     [Description("Read the contents of a file or list the contents of a directory. If the path is a directory, lists its entries. Supports offset and limit for paginated reading of large text files. Image files (.png, .jpg, .jpeg, .gif, .webp, .bmp) are returned as vision input for the model (full file only; offset/limit do not apply).")]
     [Tool(Icon = "📄", DisplayType = typeof(CoreToolDisplays), DisplayMethod = nameof(CoreToolDisplays.ReadFile), MaxResultChars = 0)]
@@ -273,6 +275,17 @@ public sealed class FileTools(
 
             if (!Directory.Exists(searchPath))
                 return $"Error: Directory not found: {path}";
+
+            var ripgrepResult = await _ripgrep.SearchAsync(new RipgrepSearchRequest(
+                searchPath,
+                pattern,
+                string.IsNullOrEmpty(include) ? null : include,
+                MaxGrepMatches,
+                MaxLineLength,
+                MaxGrepFileSize,
+                TimeSpan.FromSeconds(30)));
+            if (ripgrepResult != null)
+                return ripgrepResult;
 
             Regex regex;
             try

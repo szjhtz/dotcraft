@@ -47,7 +47,8 @@ public sealed class CoreToolProvider : IAgentToolProvider
                     context.EffectiveMainModel),
                 blacklist: context.PathBlacklist,
                 approvalService: context.ApprovalService,
-                traceCollector: context.TraceCollector);
+                traceCollector: context.TraceCollector,
+                ripgrepPath: context.Config.Tools.File.RipgrepPath);
             var subAgentCoordinator = new SubAgentCoordinator(
                 context.WorkspacePath,
                 [new NativeSubAgentRuntime(subAgentManager), new CliOneshotRuntime()],
@@ -75,7 +76,8 @@ public sealed class CoreToolProvider : IAgentToolProvider
             context.ApprovalService,
             context.PathBlacklist,
             trustedReadPaths: [userDotCraftPath],
-            lspServerManager: context.LspServerManager);
+            lspServerManager: context.LspServerManager,
+            ripgrepPath: context.Config.Tools.File.RipgrepPath);
         tools.Add(AIFunctionFactory.Create(fileTools.ReadFile));
         tools.Add(AIFunctionFactory.Create(fileTools.WriteFile));
         tools.Add(AIFunctionFactory.Create(fileTools.EditFile));
