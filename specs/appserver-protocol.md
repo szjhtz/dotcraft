@@ -2,10 +2,10 @@
 
 | Field | Value |
 |-------|-------|
-| **Version** | 0.2.9 |
+| **Version** | 0.2.10 |
 | **Status** | Living |
 | **Date** | 2026-04-21 |
-| **Parent Spec** | [Session Core](session-core.md) (Section 19) |
+| **Parent Spec** | [Session Core](session-core.md) (Section 20) |
 
 Purpose: Define a language-neutral JSON-RPC wire protocol that exposes Session Core (`ISessionService`) and related AppServer capabilities to out-of-process clients, enabling them to create and resume threads, submit turns, stream events, participate in approval flows, and call server-level management methods through one transport-stable contract.
 
@@ -16,6 +16,7 @@ Purpose: Define a language-neutral JSON-RPC wire protocol that exposes Session C
 - [2. Protocol Fundamentals](#2-protocol-fundamentals)
 - [3. Initialization](#3-initialization)
 - [4. Thread Methods](#4-thread-methods)
+  - [4.15 Thread Goal Methods](#415-thread-goal-methods)
 - [5. Turn Methods](#5-turn-methods)
   - [5.4 `welcome/suggestions`](#54-welcomesuggestions)
 - [6. Event Notifications](#6-event-notifications)
@@ -357,6 +358,8 @@ Built-in channels do not negotiate these capabilities over `initialize`; they pr
 | `serverInfo.extensions` | string[] | Optional flat list of available extension namespaces. Structured extension capability metadata is deferred from v1. |
 | `capabilities.threadManagement` | boolean | Server supports thread CRUD operations. |
 | `capabilities.threadSubscriptions` | boolean | Server supports passive `thread/subscribe` observers independent from `turn/start`. |
+| `capabilities.threadGoals` | boolean | Server supports the complete thread goal runtime contract: `thread/goal/*` control methods, goal notifications, prompt-visible goal context, usage accounting, budget transitions, and model goal tools. Automatic idle continuation still depends on server config. |
+| `capabilities.manualCompaction` | boolean | Server supports manual context compaction with `thread/compact/start`. |
 | `capabilities.approvalFlow` | boolean | Server may send approval requests. |
 | `capabilities.modeSwitch` | boolean | Server supports `thread/mode/set`. |
 | `capabilities.configOverride` | boolean | Server supports `thread/config/update`. |
@@ -860,6 +863,69 @@ Update per-thread agent configuration (MCP servers, extensions, etc.).
 
 ---
 
+### 4.15 Thread Goal Methods
+
+Thread goal behavior is defined by [Goal Design](goal-design.md). AppServer projects the Session Core goal runtime through these JSON-RPC methods:
+
+| Method | Params | Result |
+|--------|--------|--------|
+| `thread/goal/get` | `{ threadId }` | `{ goal: ThreadGoal? }` |
+| `thread/goal/set` | `{ threadId, objective?, status?, tokenBudget?, mode? }` | `{ goal: ThreadGoal }` |
+| `thread/goal/clear` | `{ threadId }` | `{ cleared: boolean }` |
+
+Clients must check `capabilities.threadGoals` before calling these methods. When absent or false, servers return method-not-found or a capability error.
+
+`thread/goal/set.mode` defaults to `"upsertOrUpdate"` and may be `"replaceExisting"`, `"createOnly"`, or `"updateOnly"`. `status` values are `"active"`, `"paused"`, `"budgetLimited"`, and `"complete"`. Interactive clients should confirm before replacing a different non-complete objective; the server still enforces authoritative state transitions.
+
+`ThreadGoal` uses the normal wire casing:
+
+```json
+{
+  "threadId": "thread_...",
+  "goalId": "goal_...",
+  "objective": "Ship the feature",
+  "status": "active",
+  "tokenBudget": null,
+  "tokensUsed": { "totalTokens": 0 },
+  "timeUsedSeconds": 0,
+  "createdAt": "2026-05-08T00:00:00Z",
+  "updatedAt": "2026-05-08T00:00:00Z"
+}
+```
+
+Goal notifications:
+
+| Notification | Params | Notes |
+|--------------|--------|-------|
+| `thread/goal/updated` | `{ threadId, turnId?, goal }` | `turnId` is present when a running turn caused the update, such as accounting or `UpdateGoal(complete)`. |
+| `thread/goal/cleared` | `{ threadId }` | Emitted only when a goal was deleted. |
+
+`thread/read`, `thread/start`, `thread/resume`, and `thread/list` may include an optional `goal` snapshot for hydration. Clients must still consume goal notifications as the incremental source of truth.
+
+### 4.16 `thread/compact/start`
+
+Manually compact the model-visible context for an idle server-managed thread.
+
+**Direction**: client → server (request)
+
+**Params**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `threadId` | string | yes | Thread ID. |
+
+**Result**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `outcome` | string | `"micro"`, `"partial"`, `"skipped"`, or `"failed"`. |
+| `message` | string? | Optional skip/failure reason. |
+| `contextUsage` | ContextUsageSnapshot? | Updated snapshot when available. |
+
+Servers advertise this method with `capabilities.manualCompaction = true`. The method is valid only for Active, server-managed threads that have history and no `Running` / `WaitingApproval` turn. The server emits `system/event` in the order `compacting` → `compacted` / `compactSkipped` / `compactFailed`. Short histories with no older prefix to summarize return `outcome = "skipped"` and `message = "no_summarizable_prefix"` instead of failing. On success it persists the compacted agent session and appends a `SystemNotice` item with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
+
+---
+
 ## 5. Turn Methods
 
 Turn methods correspond to `ISessionService` turn lifecycle operations defined in the [Session Core Specification, Section 5.2](session-core.md#52-turn-lifecycle).
@@ -1343,7 +1409,7 @@ The canonical item payload schemas are defined in [Session Core, Section 4.2](se
 
 | `item.type` | Wire-specific notes |
 |-------------|---------------------|
-| `userMessage` | Payload shape matches Session Core; property names are camelCase and nullable fields are omitted when absent. `text` is a compatibility/display field derived from the native input parts, not the sole source of truth. When present, `nativeInputParts` is authoritative for history rendering and `materializedInputParts` captures the exact snapshot sent to the model. Optional `deliveryMode` (`"normal"` / `"queued"` / `"guidance"`) lets clients distinguish direct input, queued input that later became a Turn, and active-Turn guidance. Optional `triggerKind` (`"heartbeat"` / `"cron"` / `"automation"`), `triggerLabel`, and `triggerRefId` are emitted when the turn was synthesized by an automation mechanism (heartbeat, cron, Automations) rather than typed by a human; clients may use these to render a "sent via automation" affordance and route click-through to the originating job/task. |
+| `userMessage` | Payload shape matches Session Core; property names are camelCase and nullable fields are omitted when absent. `text` is a compatibility/display field derived from the native input parts, not the sole source of truth. When present, `nativeInputParts` is authoritative for history rendering and `materializedInputParts` captures the exact snapshot sent to the model. Optional `deliveryMode` (`"normal"` / `"queued"` / `"guidance"`) lets clients distinguish direct input, queued input that later became a Turn, and active-Turn guidance. Optional `triggerKind` (`"heartbeat"` / `"cron"` / `"automation"` / `"goal"`), `triggerLabel`, and `triggerRefId` are emitted when the turn was synthesized by an automation mechanism (heartbeat, cron, Automations) or goal continuation rather than typed by a human; clients may use these to render a source affordance and route click-through when the source has a client surface. |
 | `agentMessage` | Text deltas stream through `item/agentMessage/delta`; snapshots still use the canonical payload schema. |
 | `reasoningContent` | Reasoning deltas stream through `item/reasoning/delta`; snapshots still use the canonical payload schema. |
 | `toolCall` | Tool invocation payload uses camelCase fields such as `toolName`, `arguments`, and `callId`. When argument construction is streamed, clients receive `item/toolCall/argumentsDelta` between `item/started` and `item/completed`. |

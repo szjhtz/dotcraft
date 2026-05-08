@@ -114,6 +114,42 @@ describe('wireItemToConversationItem — nested payload format (thread/read)', (
     expect(item.deliveryMode).toBe('guidance')
   })
 
+  it('preserves goal triggerKind from userMessage payload', () => {
+    const item = wireItemToConversationItem({
+      id: 'i2-goal',
+      type: 'userMessage',
+      status: 'completed',
+      payloadKind: 'userMessage',
+      payload: {
+        text: 'Continue working toward the active thread goal',
+        triggerKind: 'goal',
+        triggerLabel: 'Goal continuation',
+        triggerRefId: 'goal-1'
+      },
+      createdAt: '2025-01-01T00:00:00Z'
+    })
+
+    expect(item.triggerKind).toBe('goal')
+    expect(item.triggerLabel).toBe('Goal continuation')
+    expect(item.triggerRefId).toBe('goal-1')
+  })
+
+  it('filters unknown triggerKind values from userMessage payload', () => {
+    const item = wireItemToConversationItem({
+      id: 'i2-unknown-trigger',
+      type: 'userMessage',
+      status: 'completed',
+      payloadKind: 'userMessage',
+      payload: {
+        text: 'synthetic message',
+        triggerKind: 'surprise'
+      },
+      createdAt: '2025-01-01T00:00:00Z'
+    })
+
+    expect(item.triggerKind).toBeUndefined()
+  })
+
   it('extracts images metadata from payload.images for userMessage', () => {
     const item = wireItemToConversationItem({
       id: 'i2b',

@@ -98,6 +98,9 @@ public sealed class AppServerRequestHandler(
         AppServerMethods.ThreadResume,
         AppServerMethods.ThreadList,
         AppServerMethods.ThreadRead,
+        AppServerMethods.ThreadGoalGet,
+        AppServerMethods.ThreadGoalSet,
+        AppServerMethods.ThreadGoalClear,
         AppServerMethods.ThreadRollback,
         AppServerMethods.ThreadSubscribe,
         AppServerMethods.ThreadUnsubscribe,
@@ -226,6 +229,10 @@ public sealed class AppServerRequestHandler(
                 AppServerMethods.ThreadResume => HandleThreadResumeAsync(msg, ct),
                 AppServerMethods.ThreadList => HandleThreadListAsync(msg, ct),
                 AppServerMethods.ThreadRead => HandleThreadReadAsync(msg, ct),
+                AppServerMethods.ThreadGoalGet => HandleThreadGoalGetAsync(msg, ct),
+                AppServerMethods.ThreadGoalSet => HandleThreadGoalSetAsync(msg, ct),
+                AppServerMethods.ThreadGoalClear => HandleThreadGoalClearAsync(msg, ct),
+                AppServerMethods.ThreadCompactStart => HandleThreadCompactStartAsync(msg, ct),
                 AppServerMethods.ThreadRollback => HandleThreadRollbackAsync(msg, ct),
                 AppServerMethods.ThreadSubscribe => HandleThreadSubscribeAsync(msg, ct),
                 AppServerMethods.ThreadUnsubscribe => HandleThreadUnsubscribeAsync(msg, ct),
@@ -290,6 +297,10 @@ public sealed class AppServerRequestHandler(
         {
             throw MapOperationException(ex);
         }
+        catch (ArgumentException ex)
+        {
+            throw AppServerErrors.InvalidParams(ex.Message);
+        }
     }
 
     /// <summary>
@@ -314,6 +325,8 @@ public sealed class AppServerRequestHandler(
         {
             ThreadManagement = true,
             ThreadSubscriptions = true,
+            ThreadGoals = GoalsCapabilityEnabled(),
+            ManualCompaction = true,
             ApprovalFlow = true,
             ModeSwitch = true,
             ConfigOverride = true,
@@ -408,7 +421,7 @@ public sealed class AppServerRequestHandler(
 
         // Fix 8: The host sends the thread/start response first, then emits the
         // thread/started notification as required by spec Section 4.1.
-        var startedWire = WithContextUsage(thread.ToWire(), thread.Id);
+        var startedWire = await HydrateThreadGoalAsync(WithContextUsage(thread.ToWire(), thread.Id), ct);
         await SendNotificationAfterResponseAsync(
             msg.Id,
             new { thread = startedWire },
@@ -432,7 +445,7 @@ public sealed class AppServerRequestHandler(
 
         // Gap D: use the client's declared name from initialize instead of hardcoded "appserver".
         var resumedBy = connection.ClientInfo?.Name ?? "appserver";
-        var resumedWire = WithContextUsage(thread.ToWire(), thread.Id);
+        var resumedWire = await HydrateThreadGoalAsync(WithContextUsage(thread.ToWire(), thread.Id), ct);
         var responseResult = new { thread = resumedWire };
         var notifParams = new { thread = resumedWire, resumedBy };
 
@@ -475,7 +488,14 @@ public sealed class AppServerRequestHandler(
                 .ToList();
         }
 
-        return new ThreadListResult { Data = [.. threads] };
+        var data = new List<ThreadSummary>();
+        foreach (var summary in threads)
+        {
+            summary.Goal = await TryGetGoalSnapshotAsync(summary.Id, ct);
+            data.Add(summary);
+        }
+
+        return new ThreadListResult { Data = data };
     }
 
     private async Task<object?> HandleSubAgentChildrenListAsync(AppServerIncomingMessage msg, CancellationToken ct)
@@ -1010,7 +1030,85 @@ public sealed class AppServerRequestHandler(
         var p = GetParams<ThreadReadParams>(msg);
         var thread = await sessionService.GetThreadAsync(p.ThreadId, ct);
         var includeTurns = p.IncludeTurns ?? false;
-        return new { thread = WithContextUsage(FilterToolExecutionItemsForConnection(thread.ToWire(includeTurns)), thread.Id) };
+        var wire = WithContextUsage(FilterToolExecutionItemsForConnection(thread.ToWire(includeTurns)), thread.Id);
+        return new { thread = await HydrateThreadGoalAsync(wire, ct) };
+    }
+
+    private async Task<object?> HandleThreadGoalGetAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        if (!GoalsCapabilityEnabled())
+            throw AppServerErrors.MethodNotFound(AppServerMethods.ThreadGoalGet);
+
+        var p = GetParams<ThreadGoalGetParams>(msg);
+        var goal = await sessionService.GetThreadGoalAsync(p.ThreadId, ct);
+        return new ThreadGoalGetResult { Goal = goal };
+    }
+
+    private async Task<object?> HandleThreadGoalSetAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        if (!GoalsCapabilityEnabled())
+            throw AppServerErrors.MethodNotFound(AppServerMethods.ThreadGoalSet);
+
+        var p = GetParams<ThreadGoalSetParams>(msg);
+        var update = new ThreadGoalUpdate
+        {
+            Objective = p.Objective,
+            Status = ParseThreadGoalStatus(p.Status),
+            HasTokenBudget = p.TokenBudget.HasValue,
+            TokenBudget = ParseThreadGoalBudget(p.TokenBudget)
+        };
+        var mode = ParseGoalSetMode(p.Mode);
+        ThreadGoal goal;
+        using (SessionService.SuppressGoalBroadcastNotifications())
+        {
+            goal = await sessionService.SetThreadGoalAsync(p.ThreadId, update, mode, ct);
+        }
+
+        var result = new ThreadGoalSetResult { Goal = goal };
+        await SendNotificationAfterResponseAsync(
+            msg.Id,
+            result,
+            AppServerMethods.ThreadGoalUpdated,
+            new { threadId = goal.ThreadId, goal, turnId = (string?)null },
+            ct);
+        return null;
+    }
+
+    private async Task<object?> HandleThreadGoalClearAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        if (!GoalsCapabilityEnabled())
+            throw AppServerErrors.MethodNotFound(AppServerMethods.ThreadGoalClear);
+
+        var p = GetParams<ThreadGoalClearParams>(msg);
+        ThreadGoalClearResult result;
+        using (SessionService.SuppressGoalBroadcastNotifications())
+        {
+            result = await sessionService.ClearThreadGoalAsync(p.ThreadId, ct);
+        }
+
+        var wireResult = new ThreadGoalClearResultWire { Cleared = result.Cleared };
+        if (!result.Cleared)
+            return wireResult;
+
+        await SendNotificationAfterResponseAsync(
+            msg.Id,
+            wireResult,
+            AppServerMethods.ThreadGoalCleared,
+            new { threadId = p.ThreadId },
+            ct);
+        return null;
+    }
+
+    private async Task<object?> HandleThreadCompactStartAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        var p = GetParams<ThreadCompactStartParams>(msg);
+        var result = await sessionService.CompactThreadAsync(p.ThreadId, ct);
+        return new ThreadCompactStartResponse
+        {
+            Outcome = result.Outcome,
+            Message = result.Message,
+            ContextUsage = result.ContextUsage
+        };
     }
 
     private async Task<object?> HandleThreadRollbackAsync(AppServerIncomingMessage msg, CancellationToken ct)
@@ -1022,7 +1120,9 @@ public sealed class AppServerRequestHandler(
         var thread = await sessionService.RollbackThreadAsync(p.ThreadId, p.NumTurns, ct);
         return new ThreadRollbackResponse
         {
-            Thread = WithContextUsage(FilterToolExecutionItemsForConnection(thread.ToWire(includeTurns: true)), thread.Id)
+            Thread = await HydrateThreadGoalAsync(
+                WithContextUsage(FilterToolExecutionItemsForConnection(thread.ToWire(includeTurns: true)), thread.Id),
+                ct)
         };
     }
 
@@ -1040,6 +1140,68 @@ public sealed class AppServerRequestHandler(
     {
         var snapshot = sessionService.TryGetContextUsageSnapshot(threadId);
         return snapshot is null ? wire : wire with { ContextUsage = snapshot };
+    }
+
+    private async Task<SessionWireThread> HydrateThreadGoalAsync(SessionWireThread wire, CancellationToken ct)
+    {
+        var goal = await TryGetGoalSnapshotAsync(wire.Id, ct);
+        return goal is null ? wire : wire with { Goal = goal };
+    }
+
+    private async Task<ThreadGoal?> TryGetGoalSnapshotAsync(string threadId, CancellationToken ct)
+    {
+        if (!GoalsCapabilityEnabled())
+            return null;
+
+        try
+        {
+            return await sessionService.GetThreadGoalAsync(threadId, ct);
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static ThreadGoalStatus? ParseThreadGoalStatus(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Trim() switch
+        {
+            "active" => ThreadGoalStatus.Active,
+            "paused" => ThreadGoalStatus.Paused,
+            "budgetLimited" => ThreadGoalStatus.BudgetLimited,
+            "complete" => ThreadGoalStatus.Complete,
+            _ => throw AppServerErrors.InvalidParams("'status' must be active, paused, budgetLimited, or complete.")
+        };
+    }
+
+    private static GoalSetMode ParseGoalSetMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return GoalSetMode.UpsertOrUpdate;
+
+        return value.Trim() switch
+        {
+            "upsertOrUpdate" => GoalSetMode.UpsertOrUpdate,
+            "createOnly" => GoalSetMode.CreateOnly,
+            "updateOnly" => GoalSetMode.UpdateOnly,
+            "replaceExisting" => GoalSetMode.ReplaceExisting,
+            _ => throw AppServerErrors.InvalidParams("'mode' must be upsertOrUpdate, createOnly, updateOnly, or replaceExisting.")
+        };
+    }
+
+    private static long? ParseThreadGoalBudget(JsonElement? value)
+    {
+        if (!value.HasValue || value.Value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (value.Value.ValueKind != JsonValueKind.Number || !value.Value.TryGetInt64(out var budget))
+            throw AppServerErrors.InvalidParams("'tokenBudget' must be a positive integer or null.");
+        if (budget <= 0)
+            throw AppServerErrors.InvalidParams("'tokenBudget' must be a positive integer or null.");
+        return budget;
     }
 
     private Task<object?> HandleThreadSubscribeAsync(AppServerIncomingMessage msg, CancellationToken ct)
@@ -3280,6 +3442,12 @@ public sealed class AppServerRequestHandler(
             StringComparison.OrdinalIgnoreCase);
     }
 
+    private bool GoalsCapabilityEnabled()
+    {
+        var config = appConfigMonitor?.Current ?? new AppConfig();
+        return config.Goals.Enabled;
+    }
+
     private SkillVariantTarget BuildSkillVariantTarget()
     {
         var config = appConfigMonitor?.Current ?? new AppConfig();
@@ -3639,7 +3807,9 @@ public sealed class AppServerRequestHandler(
         // historyMode contract violations are caller errors → InvalidParams (-32602)
         if (msg.Contains("client-managed history")
             || msg.Contains("server-managed history")
-            || msg.Contains("SubAgent child thread"))
+            || msg.Contains("SubAgent child thread")
+            || msg.Contains("has no goal")
+            || msg.Contains("already has a goal"))
             return AppServerErrors.InvalidParams(msg);
 
         return AppServerErrors.InternalError(msg);

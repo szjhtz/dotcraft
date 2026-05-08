@@ -615,6 +615,9 @@ async fn create_thread(wire: &mut WireClient, state: &mut AppState) -> Result<()
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .or_else(|| state.pending_model_override.clone());
+        state.current_goal = thread
+            .get("goal")
+            .and_then(|goal| serde_json::from_value(goal.clone()).ok());
         state.pending_model_override = None;
     }
     Ok(())
@@ -1147,6 +1150,10 @@ fn replay_thread_history(state: &mut AppState, data: &serde_json::Value) {
         .and_then(|cfg| cfg.get("model"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    state.current_goal = data
+        .get("thread")
+        .and_then(|t| t.get("goal"))
+        .and_then(|goal| serde_json::from_value(goal.clone()).ok());
 
     let turns = match data
         .get("thread")
@@ -1345,6 +1352,9 @@ async fn handle_local_slash_command(
                 state.mode = AgentMode::Agent;
             }
         }
+        LocalSlashCommand::Goal { argument_text } => {
+            handle_goal_command(wire, state, strings, argument_text).await?;
+        }
         LocalSlashCommand::Model { model_name } => {
             if !wire.capabilities.model_catalog_management.unwrap_or(false)
                 || !wire
@@ -1470,6 +1480,142 @@ async fn handle_local_slash_command(
     Ok(false)
 }
 
+async fn handle_goal_command(
+    wire: &mut WireClient,
+    state: &mut AppState,
+    strings: &Strings,
+    argument_text: String,
+) -> Result<()> {
+    if !wire.capabilities.thread_goals.unwrap_or(false) {
+        state.history.push(HistoryEntry::Error {
+            message: strings.feature_unavailable.to_string(),
+        });
+        return Ok(());
+    }
+
+    let args = argument_text.trim();
+    if args.is_empty() {
+        show_current_goal(wire, state).await?;
+        return Ok(());
+    }
+
+    let command = args.to_ascii_lowercase();
+    match command.as_str() {
+        "pause" | "paused" => {
+            let Some(thread_id) = state.current_thread_id.clone() else {
+                state.history.push(HistoryEntry::Error {
+                    message: "No active thread. Set a goal with /goal <objective> first.".to_string(),
+                });
+                return Ok(());
+            };
+            let result: wire::types::ThreadGoalSetResult = wire
+                .request(
+                    "thread/goal/set",
+                    serde_json::json!({ "threadId": thread_id, "status": "paused", "mode": "updateOnly" }),
+                )
+                .await?;
+            state.current_goal = Some(result.goal.clone());
+            state.history.push(HistoryEntry::SystemInfo {
+                message: format_goal_summary("Goal paused", &result.goal),
+            });
+        }
+        "resume" | "active" => {
+            let Some(thread_id) = state.current_thread_id.clone() else {
+                state.history.push(HistoryEntry::Error {
+                    message: "No active thread. Set a goal with /goal <objective> first.".to_string(),
+                });
+                return Ok(());
+            };
+            let result: wire::types::ThreadGoalSetResult = wire
+                .request(
+                    "thread/goal/set",
+                    serde_json::json!({ "threadId": thread_id, "status": "active", "mode": "updateOnly" }),
+                )
+                .await?;
+            state.current_goal = Some(result.goal.clone());
+            state.history.push(HistoryEntry::SystemInfo {
+                message: format_goal_summary("Goal resumed", &result.goal),
+            });
+        }
+        "clear" => {
+            let Some(thread_id) = state.current_thread_id.clone() else {
+                state.history.push(HistoryEntry::Error {
+                    message: "No active thread goal to clear.".to_string(),
+                });
+                return Ok(());
+            };
+            let result: wire::types::ThreadGoalClearResult = wire
+                .request("thread/goal/clear", serde_json::json!({ "threadId": thread_id }))
+                .await?;
+            state.current_goal = None;
+            let message = if result.cleared {
+                "Goal cleared.".to_string()
+            } else {
+                "No active thread goal to clear.".to_string()
+            };
+            state.history.push(HistoryEntry::SystemInfo { message });
+        }
+        _ => {
+            if state.current_thread_id.is_none() {
+                create_thread(wire, state).await?;
+            }
+            let Some(thread_id) = state.current_thread_id.clone() else {
+                state.history.push(HistoryEntry::Error {
+                    message: "Failed to create thread for goal.".to_string(),
+                });
+                return Ok(());
+            };
+            let result: wire::types::ThreadGoalSetResult = wire
+                .request(
+                    "thread/goal/set",
+                    serde_json::json!({ "threadId": thread_id, "objective": args }),
+                )
+                .await?;
+            state.current_goal = Some(result.goal.clone());
+            state.history.push(HistoryEntry::SystemInfo {
+                message: format_goal_summary("Goal set", &result.goal),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+async fn show_current_goal(wire: &mut WireClient, state: &mut AppState) -> Result<()> {
+    let Some(thread_id) = state.current_thread_id.clone() else {
+        state.history.push(HistoryEntry::SystemInfo {
+            message: "Usage: /goal <objective>, /goal pause, /goal resume, /goal clear".to_string(),
+        });
+        return Ok(());
+    };
+
+    let result: wire::types::ThreadGoalGetResult = wire
+        .request("thread/goal/get", serde_json::json!({ "threadId": thread_id }))
+        .await?;
+    state.current_goal = result.goal.clone();
+    match result.goal {
+        Some(goal) => state.history.push(HistoryEntry::SystemInfo {
+            message: format_goal_summary("Current goal", &goal),
+        }),
+        None => state.history.push(HistoryEntry::SystemInfo {
+            message: "No current goal. Use /goal <objective> to set one.".to_string(),
+        }),
+    }
+    Ok(())
+}
+
+fn format_goal_summary(prefix: &str, goal: &wire::types::ThreadGoal) -> String {
+    let usage = match goal.token_budget {
+        Some(budget) => format!("{}/{} tokens", goal.tokens_used.total_tokens, budget),
+        None => format!("{}s elapsed", goal.time_used_seconds),
+    };
+    format!(
+        "{prefix}: [{}] {} ({usage})",
+        goal.status,
+        goal.objective.trim()
+    )
+}
+
 async fn execute_server_command(
     wire: &mut WireClient,
     state: &mut AppState,
@@ -1516,12 +1662,13 @@ async fn execute_server_command(
         state.subagent_entries.clear();
         state.streaming.clear();
         state.token_tracker.reset();
-        state.current_turn_id = None;
-        state.current_model_override = None;
-        state.pending_model_override = None;
-        if let Some(thread) = result.thread {
-            state.current_thread_id = Some(thread.id);
-            state.current_thread_name = thread.display_name;
+            state.current_turn_id = None;
+            state.current_model_override = None;
+            state.pending_model_override = None;
+            state.current_goal = None;
+            if let Some(thread) = result.thread {
+                state.current_thread_id = Some(thread.id);
+                state.current_thread_name = thread.display_name;
         } else {
             state.current_thread_id = None;
             state.current_thread_name = None;

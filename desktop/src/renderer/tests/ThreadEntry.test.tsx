@@ -280,6 +280,27 @@ describe('ThreadEntry', () => {
     expect(screen.getByLabelText('Turn running')).toBeInTheDocument()
   })
 
+  it('shows running spinner in default state and swaps to archive on hover', async () => {
+    useThreadStore.setState({
+      runningTurnThreadIds: new Set<string>(['thread-1'])
+    })
+
+    renderThreadEntry(makeThread())
+
+    const spinner = screen.getByTestId('thread-running-indicator-thread-1')
+    const archiveButton = screen.getByRole('button', { name: 'Archive' })
+
+    expect(spinner).toBeVisible()
+    expect(archiveButton).not.toBeVisible()
+
+    fireEvent.mouseEnter(screen.getByTestId('thread-entry-thread-1'))
+
+    await waitFor(() => {
+      expect(spinner).not.toBeVisible()
+      expect(archiveButton).toBeVisible()
+    })
+  })
+
   it('shows a running spinner after thread list runtime hydration', () => {
     const thread = makeThread({
       runtime: {

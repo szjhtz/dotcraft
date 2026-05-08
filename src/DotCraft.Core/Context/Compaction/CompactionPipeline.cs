@@ -346,6 +346,53 @@ public sealed class CompactionPipeline
     }
 
     /// <summary>
+    /// Manual compaction for an explicit history snapshot. This is used by
+    /// clients that need to compact an idle persisted session even when the
+    /// loaded <see cref="AgentSession"/> does not expose an in-memory history
+    /// provider.
+    /// </summary>
+    public async Task<CompactionHistoryResult> TryManualCompactHistoryAsync(
+        IReadOnlyList<ChatMessage> history,
+        string threadId,
+        DateTimeOffset? lastAssistantTimestampUtc,
+        CancellationToken cancellationToken)
+    {
+        var before = MessageTokenEstimator.Estimate(history);
+        var beforeThreshold = EvaluateThreshold(before);
+
+        if (history.Count == 0)
+        {
+            return new CompactionHistoryResult(
+                new CompactionStatus(
+                    CompactionOutcome.Skipped,
+                    before, before,
+                    beforeThreshold, beforeThreshold,
+                    FailureReason: "empty_history"),
+                history);
+        }
+
+        if (_failures.IsTripped(threadId))
+        {
+            return new CompactionHistoryResult(
+                new CompactionStatus(
+                    CompactionOutcome.Failed,
+                    before, before,
+                    beforeThreshold, beforeThreshold,
+                    FailureReason: "circuit_breaker_tripped"),
+                history);
+        }
+
+        return await RunCompactionAsync(
+            history,
+            before,
+            beforeThreshold,
+            threadId,
+            lastAssistantTimestampUtc,
+            cancellationToken,
+            forcePartial: true);
+    }
+
+    /// <summary>
     /// Drops any per-thread state (called on thread deletion / clear).
     /// </summary>
     public void Forget(string threadId) => _failures.Forget(threadId);
@@ -386,7 +433,7 @@ public sealed class CompactionPipeline
             ? afterMicroHistory
             : history;
 
-        PartialCompactResult? partial;
+        PartialCompactAttempt partial;
         try
         {
             partial = await _partial.CompactAsync(historyForPartial, snapshot, cancellationToken);
@@ -411,10 +458,24 @@ public sealed class CompactionPipeline
                 historyForPartial);
         }
 
-        if (partial is null)
+        if (partial.Result is null)
         {
-            _failures.RecordFailure(threadId);
             var afterFailure = MessageTokenEstimator.Estimate(historyForPartial);
+            if (partial.Reason is "empty_history" or "no_summarizable_prefix")
+            {
+                return new CompactionHistoryResult(
+                    new CompactionStatus(
+                        CompactionOutcome.Skipped,
+                        before,
+                        afterFailure,
+                        beforeThreshold,
+                        EvaluateThreshold(afterFailure),
+                        microResult.ClearedCount,
+                        FailureReason: partial.Reason),
+                    historyForPartial);
+            }
+
+            _failures.RecordFailure(threadId);
             return new CompactionHistoryResult(
                 new CompactionStatus(
                     CompactionOutcome.Failed,
@@ -423,13 +484,14 @@ public sealed class CompactionPipeline
                     beforeThreshold,
                     EvaluateThreshold(afterFailure),
                     microResult.ClearedCount,
-                    FailureReason: "summary_unavailable"),
+                    FailureReason: partial.Reason ?? "summary_unavailable"),
                 historyForPartial);
         }
 
-        var summaryMessage = new ChatMessage(ChatRole.Assistant, partial.FormattedSummary);
-        var newHistory = new List<ChatMessage>(1 + partial.PreservedTail.Count) { summaryMessage };
-        newHistory.AddRange(partial.PreservedTail);
+        var partialResult = partial.Result;
+        var summaryMessage = new ChatMessage(ChatRole.Assistant, partialResult.FormattedSummary);
+        var newHistory = new List<ChatMessage>(1 + partialResult.PreservedTail.Count) { summaryMessage };
+        newHistory.AddRange(partialResult.PreservedTail);
 
         var afterTokens = MessageTokenEstimator.Estimate(newHistory);
         var afterThreshold = EvaluateThreshold(afterTokens);

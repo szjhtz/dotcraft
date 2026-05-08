@@ -2,11 +2,11 @@
 
 | Field | Value |
 |-------|-------|
-| **Version** | 0.3.2 |
+| **Version** | 0.3.3 |
 | **Status** | Living |
-| **Date** | 2026-04-19 |
+| **Date** | 2026-05-08 |
 | **Parent Spec** | [AppServer Protocol](appserver-protocol.md) |
-| **Related Specs** | [Plugin Architecture](plugin-architecture.md) |
+| **Related Specs** | [Plugin Architecture](plugin-architecture.md), [Goal Design](goal-design.md) |
 
 Purpose: Define the stable user-experience behavior of **DotCraft Desktop** as a protocol client for DotCraft AppServer. This document specifies user-visible flows, interaction rules, state transitions, and recovery behavior. It does not define frontend implementation details, visual design, or framework choices.
 
@@ -174,6 +174,8 @@ This section defines how protocol messages affect user-visible behavior. It inte
 | `system/event` | Maintenance steps may be surfaced when relevant but must not overshadow core turn output. |
 | `system/jobResult` | Automation or heartbeat output becomes visible as an out-of-band result associated with its source run. |
 | `cron/stateChanged` | Automation status views refresh to reflect the current job state. |
+| `thread/goal/updated` | Goal-aware surfaces for the affected thread update from the server snapshot without forcing thread navigation. |
+| `thread/goal/cleared` | Goal-aware surfaces for the affected thread remove the current goal snapshot without forcing thread navigation. |
 | `workspace/configChanged` | Settings-adjacent surfaces re-fetch impacted regions (`skills`, `mcp`, `externalChannel`, workspace config fields, including welcome-suggestion personalization state) without requiring manual full-page refresh. |
 
 ### 4.6 General Rules
@@ -286,6 +288,32 @@ This section defines how protocol messages affect user-visible behavior. It inte
   - unsupported actions must be disabled rather than failing unexpectedly
   - read and resume behavior must follow server capabilities and thread status
 
+### 5.11 Manage Thread Goal
+
+Desktop goal behavior is defined by [Goal Design §11.7](goal-design.md#117-desktop-ux-contract).
+
+At the Desktop UX level:
+
+- Goals are exposed as a conversation control, not as an AppServer custom command.
+- When `capabilities.threadGoals = true`, the slash reference surface includes a system Goal action above Commands and Skills. This capability means the server owns the complete goal runtime; Desktop only controls and displays it.
+- Active goal state is summarized in the composer footer when a current thread has a goal.
+- Direct `/goal` submissions are handled locally by Desktop and translated to `thread/goal/*` requests.
+- Creating a goal from the welcome screen may create a thread and set the goal without starting an agent turn.
+- Goal replacement requires explicit confirmation when it would replace a different non-complete objective.
+- Desktop does not start automatic goal continuation turns. When an active goal continues, Desktop observes normal `turn/*` and `item/*` notifications from the server and updates goal UI from `thread/goal/updated` / `thread/goal/cleared`.
+- Goal continuation user messages with `triggerKind = "goal"` must render a visible source marker, such as "Goal auto-continue" / "目标自动推进", so users can distinguish server-initiated goal work from typed input.
+
+### 5.12 Composer System Actions
+
+The slash reference surface includes Desktop-owned system actions above custom Commands and Skills:
+
+- Plan mode is always shown with the label "Plan mode". Its hint reflects the current mode: "Enable Plan mode" in Agent mode and "Disable Plan mode" in Plan mode. Selecting it uses the same local mode toggle path as `Shift+Tab` and calls `thread/mode/set`.
+- Manual compaction is shown as "Compact" with the hint "Compact this session's context" only when `capabilities.manualCompaction = true`, the active thread has at least one turn, and no turn is running or waiting for approval. Selecting it calls `thread/compact/start` with the active `threadId`.
+- If manual compaction returns `outcome = "skipped"` with `message = "no_summarizable_prefix"`, Desktop shows a specific short-history hint instead of the generic skipped message.
+- Selecting a system action from slash search clears the slash query from the composer instead of leaving `/` behind.
+- Direct `/plan`, `/agent`, and `/compact` submissions are handled locally and must not start a normal agent turn. `/compact` shows an unavailable message instead of submitting a turn when the visibility conditions are not met. On the welcome screen, Plan mode is also shown as a system action, and `/plan` / `/agent` update the pending welcome mode without starting a thread.
+- Desktop updates the context ring from the RPC response when it includes `contextUsage`, and also consumes the standard `system/event` notifications emitted during compaction.
+
 ---
 
 ## 6. Secondary Flows
@@ -342,6 +370,7 @@ Required behavior:
 - If model catalog capability is available, the client may offer model selection using server-provided values.
 - If model catalog capability is absent or temporarily fails, the conversation workflow remains usable.
 - Updating workspace default model and updating active-thread model must remain distinct actions when both are supported.
+- The welcome-screen model picker updates the workspace default model for threads created after that change. Existing threads must continue using their captured thread model unless the user explicitly changes the model from that thread's conversation view.
 
 ### 6.6 Archived Threads
 

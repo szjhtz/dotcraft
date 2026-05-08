@@ -32,6 +32,7 @@ public sealed class AgentFactory : IAsyncDisposable
     private readonly ToolProviderContext _toolProviderContext;
     private readonly IReadOnlyList<IAgentToolProvider> _toolProviders;
     private readonly OpenAIClientProvider _openAIClientProvider;
+    private readonly IChatClient? _compactionChatClientOverride;
     private readonly CustomCommandLoader? _customCommandLoader;
     private readonly PlanStore? _planStore;
     private readonly Action<StructuredPlan>? _onPlanUpdated;
@@ -57,7 +58,8 @@ public sealed class AgentFactory : IAsyncDisposable
         Action<string>? onConsolidatorStatus = null,
         HookRunner? hookRunner = null,
         OpenAIClientProvider? openAIClientProvider = null,
-        IMemoryConsolidator? memoryConsolidator = null)
+        IMemoryConsolidator? memoryConsolidator = null,
+        IChatClient? compactionChatClient = null)
     {
         _config = config;
         _traceCollector = traceCollector;
@@ -65,6 +67,7 @@ public sealed class AgentFactory : IAsyncDisposable
         _planStore = planStore;
         _onPlanUpdated = onPlanUpdated;
         _hookRunner = hookRunner;
+        _compactionChatClientOverride = compactionChatClient;
         _globalEnabledToolNames = ResolveGlobalEnabledToolNames(_config);
         _openAIClientProvider = openAIClientProvider ?? toolProviderContext?.OpenAIClientProvider ?? new OpenAIClientProvider();
 
@@ -84,7 +87,7 @@ public sealed class AgentFactory : IAsyncDisposable
 
         CompactionPipeline = new CompactionPipeline(
             ModelContextWindowCatalog.ResolveCompactionConfig(config, mainModel),
-            _chatClient.AsIChatClient());
+            _compactionChatClientOverride ?? _chatClient.AsIChatClient());
 
         // Build tool provider context
         _toolProviderContext = toolProviderContext ?? new ToolProviderContext
@@ -143,13 +146,14 @@ public sealed class AgentFactory : IAsyncDisposable
         return _compactionPipelines.GetOrAdd(key, static (pipelineKey, state) =>
         {
             var (factory, resolvedConfig) = state;
-            var chatClient = factory._openAIClientProvider.TryGetChatClient(
-                factory._config,
-                pipelineKey.Model,
-                out var resolvedChatClient)
-                ? resolvedChatClient!
-                : factory._chatClient;
-            return new CompactionPipeline(resolvedConfig, chatClient.AsIChatClient());
+            var chatClient = factory._compactionChatClientOverride
+                ?? (factory._openAIClientProvider.TryGetChatClient(
+                    factory._config,
+                    pipelineKey.Model,
+                    out var resolvedChatClient)
+                    ? resolvedChatClient!.AsIChatClient()
+                    : factory._chatClient.AsIChatClient());
+            return new CompactionPipeline(resolvedConfig, chatClient);
         }, (this, compactionConfig));
     }
 
@@ -269,6 +273,15 @@ public sealed class AgentFactory : IAsyncDisposable
     public List<AITool> CreateToolsForMode(AgentMode mode, ToolProviderContext toolContext)
     {
         var tools = CreateDefaultTools(toolContext);
+
+        if (mode == AgentMode.Plan)
+        {
+            tools = tools
+                .Where(tool => !string.Equals(tool.Name, GoalToolNames.GetGoal, StringComparison.Ordinal)
+                    && !string.Equals(tool.Name, GoalToolNames.CreateGoal, StringComparison.Ordinal)
+                    && !string.Equals(tool.Name, GoalToolNames.UpdateGoal, StringComparison.Ordinal))
+                .ToList();
+        }
 
         if (_planStore != null)
         {

@@ -4,7 +4,7 @@ using DotCraft.Tools;
 namespace DotCraft.Protocol;
 
 /// <summary>
-/// Per-thread agent configuration. When null on a Thread, workspace defaults apply.
+/// Per-thread agent configuration. New threads capture workspace defaults at creation time.
 /// </summary>
 public sealed class ThreadConfiguration
 {
@@ -30,7 +30,8 @@ public sealed class ThreadConfiguration
     public string[]? CustomTools { get; set; }
 
     /// <summary>
-    /// Optional per-thread model override. When empty, the workspace/global <c>AppConfig.Model</c> is used.
+    /// Per-thread model. When empty during thread creation, Session Core captures
+    /// the current effective workspace/global <c>AppConfig.Model</c>.
     /// </summary>
     public string? Model { get; set; }
 

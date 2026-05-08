@@ -66,7 +66,8 @@ public sealed class SessionThread
     public HistoryMode HistoryMode { get; set; } = HistoryMode.Server;
 
     /// <summary>
-    /// Per-thread agent configuration. Null means workspace defaults apply.
+    /// Per-thread agent configuration. New server-managed threads capture workspace defaults at creation time.
+    /// Null is only expected for older persisted threads or externally constructed test fixtures.
     /// </summary>
     public ThreadConfiguration? Configuration { get; set; }
 

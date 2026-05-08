@@ -111,6 +111,57 @@ public sealed class SessionServiceSetThreadModeTests : IDisposable
         await drainTask.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
+    [Fact]
+    public async Task CreateThreadAsync_CapturesWorkspaceModelForNewThreads()
+    {
+        var store = new ThreadStore(_tempDir);
+        var persistence = new SessionPersistenceService(store);
+        var identity = new SessionIdentity
+        {
+            ChannelName = "test",
+            UserId = "u",
+            WorkspacePath = _tempDir
+        };
+        var config = new AppConfig
+        {
+            ApiKey = "sk-test-not-used-for-network",
+            EndPoint = "https://127.0.0.1:9/v1",
+            Model = "model-a"
+        };
+        var monitor = new AppConfigMonitor(config);
+
+        await using var agentFactory = CreateAgentFactory(config);
+        var defaultAgent = agentFactory.CreateAgentForMode(AgentMode.Agent);
+        var svc = new SessionService(
+            agentFactory,
+            defaultAgent,
+            persistence,
+            new SessionGate(),
+            appConfigMonitor: monitor);
+
+        var existingThread = await svc.CreateThreadAsync(identity);
+
+        Assert.Equal("model-a", existingThread.Configuration?.Model);
+        Assert.False(GetThreadAgents(svc).ContainsKey(existingThread.Id));
+
+        monitor.Current.Model = "model-b";
+        svc.InvalidateThreadAgents();
+
+        var existingAfterChange = await svc.EnsureThreadLoadedAsync(existingThread.Id);
+        var persistedExisting = await store.LoadThreadAsync(existingThread.Id);
+
+        Assert.Equal("model-a", existingAfterChange.Configuration?.Model);
+        Assert.Equal("model-a", persistedExisting?.Configuration?.Model);
+
+        var newThread = await svc.CreateThreadAsync(identity);
+        Assert.Equal("model-b", newThread.Configuration?.Model);
+
+        var explicitThread = await svc.CreateThreadAsync(
+            identity,
+            new ThreadConfiguration { Model = "model-c" });
+        Assert.Equal("model-c", explicitThread.Configuration?.Model);
+    }
+
     private AgentFactory CreateAgentFactory()
     {
         var config = new AppConfig
@@ -118,6 +169,11 @@ public sealed class SessionServiceSetThreadModeTests : IDisposable
             ApiKey = "sk-test-not-used-for-network",
             EndPoint = "https://127.0.0.1:9/v1"
         };
+        return CreateAgentFactory(config);
+    }
+
+    private AgentFactory CreateAgentFactory(AppConfig config)
+    {
         var memory = new MemoryStore(_tempDir);
         var skills = new SkillsLoader(_tempDir);
         return new AgentFactory(

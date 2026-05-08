@@ -372,6 +372,160 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
         command.ExecuteNonQuery();
     }
 
+    public ThreadGoal? LoadThreadGoal(string threadId)
+    {
+        using var connection = stateRuntime.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT thread_id, goal_id, objective, status, token_budget,
+                   input_tokens, output_tokens, cached_input_tokens,
+                   cache_write_input_tokens, reasoning_output_tokens, total_tokens,
+                   time_used_seconds, created_at_utc, updated_at_utc
+            FROM thread_goals
+            WHERE thread_id = $thread_id
+            LIMIT 1
+            """;
+        command.Parameters.AddWithValue("$thread_id", threadId);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadGoal(reader) : null;
+    }
+
+    public void UpsertThreadGoal(ThreadGoal goal)
+    {
+        using var connection = stateRuntime.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO thread_goals (
+                thread_id, goal_id, objective, status, token_budget,
+                input_tokens, output_tokens, cached_input_tokens,
+                cache_write_input_tokens, reasoning_output_tokens, total_tokens,
+                time_used_seconds, created_at_utc, updated_at_utc
+            ) VALUES (
+                $thread_id, $goal_id, $objective, $status, $token_budget,
+                $input_tokens, $output_tokens, $cached_input_tokens,
+                $cache_write_input_tokens, $reasoning_output_tokens, $total_tokens,
+                $time_used_seconds, $created_at_utc, $updated_at_utc
+            )
+            ON CONFLICT(thread_id) DO UPDATE SET
+                goal_id = excluded.goal_id,
+                objective = excluded.objective,
+                status = excluded.status,
+                token_budget = excluded.token_budget,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cached_input_tokens = excluded.cached_input_tokens,
+                cache_write_input_tokens = excluded.cache_write_input_tokens,
+                reasoning_output_tokens = excluded.reasoning_output_tokens,
+                total_tokens = excluded.total_tokens,
+                time_used_seconds = excluded.time_used_seconds,
+                created_at_utc = excluded.created_at_utc,
+                updated_at_utc = excluded.updated_at_utc
+            """;
+        command.Parameters.AddWithValue("$thread_id", goal.ThreadId);
+        command.Parameters.AddWithValue("$goal_id", goal.GoalId);
+        command.Parameters.AddWithValue("$objective", goal.Objective);
+        command.Parameters.AddWithValue("$status", ToGoalStatusStorage(goal.Status));
+        command.Parameters.AddWithValue("$token_budget", goal.TokenBudget.HasValue ? goal.TokenBudget.Value : DBNull.Value);
+        command.Parameters.AddWithValue("$input_tokens", goal.TokensUsed.InputTokens);
+        command.Parameters.AddWithValue("$output_tokens", goal.TokensUsed.OutputTokens);
+        command.Parameters.AddWithValue("$cached_input_tokens", goal.TokensUsed.CachedInputTokens);
+        command.Parameters.AddWithValue("$cache_write_input_tokens", goal.TokensUsed.CacheWriteInputTokens);
+        command.Parameters.AddWithValue("$reasoning_output_tokens", goal.TokensUsed.ReasoningOutputTokens);
+        command.Parameters.AddWithValue("$total_tokens", goal.TokensUsed.TotalTokens);
+        command.Parameters.AddWithValue("$time_used_seconds", goal.TimeUsedSeconds);
+        command.Parameters.AddWithValue("$created_at_utc", goal.CreatedAt.UtcDateTime.ToString("O"));
+        command.Parameters.AddWithValue("$updated_at_utc", goal.UpdatedAt.UtcDateTime.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public ThreadGoal? AccountThreadGoalUsage(
+        string threadId,
+        string expectedGoalId,
+        TokenUsageInfo usageDelta,
+        long timeDeltaSeconds)
+    {
+        using var connection = stateRuntime.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var select = connection.CreateCommand();
+        select.Transaction = transaction;
+        select.CommandText = """
+            SELECT thread_id, goal_id, objective, status, token_budget,
+                   input_tokens, output_tokens, cached_input_tokens,
+                   cache_write_input_tokens, reasoning_output_tokens, total_tokens,
+                   time_used_seconds, created_at_utc, updated_at_utc
+            FROM thread_goals
+            WHERE thread_id = $thread_id AND goal_id = $goal_id
+            LIMIT 1
+            """;
+        select.Parameters.AddWithValue("$thread_id", threadId);
+        select.Parameters.AddWithValue("$goal_id", expectedGoalId);
+
+        ThreadGoal? current;
+        using (var reader = select.ExecuteReader())
+        {
+            current = reader.Read() ? ReadGoal(reader) : null;
+        }
+
+        if (current == null)
+        {
+            transaction.Commit();
+            return null;
+        }
+
+        var nextTokens = current.TokensUsed + usageDelta;
+        var nextStatus = current.Status == ThreadGoalStatus.Active
+            && current.TokenBudget.HasValue
+            && nextTokens.TotalTokens >= current.TokenBudget.Value
+                ? ThreadGoalStatus.BudgetLimited
+                : current.Status;
+        var next = current with
+        {
+            TokensUsed = nextTokens,
+            TimeUsedSeconds = current.TimeUsedSeconds + Math.Max(0, timeDeltaSeconds),
+            Status = nextStatus,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = """
+            UPDATE thread_goals
+            SET status = $status,
+                input_tokens = $input_tokens,
+                output_tokens = $output_tokens,
+                cached_input_tokens = $cached_input_tokens,
+                cache_write_input_tokens = $cache_write_input_tokens,
+                reasoning_output_tokens = $reasoning_output_tokens,
+                total_tokens = $total_tokens,
+                time_used_seconds = $time_used_seconds,
+                updated_at_utc = $updated_at_utc
+            WHERE thread_id = $thread_id AND goal_id = $goal_id
+            """;
+        update.Parameters.AddWithValue("$thread_id", threadId);
+        update.Parameters.AddWithValue("$goal_id", expectedGoalId);
+        update.Parameters.AddWithValue("$status", ToGoalStatusStorage(next.Status));
+        update.Parameters.AddWithValue("$input_tokens", next.TokensUsed.InputTokens);
+        update.Parameters.AddWithValue("$output_tokens", next.TokensUsed.OutputTokens);
+        update.Parameters.AddWithValue("$cached_input_tokens", next.TokensUsed.CachedInputTokens);
+        update.Parameters.AddWithValue("$cache_write_input_tokens", next.TokensUsed.CacheWriteInputTokens);
+        update.Parameters.AddWithValue("$reasoning_output_tokens", next.TokensUsed.ReasoningOutputTokens);
+        update.Parameters.AddWithValue("$total_tokens", next.TokensUsed.TotalTokens);
+        update.Parameters.AddWithValue("$time_used_seconds", next.TimeUsedSeconds);
+        update.Parameters.AddWithValue("$updated_at_utc", next.UpdatedAt.UtcDateTime.ToString("O"));
+        update.ExecuteNonQuery();
+        transaction.Commit();
+        return next;
+    }
+
+    public bool DeleteThreadGoal(string threadId)
+    {
+        using var connection = stateRuntime.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM thread_goals WHERE thread_id = $thread_id";
+        command.Parameters.AddWithValue("$thread_id", threadId);
+        return command.ExecuteNonQuery() > 0;
+    }
+
     public long? LoadContextUsageTokens(string threadId)
     {
         using var connection = stateRuntime.OpenConnection();
@@ -424,6 +578,50 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
 
         return null;
     }
+
+    private static ThreadGoal ReadGoal(Microsoft.Data.Sqlite.SqliteDataReader reader)
+    {
+        var tokens = new TokenUsageInfo
+        {
+            InputTokens = reader.GetInt64(5),
+            OutputTokens = reader.GetInt64(6),
+            CachedInputTokens = reader.GetInt64(7),
+            CacheWriteInputTokens = reader.GetInt64(8),
+            ReasoningOutputTokens = reader.GetInt64(9),
+            TotalTokens = reader.GetInt64(10)
+        };
+
+        return new ThreadGoal
+        {
+            ThreadId = reader.GetString(0),
+            GoalId = reader.GetString(1),
+            Objective = reader.GetString(2),
+            Status = FromGoalStatusStorage(reader.GetString(3)),
+            TokenBudget = reader.IsDBNull(4) ? null : reader.GetInt64(4),
+            TokensUsed = tokens,
+            TimeUsedSeconds = reader.GetInt64(11),
+            CreatedAt = DateTimeOffset.Parse(reader.GetString(12)),
+            UpdatedAt = DateTimeOffset.Parse(reader.GetString(13))
+        };
+    }
+
+    private static string ToGoalStatusStorage(ThreadGoalStatus status) => status switch
+    {
+        ThreadGoalStatus.Active => "active",
+        ThreadGoalStatus.Paused => "paused",
+        ThreadGoalStatus.BudgetLimited => "budget_limited",
+        ThreadGoalStatus.Complete => "complete",
+        _ => "active"
+    };
+
+    private static ThreadGoalStatus FromGoalStatusStorage(string status) => status switch
+    {
+        "active" => ThreadGoalStatus.Active,
+        "paused" => ThreadGoalStatus.Paused,
+        "budget_limited" => ThreadGoalStatus.BudgetLimited,
+        "complete" => ThreadGoalStatus.Complete,
+        _ => ThreadGoalStatus.Active
+    };
 }
 
 internal sealed record ThreadRolloutLocation(string ThreadId, string RolloutPath, ThreadStatus Status);

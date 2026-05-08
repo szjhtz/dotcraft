@@ -26,6 +26,7 @@ export interface ServerCapabilities {
   mcpManagement?: boolean
   externalChannelManagement?: boolean
   mcpStatus?: boolean
+  manualCompaction?: boolean
 }
 
 export interface InitializeResult {

@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 use super::token_tracker::TokenTracker;
-use crate::wire::types::CommandInfo;
+use crate::wire::types::{CommandInfo, ThreadGoal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnStatus {
@@ -241,6 +241,7 @@ pub struct AppState {
     pub current_model_override: Option<String>,
     pub pending_model_override: Option<String>,
     pub workspace_model: Option<String>,
+    pub current_goal: Option<ThreadGoal>,
 
     // Turn
     pub turn_status: TurnStatus,
@@ -321,6 +322,7 @@ impl AppState {
             current_model_override: None,
             pending_model_override: None,
             workspace_model: None,
+            current_goal: None,
             turn_status: TurnStatus::Idle,
             current_turn_id: None,
             turn_started_at: None,

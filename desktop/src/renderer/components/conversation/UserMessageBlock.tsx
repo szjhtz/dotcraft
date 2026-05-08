@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, FileText, Pencil, Sparkle, Terminal } from 'lucide-react'
+import { Bot, FileText, Pencil, Sparkle, Target, Terminal } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { translate } from '../../../shared/locales'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -345,7 +345,7 @@ export function UserMessageBlock({
           </span>
         )}
         {triggerKind && (
-          <AutomationTriggerPill
+          <TriggerSourcePill
             kind={triggerKind}
             label={triggerLabel}
             refId={triggerRefId}
@@ -561,7 +561,7 @@ function FileRefChip({
   )
 }
 
-function AutomationTriggerPill({
+function TriggerSourcePill({
   kind,
   label,
   refId
@@ -577,18 +577,23 @@ function AutomationTriggerPill({
 
   const canNavigate =
     (kind === 'cron' && !!refId) || (kind === 'automation' && !!refId)
-  const badgeText = translate(locale, 'automation.triggeredBy.badge')
-  const detailText = label
-    ? translate(
-        locale,
-        kind === 'heartbeat'
-          ? 'automation.triggeredBy.heartbeat'
-          : kind === 'cron'
-            ? 'automation.triggeredBy.cron'
-            : 'automation.triggeredBy.task',
-        { label }
-      )
-    : translate(locale, 'automation.triggeredBy.generic')
+  const isGoal = kind === 'goal'
+  const badgeText = isGoal
+    ? translate(locale, 'goal.triggeredBy.badge')
+    : translate(locale, 'automation.triggeredBy.badge')
+  const detailText = isGoal
+    ? (label || translate(locale, 'goal.triggeredBy.generic'))
+    : label
+      ? translate(
+          locale,
+          kind === 'heartbeat'
+            ? 'automation.triggeredBy.heartbeat'
+            : kind === 'cron'
+              ? 'automation.triggeredBy.cron'
+              : 'automation.triggeredBy.task',
+          { label }
+        )
+      : translate(locale, 'automation.triggeredBy.generic')
 
   const onClick = canNavigate
     ? () => {
@@ -638,7 +643,11 @@ function AutomationTriggerPill({
 
   return (
     <span title={title} style={commonStyle}>
-      <Bot size={11} strokeWidth={2.1} aria-hidden />
+      {isGoal ? (
+        <Target size={11} strokeWidth={2.1} aria-hidden />
+      ) : (
+        <Bot size={11} strokeWidth={2.1} aria-hidden />
+      )}
       <span>{badgeText}</span>
     </span>
   )

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from 'react'
-import { BookText, Bug, FileText, Sparkles } from 'lucide-react'
+import { BookText, Bug, FileText, ListChecks, Sparkles, Target } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { useConnectionStore } from '../../stores/connectionStore'
 import { useModelCatalogStore } from '../../stores/modelCatalogStore'
@@ -18,7 +18,9 @@ import {
   mergeComposerFileAttachments
 } from '../../utils/composerAttachments'
 import { buildComposerInputParts } from '../../utils/composeInputParts'
+import { extractGoal, parseGoalSlashCommand, type GoalSlashCommand } from '../../utils/threadGoal'
 import { CommandSearchPopover } from './CommandSearchPopover'
+import { GoalControlPopover } from './GoalControlPopover'
 import { FileSearchPopover } from './FileSearchPopover'
 import { AttachmentStrip } from './AttachmentStrip'
 import { ComposerAttachmentMenu } from './ComposerAttachmentMenu'
@@ -111,6 +113,8 @@ export function ConversationWelcome({
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [skillQuery, setSkillQuery] = useState<string | null>(null)
   const [skillDismissed, setSkillDismissed] = useState(false)
+  const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
+  const [goalBusy, setGoalBusy] = useState(false)
   /** Agent/plan before a thread exists; applied when the first thread is created. */
   const [welcomeMode, setWelcomeMode] = useState<ThreadMode>('agent')
   const [welcomeApprovalPolicy, setWelcomeApprovalPolicy] = useState<VisibleApprovalPolicy>('default')
@@ -149,8 +153,12 @@ export function ConversationWelcome({
   const showMentionPopover = atQuery !== null && !mentionDismissed
   const canUseCommandPicker = capabilities?.commandManagement === true
   const canUseSkillPicker = capabilities?.skillsManagement === true
-  const canUseSlashPicker = canUseCommandPicker || canUseSkillPicker
-  const showSlashPopover = slashQuery !== null && !slashDismissed && canUseSlashPicker
+  const canUseThreadGoals = capabilities?.threadGoals === true
+  const canUseSystemActions = true
+  const canUseSlashPicker = canUseCommandPicker || canUseSkillPicker || canUseThreadGoals || canUseSystemActions
+  const normalizedSlashQuery = slashQuery?.toLowerCase() ?? null
+  const isExactSystemSlashQuery = normalizedSlashQuery === 'plan' || normalizedSlashQuery === 'agent'
+  const showSlashPopover = slashQuery !== null && !slashDismissed && canUseSlashPicker && !isExactSystemSlashQuery
   const showSkillPopover = skillQuery !== null && !skillDismissed && canUseSkillPicker
   const { commands: customCommands, status: customCommandStatus } = useCustomCommandCatalog({
     enabled: canUseCommandPicker,
@@ -176,6 +184,30 @@ export function ConversationWelcome({
       skills: availableSkills
     }),
     [availableSkills, customCommands]
+  )
+  const systemActions = useMemo(
+    () => {
+      const actions = [
+        {
+          id: 'planMode',
+          label: t('composer.system.plan'),
+          description: welcomeMode === 'agent'
+            ? t('composer.system.plan.enable')
+            : t('composer.system.plan.disable'),
+          icon: <ListChecks size={11} strokeWidth={2} aria-hidden />
+        }
+      ]
+      if (canUseThreadGoals) {
+        actions.push({
+          id: 'goal',
+          label: 'goal',
+          description: t('goal.system.description'),
+          icon: <Target size={11} strokeWidth={2} aria-hidden />
+        })
+      }
+      return actions
+    },
+    [canUseThreadGoals, t, welcomeMode]
   )
   const modelApiAvailable =
     isConnected &&
@@ -422,6 +454,28 @@ export function ConversationWelcome({
     richRef.current?.insertCommandTag(commandName)
   }, [])
 
+  const clearSlashSystemInput = useCallback((): void => {
+    const text = richRef.current?.getText() ?? ''
+    if (text.trim().startsWith('/')) {
+      richRef.current?.clear()
+    }
+  }, [])
+
+  const toggleWelcomeMode = useCallback((): void => {
+    setWelcomeMode((m) => (m === 'agent' ? 'plan' : 'agent'))
+  }, [])
+
+  const onSelectSystemAction = useCallback((actionId: string): void => {
+    setSlashDismissed(true)
+    clearSlashSystemInput()
+    if (actionId === 'planMode') {
+      toggleWelcomeMode()
+      return
+    }
+    if (actionId !== 'goal') return
+    setGoalPopoverOpen(true)
+  }, [clearSlashSystemInput, toggleWelcomeMode])
+
   const onSelectSkill = useCallback((skillName: string): void => {
     richRef.current?.insertSkillTag(skillName)
   }, [])
@@ -612,6 +666,95 @@ export function ConversationWelcome({
     [images.length, t]
   )
 
+  const showGoalUnavailable = useCallback((): void => {
+    addToast(t('goal.toast.unsupported'), 'warning')
+  }, [t])
+
+  const createGoalBackedThread = useCallback(async (objective: string): Promise<boolean> => {
+    if (!canUseThreadGoals) {
+      showGoalUnavailable()
+      return false
+    }
+    const trimmedObjective = objective.trim()
+    if (!trimmedObjective) {
+      addToast(t('goal.toast.emptyObjective'), 'warning')
+      return false
+    }
+    if (connectionStatus !== 'connected' || sendInFlightRef.current || modelLoading) {
+      return false
+    }
+
+    sendInFlightRef.current = true
+    setGoalBusy(true)
+    setStarting(true)
+    try {
+      const res = await window.api.appServer.sendRequest('thread/start', {
+        identity: {
+          channelName: 'dotcraft-desktop',
+          userId: 'local',
+          channelContext: `workspace:${workspacePath}`,
+          workspacePath
+        },
+        historyMode: 'server'
+      }) as { thread: ThreadSummary }
+
+      const goalResult = await window.api.appServer.sendRequest('thread/goal/set', {
+        threadId: res.thread.id,
+        objective: trimmedObjective,
+        mode: 'upsertOrUpdate'
+      })
+      const goal = extractGoal(goalResult)
+
+      skipDraftPersistRef.current = true
+      latestDraftTextRef.current = ''
+      latestDraftSegmentsRef.current = []
+      latestDraftSelectionRef.current = null
+      clearWelcomeDraft()
+      richRef.current?.clear()
+      setImages([])
+      setFiles([])
+
+      addThread(goal ? { ...res.thread, goal } : res.thread)
+      if (goal) {
+        useThreadStore.getState().setThreadGoal(goal)
+      }
+      setActiveThreadId(res.thread.id)
+      useUIStore.getState().setActiveMainView('conversation')
+      return true
+    } catch (err) {
+      addToast(t('goal.toast.updateFailed', { error: err instanceof Error ? err.message : String(err) }), 'error')
+      return false
+    } finally {
+      sendInFlightRef.current = false
+      setGoalBusy(false)
+      setStarting(false)
+    }
+  }, [
+    addThread,
+    canUseThreadGoals,
+    clearWelcomeDraft,
+    connectionStatus,
+    modelLoading,
+    setActiveThreadId,
+    showGoalUnavailable,
+    t,
+    workspacePath
+  ])
+
+  const executeWelcomeGoalCommand = useCallback(async (command: GoalSlashCommand): Promise<boolean> => {
+    if (!canUseThreadGoals) {
+      showGoalUnavailable()
+      return false
+    }
+    if (command.kind === 'show') {
+      setGoalPopoverOpen(true)
+      return true
+    }
+    if (command.kind === 'set') return createGoalBackedThread(command.objective)
+    addToast(t('goal.toast.noCurrent'), 'warning')
+    return false
+  }, [canUseThreadGoals, createGoalBackedThread, showGoalUnavailable, t])
+
   const sendFromWelcome = useCallback(async (): Promise<void> => {
     const text = richRef.current?.getText() ?? ''
     const segments = richRef.current?.getSegments() ?? []
@@ -622,6 +765,26 @@ export function ConversationWelcome({
       connectionStatus !== 'connected' ||
       modelLoading
     ) {
+      return
+    }
+
+    const systemCommand = parseWelcomeSystemSlashCommand(trimmed)
+    if (systemCommand) {
+      setWelcomeMode(systemCommand.kind)
+      richRef.current?.clear()
+      setImages([])
+      setFiles([])
+      return
+    }
+
+    const goalCommand = parseGoalSlashCommand(trimmed)
+    if (goalCommand) {
+      const clearInput = await executeWelcomeGoalCommand(goalCommand)
+      if (clearInput) {
+        richRef.current?.clear()
+        setImages([])
+        setFiles([])
+      }
       return
     }
 
@@ -687,7 +850,8 @@ export function ConversationWelcome({
     welcomeMode,
     modelName,
     modelLoading,
-    clearWelcomeDraft
+    clearWelcomeDraft,
+    executeWelcomeGoalCommand
   ])
 
   const onPasteImage = useCallback(
@@ -755,10 +919,6 @@ export function ConversationWelcome({
     },
     [attachImages, t]
   )
-
-  const toggleWelcomeMode = useCallback((): void => {
-    setWelcomeMode((m) => (m === 'agent' ? 'plan' : 'agent'))
-  }, [])
 
   function fillSuggestion(prompt: string): void {
     richRef.current?.setPlainText(prompt)
@@ -872,12 +1032,35 @@ export function ConversationWelcome({
               editor={
                 <div style={{ position: 'relative' }}>
                   <div style={{ position: 'relative', minWidth: 0 }}>
+                    <GoalControlPopover
+                      visible={goalPopoverOpen}
+                      goal={null}
+                      busy={goalBusy}
+                      onSetObjective={createGoalBackedThread}
+                      onPause={async () => {
+                        addToast(t('goal.toast.noCurrent'), 'warning')
+                        return false
+                      }}
+                      onResume={async () => {
+                        addToast(t('goal.toast.noCurrent'), 'warning')
+                        return false
+                      }}
+                      onClear={async () => {
+                        addToast(t('goal.toast.noCurrent'), 'warning')
+                        return false
+                      }}
+                      onDismiss={() => {
+                        setGoalPopoverOpen(false)
+                      }}
+                    />
                     <CommandSearchPopover
                       query={slashQuery ?? ''}
                       visible={showSlashPopover}
                       loading={customCommandStatus === 'loading' || skillsLoading}
+                      systemActions={systemActions}
                       commands={customCommands}
                       skills={availableSkills}
+                      onSelectSystemAction={onSelectSystemAction}
                       onSelectCommand={onSelectCommand}
                       onSelectSkill={onSelectSkill}
                       onDismiss={() => {
@@ -1098,4 +1281,11 @@ export function ConversationWelcome({
       </div>
     </div>
   )
+}
+
+function parseWelcomeSystemSlashCommand(text: string): { kind: 'agent' | 'plan' } | null {
+  const trimmed = text.trim().toLowerCase()
+  if (trimmed === '/plan') return { kind: 'plan' }
+  if (trimmed === '/agent') return { kind: 'agent' }
+  return null
 }

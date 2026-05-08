@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback, useEffect, useMemo, type CSSProperties } from 'react'
+import { ChevronsDown, ListChecks, Target } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { useConversationStore } from '../../stores/conversationStore'
 import { addToast } from '../../stores/toastStore'
@@ -7,9 +8,12 @@ import { useConnectionStore } from '../../stores/connectionStore'
 import { useCustomCommandCatalog } from '../../hooks/useCustomCommandCatalog'
 import { useSkillsStore } from '../../stores/skillsStore'
 import { useSubAgentStore } from '../../stores/subAgentStore'
+import { useThreadStore } from '../../stores/threadStore'
+import type { ContextUsageSnapshotWire, ThreadGoal } from '../../types/thread'
 import type { ComposerFileAttachment, ImageAttachment, QueuedTurnInput } from '../../types/conversation'
 import { startTurnWithOptimisticUI } from '../../utils/startTurn'
 import { buildComposerInputParts } from '../../utils/composeInputParts'
+import { extractGoal, formatGoalUsage, parseGoalSlashCommand, type GoalSlashCommand } from '../../utils/threadGoal'
 import {
   classifyDroppedComposerFiles,
   extForFile,
@@ -21,6 +25,7 @@ import { RichInputArea, type RichInputAreaHandle } from './RichInputArea'
 import { AttachmentStrip } from './AttachmentStrip'
 import { FileSearchPopover } from './FileSearchPopover'
 import { CommandSearchPopover } from './CommandSearchPopover'
+import { GoalControlPopover } from './GoalControlPopover'
 import { ModelPicker } from './ModelPicker'
 import { ComposerAttachmentMenu } from './ComposerAttachmentMenu'
 import { ContextUsageRing } from './ContextUsageRing'
@@ -36,6 +41,7 @@ import {
 } from './ComposerShell'
 import { ActionTooltip } from '../ui/ActionTooltip'
 import { ACTION_SHORTCUTS } from '../ui/shortcutKeys'
+import { useConfirmDialog } from '../ui/ConfirmDialog'
 
 const MAX_TEXT_LENGTH = 100_000
 const MAX_IMAGES = 5
@@ -82,6 +88,9 @@ export function InputComposer({
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [skillQuery, setSkillQuery] = useState<string | null>(null)
   const [skillDismissed, setSkillDismissed] = useState(false)
+  const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
+  const [goalBusy, setGoalBusy] = useState(false)
+  const [compactBusy, setCompactBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [editorFocused, setEditorFocused] = useState(false)
   /** Bumps on rich-input edits so `canSend` re-evaluates from ref (contentEditable has no React state). */
@@ -94,20 +103,29 @@ export function InputComposer({
   const pendingMessage = useConversationStore((s) => s.pendingMessage)
   const queuedInputs = useConversationStore((s) => s.queuedInputs)
   const threadMode = useConversationStore((s) => s.threadMode)
+  const turnsLength = useConversationStore((s) => s.turns.length)
   const setThreadMode = useConversationStore((s) => s.setThreadMode)
   const composerPrefill = useUIStore((s) => s.composerPrefill)
   const capabilities = useConnectionStore((s) => s.capabilities)
+  const currentGoal = useThreadStore((s) => s.goalSnapshots.get(threadId) ?? null)
   const hasSubAgentDock = useSubAgentStore((s) => (s.childrenByParent.get(threadId)?.length ?? 0) > 0)
   const locale = useLocale()
+  const confirm = useConfirmDialog()
 
   const isRunning = turnStatus === 'running'
   const isWaitingApproval = turnStatus === 'waitingApproval'
   const canUseCommandPicker = capabilities?.commandManagement === true
   const canUseSkillPicker = capabilities?.skillsManagement === true
-  const canUseSlashPicker = canUseCommandPicker || canUseSkillPicker
+  const canUseThreadGoals = capabilities?.threadGoals === true
+  const canUseManualCompaction = capabilities?.manualCompaction === true
+  const canCompactCurrentThread = canUseManualCompaction && turnsLength > 0 && turnStatus === 'idle'
+  const canUseSystemActions = true
+  const canUseSlashPicker = canUseCommandPicker || canUseSkillPicker || canUseThreadGoals || canUseSystemActions
 
   const showMentionPopover = atQuery !== null && !mentionDismissed
-  const showSlashPopover = slashQuery !== null && !slashDismissed && canUseSlashPicker
+  const normalizedSlashQuery = slashQuery?.toLowerCase() ?? null
+  const isExactSystemSlashQuery = normalizedSlashQuery === 'plan' || normalizedSlashQuery === 'agent' || normalizedSlashQuery === 'compact'
+  const showSlashPopover = slashQuery !== null && !slashDismissed && canUseSlashPicker && !isExactSystemSlashQuery
   const showSkillPopover = skillQuery !== null && !skillDismissed && canUseSkillPicker
   const { commands: customCommands, status: customCommandStatus } = useCustomCommandCatalog({
     enabled: canUseCommandPicker,
@@ -133,6 +151,38 @@ export function InputComposer({
       skills: availableSkills
     }),
     [availableSkills, customCommands]
+  )
+  const systemActions = useMemo(
+    () => {
+      const actions = [
+        {
+          id: 'planMode',
+          label: t('composer.system.plan'),
+          description: threadMode === 'agent'
+            ? t('composer.system.plan.enable')
+            : t('composer.system.plan.disable'),
+          icon: <ListChecks size={11} strokeWidth={2} aria-hidden />
+        }
+      ]
+      if (canCompactCurrentThread) {
+        actions.push({
+          id: 'compact',
+          label: t('composer.system.compact'),
+          description: t('composer.system.compact.description'),
+          icon: <ChevronsDown size={11} strokeWidth={2} aria-hidden />
+        })
+      }
+      if (canUseThreadGoals) {
+        actions.push({
+          id: 'goal',
+          label: 'goal',
+          description: t('goal.system.description'),
+          icon: <Target size={11} strokeWidth={2} aria-hidden />
+        })
+      }
+      return actions
+    },
+    [canCompactCurrentThread, canUseThreadGoals, t, threadMode]
   )
 
   useEffect(() => {
@@ -191,6 +241,154 @@ export function InputComposer({
     }
     prevTurnStatusRef.current = turnStatus
   }, [turnStatus])
+
+  const ensureCurrentGoal = useCallback(async (): Promise<ThreadGoal | null> => {
+    if (currentGoal) return currentGoal
+    const raw = await window.api.appServer.sendRequest('thread/goal/get', { threadId })
+    const goal = extractGoal(raw)
+    if (goal) {
+      useThreadStore.getState().setThreadGoal(goal)
+    } else {
+      useThreadStore.getState().clearThreadGoal(threadId)
+    }
+    return goal
+  }, [currentGoal, threadId])
+
+  const showGoalUnavailable = useCallback((): void => {
+    addToast(t('goal.toast.unsupported'), 'warning')
+  }, [t])
+
+  const setGoalObjective = useCallback(async (objective: string): Promise<boolean> => {
+    if (!canUseThreadGoals) {
+      showGoalUnavailable()
+      return false
+    }
+    const trimmedObjective = objective.trim()
+    if (!trimmedObjective) {
+      addToast(t('goal.toast.emptyObjective'), 'warning')
+      return false
+    }
+
+    setGoalBusy(true)
+    try {
+      const existing = await ensureCurrentGoal()
+      const replacing =
+        existing != null &&
+        existing.status !== 'complete' &&
+        existing.objective.trim() !== trimmedObjective
+      if (replacing) {
+        const accepted = await confirm({
+          title: t('goal.replaceConfirm.title'),
+          message: t('goal.replaceConfirm.message', {
+            current: existing.objective,
+            next: trimmedObjective
+          }),
+          confirmLabel: t('goal.replaceConfirm.confirm'),
+          cancelLabel: t('goal.action.cancel')
+        })
+        if (!accepted) return false
+      }
+
+      const result = await window.api.appServer.sendRequest('thread/goal/set', {
+        threadId,
+        objective: trimmedObjective,
+        mode: replacing ? 'replaceExisting' : 'upsertOrUpdate'
+      })
+      const goal = extractGoal(result)
+      if (goal) {
+        useThreadStore.getState().setThreadGoal(goal)
+      }
+      return true
+    } catch (err) {
+      addToast(t('goal.toast.updateFailed', { error: err instanceof Error ? err.message : String(err) }), 'error')
+      try {
+        await ensureCurrentGoal()
+      } catch {
+        // Best-effort refresh only.
+      }
+      return false
+    } finally {
+      setGoalBusy(false)
+    }
+  }, [canUseThreadGoals, confirm, ensureCurrentGoal, showGoalUnavailable, t, threadId])
+
+  const updateGoalStatus = useCallback(async (status: 'active' | 'paused'): Promise<boolean> => {
+    if (!canUseThreadGoals) {
+      showGoalUnavailable()
+      return false
+    }
+    setGoalBusy(true)
+    try {
+      const existing = await ensureCurrentGoal()
+      if (!existing) {
+        addToast(t('goal.toast.noCurrent'), 'warning')
+        return false
+      }
+      const result = await window.api.appServer.sendRequest('thread/goal/set', {
+        threadId,
+        status,
+        mode: 'updateOnly'
+      })
+      const goal = extractGoal(result)
+      if (goal) {
+        useThreadStore.getState().setThreadGoal(goal)
+      }
+      return true
+    } catch (err) {
+      addToast(t('goal.toast.updateFailed', { error: err instanceof Error ? err.message : String(err) }), 'error')
+      try {
+        await ensureCurrentGoal()
+      } catch {
+        // Best-effort refresh only.
+      }
+      return false
+    } finally {
+      setGoalBusy(false)
+    }
+  }, [canUseThreadGoals, ensureCurrentGoal, showGoalUnavailable, t, threadId])
+
+  const clearGoal = useCallback(async (): Promise<boolean> => {
+    if (!canUseThreadGoals) {
+      showGoalUnavailable()
+      return false
+    }
+    setGoalBusy(true)
+    try {
+      await window.api.appServer.sendRequest('thread/goal/clear', { threadId })
+      useThreadStore.getState().clearThreadGoal(threadId)
+      return true
+    } catch (err) {
+      addToast(t('goal.toast.updateFailed', { error: err instanceof Error ? err.message : String(err) }), 'error')
+      try {
+        await ensureCurrentGoal()
+      } catch {
+        // Best-effort refresh only.
+      }
+      return false
+    } finally {
+      setGoalBusy(false)
+    }
+  }, [canUseThreadGoals, ensureCurrentGoal, showGoalUnavailable, t, threadId])
+
+  const executeGoalCommand = useCallback(async (command: GoalSlashCommand): Promise<boolean> => {
+    if (!canUseThreadGoals) {
+      showGoalUnavailable()
+      return false
+    }
+    if (command.kind === 'show') {
+      setGoalPopoverOpen(true)
+      try {
+        await ensureCurrentGoal()
+      } catch {
+        // Showing an empty panel is still useful when refresh fails.
+      }
+      return true
+    }
+    if (command.kind === 'set') return setGoalObjective(command.objective)
+    if (command.kind === 'pause') return updateGoalStatus('paused')
+    if (command.kind === 'resume') return updateGoalStatus('active')
+    return clearGoal()
+  }, [canUseThreadGoals, clearGoal, ensureCurrentGoal, setGoalObjective, showGoalUnavailable, updateGoalStatus])
 
   const saveDataUrlAsTemp = useCallback(
     async (dataUrl: string, fileName: string, mimeType: string): Promise<void> => {
@@ -286,6 +484,31 @@ export function InputComposer({
     if (isWaitingApproval) return
     if (modelLoading) return
 
+    const systemCommand = parseSystemSlashCommand(trimmed)
+    if (systemCommand) {
+      let clearInput = false
+      if (systemCommand.kind === 'plan') clearInput = await setComposerMode('plan')
+      else if (systemCommand.kind === 'agent') clearInput = await setComposerMode('agent')
+      else clearInput = await compactThreadContext()
+      if (clearInput) {
+        richRef.current?.clear()
+        setImages([])
+        setFiles([])
+      }
+      return
+    }
+
+    const goalCommand = parseGoalSlashCommand(trimmed)
+    if (goalCommand) {
+      const clearInput = await executeGoalCommand(goalCommand)
+      if (clearInput) {
+        richRef.current?.clear()
+        setImages([])
+        setFiles([])
+      }
+      return
+    }
+
     if (pendingModeChangeRef.current) {
       await pendingModeChangeRef.current
     }
@@ -339,7 +562,7 @@ export function InputComposer({
     } finally {
       sendInFlightRef.current = false
     }
-  }, [files, images, isRunning, isWaitingApproval, modelLoading, threadId, workspacePath, t])
+  }, [compactThreadContext, executeGoalCommand, files, images, isRunning, isWaitingApproval, modelLoading, setComposerMode, threadId, workspacePath, t])
 
   const removeQueuedInput = useCallback(async (queuedInputId: string): Promise<void> => {
     try {
@@ -380,16 +603,16 @@ export function InputComposer({
     }
   }, [threadId])
 
-  async function toggleMode(): Promise<void> {
-    if (pendingModeChangeRef.current) return
-
+  async function setComposerMode(nextMode: 'agent' | 'plan'): Promise<boolean> {
+    if (pendingModeChangeRef.current) return false
     const previousMode = useConversationStore.getState().threadMode
-    const newMode = previousMode === 'agent' ? 'plan' : 'agent'
-    setThreadMode(newMode)
+    if (previousMode === nextMode) return true
+
+    setThreadMode(nextMode)
     const request = window.api.appServer
       .sendRequest('thread/mode/set', {
         threadId,
-        mode: newMode
+        mode: nextMode
       })
       .catch((err) => {
         console.error('thread/mode/set failed:', err)
@@ -400,6 +623,7 @@ export function InputComposer({
           }),
           'error'
         )
+        return false
       })
       .finally(() => {
         if (pendingModeChangeRef.current === request) {
@@ -408,7 +632,54 @@ export function InputComposer({
       })
 
     pendingModeChangeRef.current = request
-    await request
+    const result = await request
+    return result !== false
+  }
+
+  async function toggleMode(): Promise<void> {
+    const previousMode = useConversationStore.getState().threadMode
+    const newMode = previousMode === 'agent' ? 'plan' : 'agent'
+    await setComposerMode(newMode)
+  }
+
+  async function compactThreadContext(): Promise<boolean> {
+    if (compactBusy) return false
+    if (!canCompactCurrentThread) {
+      addToast(t('composer.compact.unavailable'), 'warning')
+      return false
+    }
+
+    setCompactBusy(true)
+    addToast(t('composer.compact.started'), 'info')
+    try {
+      const result = await window.api.appServer.sendRequest('thread/compact/start', { threadId }) as {
+        outcome?: string
+        message?: string
+        contextUsage?: ContextUsageSnapshotWire | null
+      }
+      if (result.contextUsage) {
+        useConversationStore.getState().setContextUsage(result.contextUsage)
+      }
+      const outcome = String(result.outcome ?? '').toLowerCase()
+      if (outcome === 'micro' || outcome === 'partial') {
+        addToast(t('composer.compact.succeeded'), 'success')
+      } else if (outcome === 'skipped') {
+        addToast(
+          result.message === 'no_summarizable_prefix'
+            ? t('composer.compact.skipped.noSummarizablePrefix')
+            : t('composer.compact.skipped'),
+          'info'
+        )
+      } else {
+        addToast(t('composer.compact.failed', { error: result.message || outcome || 'unknown' }), 'error')
+      }
+      return true
+    } catch (err) {
+      addToast(t('composer.compact.failed', { error: err instanceof Error ? err.message : String(err) }), 'error')
+      return false
+    } finally {
+      setCompactBusy(false)
+    }
   }
 
   const canSend = useMemo(() => {
@@ -441,6 +712,29 @@ export function InputComposer({
   const onSelectCommand = useCallback((commandName: string): void => {
     richRef.current?.insertCommandTag(commandName)
   }, [])
+
+  const clearSlashSystemInput = useCallback((): void => {
+    const text = richRef.current?.getText() ?? ''
+    if (text.trim().startsWith('/')) {
+      richRef.current?.clear()
+    }
+  }, [])
+
+  const onSelectSystemAction = useCallback((actionId: string): void => {
+    setSlashDismissed(true)
+    clearSlashSystemInput()
+    if (actionId === 'planMode') {
+      void toggleMode()
+      return
+    }
+    if (actionId === 'compact') {
+      void compactThreadContext()
+      return
+    }
+    if (actionId !== 'goal') return
+    setGoalPopoverOpen(true)
+    void ensureCurrentGoal().catch(() => {})
+  }, [clearSlashSystemInput, ensureCurrentGoal, compactThreadContext, toggleMode])
 
   const onSelectSkill = useCallback((skillName: string): void => {
     richRef.current?.insertSkillTag(skillName)
@@ -482,12 +776,26 @@ export function InputComposer({
         editor={
           <div style={{ position: 'relative' }}>
             <div style={{ position: 'relative', minWidth: 0 }}>
+              <GoalControlPopover
+                visible={goalPopoverOpen}
+                goal={currentGoal}
+                busy={goalBusy}
+                onSetObjective={setGoalObjective}
+                onPause={() => updateGoalStatus('paused')}
+                onResume={() => updateGoalStatus('active')}
+                onClear={clearGoal}
+                onDismiss={() => {
+                  setGoalPopoverOpen(false)
+                }}
+              />
               <CommandSearchPopover
                 query={slashQuery ?? ''}
                 visible={showSlashPopover}
                 loading={customCommandStatus === 'loading' || skillsLoading}
+                systemActions={systemActions}
                 commands={customCommands}
                 skills={availableSkills}
+                onSelectSystemAction={onSelectSystemAction}
                 onSelectCommand={onSelectCommand}
                 onSelectSkill={onSelectSkill}
                 onDismiss={() => {
@@ -575,6 +883,27 @@ export function InputComposer({
             />
 
             <ApprovalPolicyPicker threadId={threadId} disabled={isRunning || isWaitingApproval} />
+            {currentGoal && (
+              <ActionTooltip label={currentGoal.objective} placement="top">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGoalPopoverOpen(true)
+                    void ensureCurrentGoal().catch(() => {})
+                  }}
+                  aria-label={t('goal.pill.aria', { status: t(`goal.status.${currentGoal.status}`) })}
+                  style={goalPillStyle(currentGoal.status)}
+                >
+                  <Target size={13} aria-hidden />
+                  <span>{t(`goal.pill.${currentGoal.status}`)}</span>
+                  {formatGoalUsage(currentGoal) && (
+                    <span style={{ color: 'var(--text-dimmed)' }}>
+                      {formatGoalUsage(currentGoal)}
+                    </span>
+                  )}
+                </button>
+              </ActionTooltip>
+            )}
           </div>
         }
         footerAction={
@@ -745,6 +1074,42 @@ const queuedTextButtonStyle: CSSProperties = {
   cursor: 'pointer',
   fontSize: '12px',
   padding: '2px 4px'
+}
+
+function parseSystemSlashCommand(text: string): { kind: 'plan' | 'agent' | 'compact' } | null {
+  const trimmed = text.trim().toLowerCase()
+  if (trimmed === '/plan') return { kind: 'plan' }
+  if (trimmed === '/agent') return { kind: 'agent' }
+  if (trimmed === '/compact') return { kind: 'compact' }
+  return null
+}
+
+function goalPillStyle(status: ThreadGoal['status']): CSSProperties {
+  const color = status === 'active'
+    ? 'var(--success)'
+    : status === 'paused'
+      ? 'var(--warning)'
+      : status === 'budgetLimited'
+        ? 'var(--error)'
+        : 'var(--info)'
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: 260,
+    minHeight: 22,
+    border: 'none',
+    borderRadius: 8,
+    background: 'transparent',
+    color,
+    cursor: 'pointer',
+    fontSize: 'var(--type-secondary-size)',
+    lineHeight: 'var(--type-secondary-line-height)',
+    fontWeight: 'var(--type-ui-emphasis-weight)',
+    padding: '2px 6px',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap'
+  }
 }
 
 function summarizeQueuedInput(

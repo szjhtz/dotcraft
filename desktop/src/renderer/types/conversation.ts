@@ -144,10 +144,10 @@ export interface ConversationItem {
   approvalState?: ApprovalState
   /**
    * When set on a userMessage item, indicates the message was synthesized by an
-   * automation mechanism (heartbeat, cron, automation) rather than typed by a
-   * human. Mirrors UserMessagePayload.TriggerKind on the server.
+   * automation or goal mechanism (heartbeat, cron, automation, goal) rather
+   * than typed by a human. Mirrors UserMessagePayload.TriggerKind on the server.
    */
-  triggerKind?: 'heartbeat' | 'cron' | 'automation'
+  triggerKind?: 'heartbeat' | 'cron' | 'automation' | 'goal'
   /** Optional human-readable label for the automation source (e.g. cron job name). */
   triggerLabel?: string
   /** Optional routing id for client-side click-through (e.g. cron job id, task id). */
@@ -515,10 +515,10 @@ function mapSystemNotice(
 
 function normalizeTriggerKind(
   value: unknown
-): 'heartbeat' | 'cron' | 'automation' | undefined {
+): 'heartbeat' | 'cron' | 'automation' | 'goal' | undefined {
   if (typeof value !== 'string') return undefined
   const normalized = value.trim().toLowerCase()
-  if (normalized === 'heartbeat' || normalized === 'cron' || normalized === 'automation') {
+  if (normalized === 'heartbeat' || normalized === 'cron' || normalized === 'automation' || normalized === 'goal') {
     return normalized
   }
   return undefined

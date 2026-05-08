@@ -240,6 +240,59 @@ internal sealed class TestableSessionService : ISessionService, IThreadAgentRefr
     public Task<SessionThread> EnsureThreadLoadedAsync(string threadId, CancellationToken ct = default) =>
         GetThreadAsync(threadId, ct);
 
+    public async Task<ThreadGoal?> GetThreadGoalAsync(string threadId, CancellationToken ct = default)
+    {
+        _ = await GetOrLoadAsync(threadId, ct);
+        return await _store.GetThreadGoalAsync(threadId, ct);
+    }
+
+    public async Task<ThreadGoal> SetThreadGoalAsync(
+        string threadId,
+        ThreadGoalUpdate update,
+        GoalSetMode mode = GoalSetMode.UpsertOrUpdate,
+        CancellationToken ct = default)
+    {
+        _ = await GetOrLoadAsync(threadId, ct);
+        var existing = await _store.GetThreadGoalAsync(threadId, ct);
+        if (existing == null && string.IsNullOrWhiteSpace(update.Objective))
+            throw new InvalidOperationException($"Thread '{threadId}' has no goal.");
+
+        var objective = update.Objective?.Trim();
+        var now = DateTimeOffset.UtcNow;
+        var replace = existing != null
+            && !string.IsNullOrWhiteSpace(objective)
+            && (!string.Equals(existing.Objective, objective, StringComparison.Ordinal)
+                || existing.Status == ThreadGoalStatus.Complete
+                || mode == GoalSetMode.ReplaceExisting);
+        var goal = replace || existing == null
+            ? new ThreadGoal
+            {
+                ThreadId = threadId,
+                GoalId = SessionIdGenerator.NewGoalId(),
+                Objective = objective ?? throw new InvalidOperationException("Goal objective is required."),
+                Status = ThreadGoalStatus.Active,
+                TokenBudget = update.HasTokenBudget ? update.TokenBudget : null,
+                TokensUsed = new TokenUsageInfo(),
+                CreatedAt = now,
+                UpdatedAt = now
+            }
+            : existing with
+            {
+                Objective = objective ?? existing.Objective,
+                Status = update.Status ?? existing.Status,
+                TokenBudget = update.HasTokenBudget ? update.TokenBudget : existing.TokenBudget,
+                UpdatedAt = now
+            };
+        await _store.UpsertThreadGoalAsync(goal, ct);
+        return goal;
+    }
+
+    public async Task<ThreadGoalClearResult> ClearThreadGoalAsync(string threadId, CancellationToken ct = default)
+    {
+        _ = await GetOrLoadAsync(threadId, ct);
+        return new ThreadGoalClearResult(await _store.DeleteThreadGoalAsync(threadId, ct));
+    }
+
     public Task SetThreadModeAsync(string threadId, string mode, CancellationToken ct = default) =>
         Task.CompletedTask;
 

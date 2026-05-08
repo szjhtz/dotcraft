@@ -39,7 +39,7 @@ import { ToastContainer } from './components/ui/ToastContainer'
 import { SettingsView } from './components/settings/SettingsView'
 import { ChannelsView } from './components/channels/ChannelsView'
 import { addJobResultToast, addToast } from './stores/toastStore'
-import type { ContextUsageSnapshotWire, SessionIdentity, Thread, ThreadSummary } from './types/thread'
+import type { ContextUsageSnapshotWire, SessionIdentity, Thread, ThreadGoal, ThreadSummary } from './types/thread'
 import { wireTurnToConversationTurn } from './types/conversation'
 import type { ConversationItem, ConversationTurn, QueuedTurnInput } from './types/conversation'
 import type { SubAgentEntry } from './types/toolCall'
@@ -564,6 +564,22 @@ export function App(): JSX.Element {
             const pp = p as { threadId?: string; queuedInputs?: unknown[] }
             if (shouldUpdateActiveConversation(pp.threadId)) {
               useConversationStore.getState().setQueuedInputs((pp.queuedInputs ?? []) as QueuedTurnInput[])
+            }
+            break
+          }
+
+          case 'thread/goal/updated': {
+            const pp = p as { threadId?: string; goal?: ThreadGoal }
+            if (pp.goal) {
+              useThreadStore.getState().setThreadGoal(pp.goal)
+            }
+            break
+          }
+
+          case 'thread/goal/cleared': {
+            const pp = p as { threadId?: string }
+            if (pp.threadId) {
+              useThreadStore.getState().clearThreadGoal(pp.threadId)
             }
             break
           }

@@ -374,7 +374,7 @@ Each Item type has a specific payload structure:
 
 `nativeInputParts` is authoritative for history rendering and editor rehydration when present. `materializedInputParts` captures the exact prompt/image snapshot that Session Core received after transport-side input materialization. `text` remains for compatibility and preview generation but is no longer the sole source of truth for user-message reconstruction.
 
-The optional `triggerKind` trio is populated by Session Core when a turn is submitted inside a `TurnTriggerScope` (see `DotCraft.Protocol.TurnTriggerScope`). The automation-side runners set the scope so that heartbeat / cron (`AgentRunner`) and Automations (`AutomationSessionClient.SubmitTurnAsync`) synthesized messages carry a stable marker that clients can use to render an "automation-sourced" affordance and route click-through to the originating job/task. Fields are absent when the turn originates from a real user input.
+The optional `triggerKind` trio is populated by Session Core when a turn is submitted inside a `TurnTriggerScope` (see `DotCraft.Protocol.TurnTriggerScope`). The automation-side runners set the scope so that heartbeat / cron (`AgentRunner`) and Automations (`AutomationSessionClient.SubmitTurnAsync`) synthesized messages carry a stable marker that clients can use to render an "automation-sourced" affordance and route click-through to the originating job/task. Goal continuation turns use `triggerKind = "goal"`, `triggerLabel = "Goal continuation"`, and `triggerRefId = goalId`. Fields are absent when the turn originates from a real user input.
 
 #### AgentMessage
 
@@ -898,10 +898,11 @@ SessionEvent
     - System events are emitted during the Turn's post-processing phase (after agent execution completes, before `turn/completed`), except when raised reactively (see below).
     - The threshold advisory events (`compactWarning`, `compactError`) carry `percentLeft` and `tokenCount` so UIs can render a "context almost full" warning bar without needing a separate usage request.
     - Auto-compaction events (`compacting`, `compacted`, `compactSkipped`, `compactFailed`) are synchronous within Step 5k and always fire in the order `compacting` → one terminal event (`compacted` / `compactSkipped` / `compactFailed`).
+    - Manual compaction uses `ISessionService.CompactThreadAsync(threadId)` and is exposed to AppServer clients as `thread/compact/start`. It is allowed only for Active, server-managed threads with existing history and no `Running` / `WaitingApproval` turn. It emits the same `compacting` → terminal `system/event` sequence through the thread event broker. If the history is too short to have an older summarizable prefix, it returns `compactSkipped` with `message = "no_summarizable_prefix"` and does not append a notice. On success, Session Core saves the compacted agent session, updates context usage, and appends a persisted `SystemNotice` with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
     - The pipeline may also be invoked **reactively** from the Turn's error path when the model rejects a request with `prompt_too_long` / `context_length_exceeded`. In that case the Turn still fails, but `compacting` followed by `compacted` / `compactFailed` is emitted first so UIs know the history was repaired before the user retries.
     - Memory consolidation is a fire-and-forget maintenance task scheduled by Session Core after a configured number of successful Turns and after the baseline thread/session persistence attempt for that Turn has finished. It is not spawned by the compaction pipeline, and Turn completion is **not** deferred for consolidation. Its start event (`consolidating`) is emitted through the turn-scoped `SessionEventChannel`; its terminal events (`consolidated` / `consolidationSkipped` / `consolidationFailed`) are emitted through the thread event broker with `turnId = null`. On `consolidated`, Session Core persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the completed Turn and broadcasts `item/started` + `item/completed` through the thread event broker. See [Memory Consolidation](memory-consolidation.md) for the design contract.
     - Turn-scoped system events are emitted through the turn-scoped `SessionEventChannel`, so they are guaranteed to arrive before `turn/completed`. Thread-scoped maintenance events may arrive later.
-    - The `message` field carries a localized human-readable description suitable for display (on `compactSkipped` / `compactFailed` / `consolidationSkipped` / `consolidationFailed` it may contain a machine-readable reason, e.g. `circuit_breaker_tripped`, `summary_unavailable`, `save_memory_not_called`).
+    - The `message` field carries a localized human-readable description suitable for display (on `compactSkipped` / `compactFailed` / `consolidationSkipped` / `consolidationFailed` it may contain a machine-readable reason, e.g. `circuit_breaker_tripped`, `no_summarizable_prefix`, `summary_unavailable`, `save_memory_not_called`).
   - **Adapters**: Adapters that display session maintenance status (e.g., CLI spinner for consolidation, status text for compaction) should consume `system/event` notifications. Adapters that do not need maintenance status may ignore this event type or opt out via `optOutNotificationMethods`.
 
 #### Usage Events
@@ -1445,7 +1446,7 @@ ThreadConfiguration
 ├── Mode: string                                 // Agent mode: "agent", "plan", etc. (default: "agent")
 ├── Extensions: string[]?                        // Active extension prefixes, e.g. ["_unity"]
 ├── CustomTools: string[]?                       // Additional tool names to enable
-├── Model: string?                               // Optional per-thread model override
+├── Model: string?                               // Per-thread model; defaults to the effective workspace model at thread creation
 ├── WorkspaceOverride: string?                   // Alternate workspace root for this thread
 ├── ToolProfile: string?                         // Named tool profile to inject
 ├── UseToolProfileOnly: bool                     // Use only the profile tools when true
@@ -1468,10 +1469,11 @@ When a thread is created or its configuration changes, Session Core recreates th
 
 Model resolution is thread-aware:
 
-- the MainAgent uses `Thread.Configuration.Model` when set; otherwise it uses workspace `AppConfig.Model`
+- when a server-managed thread is created, Session Core captures the current effective workspace `AppConfig.Model` into `Thread.Configuration.Model` unless the caller supplied an explicit model
+- the MainAgent uses `Thread.Configuration.Model`; workspace `AppConfig.Model` is a creation-time default for new threads, not a dynamic fallback for already-created threads
 - DotCraft-managed native SubAgents use workspace `AppConfig.SubAgent.Model` when set
 - when `AppConfig.SubAgent.Model` is empty, native SubAgents inherit the thread's effective MainAgent model
-- workspace `model`, `apiKey`, `endpoint`, and `subagent` configuration changes invalidate cached thread agents so the next turn uses freshly resolved clients; an already-running turn is not switched mid-flight
+- workspace `model`, `apiKey`, `endpoint`, and `subagent` configuration changes invalidate cached thread agents so the next turn uses freshly resolved clients; existing threads keep their captured model unless their thread configuration is explicitly changed, and an already-running turn is not switched mid-flight
 
 ### 16.3 Mode Switching
 
@@ -1635,23 +1637,37 @@ The design rule is simple:
 
 ---
 
-## 19. Wire Protocol (Cross-Language SDK Support)
+## 19. Thread Goals
+
+> **Status**: Runtime implementation. See [Goal Design](goal-design.md) for the full contract.
+
+Session Core owns persistent thread goals, their runtime accounting, and autonomous continuation. A thread has at most one current goal. Clients and adapters may expose controls, but must translate them to Session Core or AppServer goal operations instead of maintaining independent goal state.
+
+Goal continuation turns are ordinary persisted turns with system provenance. Session Core starts them only when an active goal exists, automatic continuation is enabled, the thread is idle, the thread is in a goal-compatible mode, and no user/approval/plan-confirmation work is pending. The continuation input is generated by Session Core as model steering; it is not a user-authored message.
+
+When a user interrupts a turn that is pursuing an active goal, Session Core accounts progress made so far and changes the goal to `paused`. Non-user cancellation may account progress but must not imply user intent to pause unless the cancellation source explicitly represents an interrupt.
+
+Goal objective text is user-provided data. Whenever it is injected into model-visible context, it must be escaped and marked as untrusted task context rather than higher-priority instructions.
+
+---
+
+## 20. Wire Protocol (Cross-Language SDK Support)
 
 > **Status**: Specified. See the [DotCraft AppServer Protocol Specification](appserver-protocol.md) for the full definition.
 
-### 19.1 Goal
+### 20.1 Goal
 
 Expose Session Core over a language-neutral protocol so that non-C# adapters (IDE extensions, web frontends, third-party integrations) can participate in the same server-managed thread model without linking DotCraft.Core directly.
 
 The AppServer wire protocol is specified in [appserver-protocol.md](appserver-protocol.md). That document defines the transport, JSON-RPC message shapes, method surface, event notifications, error handling, and approval request/response mechanics that project this Session Core model to external clients.
 
-### 19.2 External Channel Adapters
+### 20.2 External Channel Adapters
 
 The wire protocol also enables out-of-process social channel adapters written in any language. By implementing a Wire Protocol client, a channel adapter gains the full session model — thread lifecycle, streaming events, bidirectional approval — without any C# binding.
 
 This is specified in the [External Channel Adapter Specification](external-channel-adapter.md) (Draft). The key prerequisite for external channels is the WebSocket transport defined in [appserver-protocol.md §15](appserver-protocol.md#15-websocket-transport).
 
-### 19.3 Relationship to Existing API
+### 20.3 Relationship to Existing API
 
 The AppServer protocol complements, not replaces, `/v1/chat/completions`.
 

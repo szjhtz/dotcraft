@@ -156,6 +156,10 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
 
     public event Action<string, SessionThreadRuntimeSignal>? ThreadRuntimeSignal;
 
+    public event Action<ThreadGoal, string?>? ThreadGoalUpdated;
+
+    public event Action<string>? ThreadGoalCleared;
+
     public event Action<string, string>? SubAgentGraphChanged;
 
     public event Action<CronJob?, string, bool>? CronStateChanged;
@@ -246,6 +250,10 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                     (threadId, previousStatus, newStatus) => ThreadStatusChanged?.Invoke(threadId, previousStatus, newStatus);
                 sessionService.ThreadRuntimeSignalForBroadcast =
                     (threadId, signal) => ThreadRuntimeSignal?.Invoke(threadId, signal);
+                sessionService.ThreadGoalUpdatedForBroadcast =
+                    (goal, turnId) => ThreadGoalUpdated?.Invoke(goal, turnId);
+                sessionService.ThreadGoalClearedForBroadcast =
+                    threadId => ThreadGoalCleared?.Invoke(threadId);
                 sessionService.SubAgentGraphChangedForBroadcast =
                     (parentThreadId, childThreadId) => SubAgentGraphChanged?.Invoke(parentThreadId, childThreadId);
 

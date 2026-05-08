@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ThreadSummary, Thread, ThreadStatus, ThreadRuntimeSnapshot } from '../types/thread'
+import type { ThreadSummary, Thread, ThreadStatus, ThreadRuntimeSnapshot, ThreadGoal } from '../types/thread'
 import { useViewerTabStore } from './viewerTabStore'
 import { getSubAgentParentThreadId, isSubAgentThread } from '../utils/subAgentThreads'
 import { isInternalThread } from '../utils/internalThreads'
@@ -34,6 +34,8 @@ interface ThreadStoreState {
   pendingPlanConfirmationThreadIds: Set<string>
   /** Threads that completed in background and have not been visited yet. */
   unreadCompletedThreadIds: Set<string>
+  /** Best-effort current goal snapshots, keyed by thread id. */
+  goalSnapshots: Map<string, ThreadGoal>
 }
 
 interface ThreadStoreActions {
@@ -60,6 +62,9 @@ interface ThreadStoreActions {
   clearPlanConfirmationPending(threadId: string): void
   markUnreadCompleted(threadId: string): void
   clearUnreadCompleted(threadId: string): void
+  setThreadGoal(goal: ThreadGoal): void
+  clearThreadGoal(threadId: string): void
+  hydrateThreadGoal(threadId: string, goal: ThreadGoal | null | undefined): void
   reset(): void
 }
 
@@ -76,7 +81,8 @@ const initialState: ThreadStoreState = {
   runtimeSnapshots: new Map<string, ThreadRuntimeSnapshot>(),
   pendingApprovalThreadIds: new Set<string>(),
   pendingPlanConfirmationThreadIds: new Set<string>(),
-  unreadCompletedThreadIds: new Set<string>()
+  unreadCompletedThreadIds: new Set<string>(),
+  goalSnapshots: new Map<string, ThreadGoal>()
 }
 
 function filterSetToThreadList(current: Set<string>, ids: Set<string>): Set<string> {
@@ -131,8 +137,15 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         threadIds
       )
       const unreadCompletedThreadIds = filterSetToThreadList(state.unreadCompletedThreadIds, threadIds)
+      const goalSnapshots = filterMapToThreadList(state.goalSnapshots, threadIds)
 
       for (const thread of visibleThreads) {
+        if (thread.goal === null) {
+          goalSnapshots.delete(thread.id)
+        } else if (thread.goal) {
+          goalSnapshots.set(thread.id, thread.goal)
+        }
+
         const runtime = thread.runtime
         if (!runtime) continue
 
@@ -180,7 +193,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         parkedApprovals,
         pendingApprovalThreadIds,
         pendingPlanConfirmationThreadIds,
-        unreadCompletedThreadIds
+        unreadCompletedThreadIds,
+        goalSnapshots
       }
     })
   },
@@ -189,7 +203,13 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
     set((state) => {
       if (isInternalThread(thread)) return state
       if (state.threadList.some((t) => t.id === thread.id)) return state
-      return { threadList: [thread, ...state.threadList] }
+      const goalSnapshots = new Map(state.goalSnapshots)
+      if (thread.goal === null) {
+        goalSnapshots.delete(thread.id)
+      } else if (thread.goal) {
+        goalSnapshots.set(thread.id, thread.goal)
+      }
+      return { threadList: [thread, ...state.threadList], goalSnapshots }
     })
   },
 
@@ -209,8 +229,15 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
       const runtimeSnapshots = new Map(state.runtimeSnapshots)
       const runningTurnThreadIds = new Set(state.runningTurnThreadIds)
       const unreadCompletedThreadIds = new Set(state.unreadCompletedThreadIds)
+      const goalSnapshots = new Map(state.goalSnapshots)
 
       for (const thread of visibleThreads) {
+        if (thread.goal === null) {
+          goalSnapshots.delete(thread.id)
+        } else if (thread.goal) {
+          goalSnapshots.set(thread.id, thread.goal)
+        }
+
         const runtime = thread.runtime
         if (!runtime) continue
         const snapshot: ThreadRuntimeSnapshot = {
@@ -234,7 +261,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         threadList: [...missing, ...threadList],
         runtimeSnapshots,
         runningTurnThreadIds,
-        unreadCompletedThreadIds
+        unreadCompletedThreadIds,
+        goalSnapshots
       }
     })
   },
@@ -267,6 +295,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
       unreadCompletedThreadIds.delete(threadId)
       const runningTurnThreadIds = new Set(state.runningTurnThreadIds)
       runningTurnThreadIds.delete(threadId)
+      const goalSnapshots = new Map(state.goalSnapshots)
+      goalSnapshots.delete(threadId)
       return {
         threadList: state.threadList.filter((t) => t.id !== threadId),
         activeThreadId:
@@ -278,7 +308,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         runtimeSnapshots,
         pendingApprovalThreadIds,
         pendingPlanConfirmationThreadIds,
-        unreadCompletedThreadIds
+        unreadCompletedThreadIds,
+        goalSnapshots
       }
     })
   },
@@ -296,6 +327,7 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
       const pendingPlanConfirmationThreadIds = new Set(state.pendingPlanConfirmationThreadIds)
       const unreadCompletedThreadIds = new Set(state.unreadCompletedThreadIds)
       const runningTurnThreadIds = new Set(state.runningTurnThreadIds)
+      const goalSnapshots = new Map(state.goalSnapshots)
       for (const id of treeIds) {
         parkedApprovals.delete(id)
         runtimeSnapshots.delete(id)
@@ -303,6 +335,7 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         pendingPlanConfirmationThreadIds.delete(id)
         unreadCompletedThreadIds.delete(id)
         runningTurnThreadIds.delete(id)
+        goalSnapshots.delete(id)
       }
 
       return {
@@ -316,7 +349,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         runtimeSnapshots,
         pendingApprovalThreadIds,
         pendingPlanConfirmationThreadIds,
-        unreadCompletedThreadIds
+        unreadCompletedThreadIds,
+        goalSnapshots
       }
     })
   },
@@ -357,7 +391,16 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
   setActiveThread(thread) {
     // Do not sync activeThreadId here — selection is user-driven; stale thread/read
     // responses must not redirect which thread is selected.
-    set({ activeThread: thread })
+    set((state) => {
+      if (!thread) return { activeThread: thread }
+      const goalSnapshots = new Map(state.goalSnapshots)
+      if (thread.goal === null) {
+        goalSnapshots.delete(thread.id)
+      } else if (thread.goal) {
+        goalSnapshots.set(thread.id, thread.goal)
+      }
+      return { activeThread: thread, goalSnapshots }
+    })
   },
 
   setSearchQuery(query) {
@@ -500,6 +543,49 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
     })
   },
 
+  setThreadGoal(goal) {
+    set((state) => {
+      const goalSnapshots = new Map(state.goalSnapshots)
+      goalSnapshots.set(goal.threadId, goal)
+      return {
+        goalSnapshots,
+        threadList: state.threadList.map((thread) =>
+          thread.id === goal.threadId ? { ...thread, goal } : thread
+        ),
+        activeThread:
+          state.activeThread?.id === goal.threadId
+            ? { ...state.activeThread, goal }
+            : state.activeThread
+      }
+    })
+  },
+
+  clearThreadGoal(threadId) {
+    set((state) => {
+      const goalSnapshots = new Map(state.goalSnapshots)
+      goalSnapshots.delete(threadId)
+      return {
+        goalSnapshots,
+        threadList: state.threadList.map((thread) =>
+          thread.id === threadId ? { ...thread, goal: null } : thread
+        ),
+        activeThread:
+          state.activeThread?.id === threadId
+            ? { ...state.activeThread, goal: null }
+            : state.activeThread
+      }
+    })
+  },
+
+  hydrateThreadGoal(threadId, goal) {
+    if (goal === undefined) return
+    if (goal === null) {
+      _get().clearThreadGoal(threadId)
+      return
+    }
+    _get().setThreadGoal(goal)
+  },
+
   reset() {
     set({
       ...initialState,
@@ -508,7 +594,8 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
       runtimeSnapshots: new Map<string, ThreadRuntimeSnapshot>(),
       pendingApprovalThreadIds: new Set<string>(),
       pendingPlanConfirmationThreadIds: new Set<string>(),
-      unreadCompletedThreadIds: new Set<string>()
+      unreadCompletedThreadIds: new Set<string>(),
+      goalSnapshots: new Map<string, ThreadGoal>()
     })
   }
 }))

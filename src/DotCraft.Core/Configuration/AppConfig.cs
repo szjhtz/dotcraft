@@ -144,6 +144,9 @@ public sealed class AppConfig
     public CronConfig Cron { get; set; } = new();
 
     [ConfigField(Ignore = true)]
+    public GoalsConfig Goals { get; set; } = new();
+
+    [ConfigField(Ignore = true)]
     public SkillsConfig Skills { get; set; } = new();
 
     [ConfigField(Ignore = true)]
@@ -833,6 +836,20 @@ public sealed class AppConfig
         public bool Enabled { get; set; } = true;
         
         public string StorePath { get; set; } = "cron/jobs.json";
+    }
+
+    [ConfigSection("Goals", DisplayName = "Goals", Order = 62)]
+    public sealed class GoalsConfig
+    {
+        /// <summary>
+        /// Enables persistent thread goals, runtime prompt injection, goal tools, and AppServer goal APIs.
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// When enabled, active goals automatically start a server-managed continuation turn once the thread is idle.
+        /// </summary>
+        public bool AutoContinueEnabled { get; set; } = true;
     }
 
     [ConfigSection("Skills", DisplayName = "Skills", Order = 58)]

@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 using DotCraft.Configuration;
 using DotCraft.Cron;
+using DotCraft.Protocol;
 
 namespace DotCraft.Protocol.AppServer;
 
@@ -515,6 +516,18 @@ public sealed class AppServerServerCapabilities
 
     public bool ThreadSubscriptions { get; set; } = true;
 
+    /// <summary>
+    /// Server supports persistent per-thread goal methods (thread/goal/*).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ThreadGoals { get; set; }
+
+    /// <summary>
+    /// Server supports manual thread context compaction via <c>thread/compact/start</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ManualCompaction { get; set; }
+
     public bool ApprovalFlow { get; set; } = true;
 
     public bool ModeSwitch { get; set; } = true;
@@ -737,6 +750,65 @@ public sealed class ThreadReadParams
     public string ThreadId { get; set; } = string.Empty;
 
     public bool? IncludeTurns { get; set; }
+}
+
+// ───── thread/goal/* ─────
+
+public sealed class ThreadGoalGetParams
+{
+    public string ThreadId { get; set; } = string.Empty;
+}
+
+public sealed class ThreadGoalGetResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public ThreadGoal? Goal { get; set; }
+}
+
+public sealed class ThreadGoalSetParams
+{
+    public string ThreadId { get; set; } = string.Empty;
+
+    public string? Objective { get; set; }
+
+    public string? Status { get; set; }
+
+    public JsonElement? TokenBudget { get; set; }
+
+    public string? Mode { get; set; }
+}
+
+public sealed class ThreadGoalSetResult
+{
+    public ThreadGoal Goal { get; set; } = null!;
+}
+
+public sealed class ThreadGoalClearParams
+{
+    public string ThreadId { get; set; } = string.Empty;
+}
+
+public sealed class ThreadGoalClearResultWire
+{
+    public bool Cleared { get; set; }
+}
+
+// ───── thread/compact/start ─────
+
+public sealed class ThreadCompactStartParams
+{
+    public string ThreadId { get; set; } = string.Empty;
+}
+
+public sealed class ThreadCompactStartResponse
+{
+    public string Outcome { get; set; } = "skipped";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContextUsageSnapshot? ContextUsage { get; set; }
 }
 
 // ───── thread/rollback ─────
@@ -2640,6 +2712,10 @@ public static class AppServerMethods
     public const string ThreadResume = "thread/resume";
     public const string ThreadList = "thread/list";
     public const string ThreadRead = "thread/read";
+    public const string ThreadGoalGet = "thread/goal/get";
+    public const string ThreadGoalSet = "thread/goal/set";
+    public const string ThreadGoalClear = "thread/goal/clear";
+    public const string ThreadCompactStart = "thread/compact/start";
     public const string ThreadRollback = "thread/rollback";
     public const string ThreadSubscribe = "thread/subscribe";
     public const string ThreadUnsubscribe = "thread/unsubscribe";
@@ -2700,6 +2776,8 @@ public static class AppServerMethods
     public const string ThreadQueueUpdated = "thread/queue/updated";
     /// <summary>Server broadcast when a thread's display name changes (rename RPC or first-message title).</summary>
     public const string ThreadRenamed = "thread/renamed";
+    public const string ThreadGoalUpdated = "thread/goal/updated";
+    public const string ThreadGoalCleared = "thread/goal/cleared";
     public const string TurnStarted = "turn/started";
     public const string TurnCompleted = "turn/completed";
     public const string TurnFailed = "turn/failed";

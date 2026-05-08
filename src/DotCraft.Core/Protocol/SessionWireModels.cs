@@ -130,6 +130,23 @@ public sealed record ContextUsageSnapshot
 }
 
 /// <summary>
+/// Result returned by a manual thread compaction request.
+/// </summary>
+public sealed record ThreadCompactResult
+{
+    /// <summary>
+    /// Lowercase compaction outcome: <c>micro</c>, <c>partial</c>, <c>skipped</c>, or <c>failed</c>.
+    /// </summary>
+    public string Outcome { get; init; } = "skipped";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContextUsageSnapshot? ContextUsage { get; init; }
+}
+
+/// <summary>
 /// Wire DTO for a thread.
 /// </summary>
 public sealed record SessionWireThread
@@ -169,6 +186,11 @@ public sealed record SessionWireThread
     /// FIFO inputs queued behind the currently active turn.
     /// </summary>
     public List<QueuedTurnInput> QueuedInputs { get; init; } = [];
+
+    /// <summary>
+    /// Optional current goal snapshot for clients that hydrate thread state from lifecycle/list responses.
+    /// </summary>
+    public ThreadGoal? Goal { get; init; }
 
     /// <summary>
     /// Turn summaries. Populated only when the caller requests turn history (e.g. thread/read with includeTurns = true).

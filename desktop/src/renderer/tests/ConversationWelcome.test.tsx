@@ -8,6 +8,8 @@ import { useModelCatalogStore } from '../stores/modelCatalogStore'
 import { useThreadStore } from '../stores/threadStore'
 import { useUIStore } from '../stores/uiStore'
 import { useSkillsStore } from '../stores/skillsStore'
+import { useToastStore } from '../stores/toastStore'
+import type { ThreadGoal } from '../types/thread'
 
 const fileReadFile = vi.fn()
 const appServerSendRequest = vi.fn()
@@ -95,6 +97,24 @@ function renderWelcome() {
   )
 }
 
+function makeGoal(threadId = 'thread-welcome', objective = 'Build feature'): ThreadGoal {
+  return {
+    threadId,
+    goalId: `goal-${threadId}`,
+    objective,
+    status: 'active',
+    tokenBudget: null,
+    tokensUsed: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    },
+    timeUsedSeconds: 0,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z'
+  }
+}
+
 describe('ConversationWelcome composer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -102,6 +122,7 @@ describe('ConversationWelcome composer', () => {
     useConnectionStore.getState().reset()
     useThreadStore.getState().reset()
     useModelCatalogStore.getState().reset()
+    useToastStore.setState({ toasts: [] })
     useSkillsStore.setState({
       skills: [],
       loading: false,
@@ -247,6 +268,173 @@ describe('ConversationWelcome composer', () => {
     expect(sendButton.getAttribute('style')).toContain('var(--text-dimmed)')
     expect(screen.queryByText('Attach file')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add attachment' })).toBeInTheDocument()
+  })
+
+  it('handles /goal on the welcome screen by creating a goal-backed thread without starting a turn', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        threadGoals: true,
+        commandManagement: true,
+        skillsManagement: true
+      }
+    })
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'command/list') return { commands: [] }
+      if (method === 'skills/list') return { skills: [] }
+      if (method === 'thread/start') {
+        return {
+          thread: {
+            id: 'thread-welcome',
+            displayName: null,
+            status: 'active',
+            originChannel: 'dotcraft-desktop',
+            createdAt: '2026-04-16T08:00:00.000Z',
+            lastActiveAt: '2026-04-16T08:00:00.000Z'
+          }
+        }
+      }
+      if (method === 'thread/goal/set') return { goal: makeGoal('thread-welcome', 'Build feature') }
+      return {}
+    })
+
+    renderWelcome()
+
+    const textbox = await screen.findByRole('textbox')
+    textbox.textContent = '/goal Build feature'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/set', {
+        threadId: 'thread-welcome',
+        objective: 'Build feature',
+        mode: 'upsertOrUpdate'
+      })
+    })
+    const startIndex = appServerSendRequest.mock.calls.findIndex((call) => call[0] === 'thread/start')
+    const goalIndex = appServerSendRequest.mock.calls.findIndex((call) => call[0] === 'thread/goal/set')
+    expect(startIndex).toBeGreaterThanOrEqual(0)
+    expect(goalIndex).toBeGreaterThan(startIndex)
+    expect(appServerSendRequest.mock.calls.some((call) => call[0] === 'turn/start')).toBe(false)
+    expect(useUIStore.getState().pendingWelcomeTurn).toBeNull()
+    expect(useThreadStore.getState().activeThreadId).toBe('thread-welcome')
+    expect(useThreadStore.getState().goalSnapshots.get('thread-welcome')?.objective).toBe('Build feature')
+  })
+
+  it('shows plan mode as a welcome system action and clears the slash query when selected', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {}
+    })
+    renderWelcome()
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setTextboxCaret(textbox, 1)
+    fireEvent.input(textbox)
+
+    expect(await screen.findByText('Enable Plan mode')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('option', { name: /Plan mode/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Plan' })).toBeInTheDocument()
+    })
+    expect(textbox.textContent?.trim()).toBe('')
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('thread/start', expect.anything())
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('handles welcome /agent locally without starting a thread', async () => {
+    renderWelcome()
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.keyDown(textbox, { key: 'Tab', shiftKey: true })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Plan' })).toBeInTheDocument()
+    })
+
+    textbox.textContent = '/agent'
+    setTextboxCaret(textbox, 6)
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Agent' })).toBeInTheDocument()
+    })
+    expect(textbox.textContent?.trim()).toBe('')
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('thread/start', expect.anything())
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('does not create a thread for welcome /goal pause without a current goal', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        threadGoals: true
+      }
+    })
+
+    renderWelcome()
+
+    const textbox = await screen.findByRole('textbox')
+    textbox.textContent = '/goal pause'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts.some((toast) => toast.message.includes('No current goal'))).toBe(true)
+    })
+    expect(appServerSendRequest.mock.calls.some((call) => call[0] === 'thread/start')).toBe(false)
+  })
+
+  it('creates a goal-backed thread from the welcome Goal panel', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        threadGoals: true
+      }
+    })
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'thread/start') {
+        return {
+          thread: {
+            id: 'thread-welcome',
+            displayName: null,
+            status: 'active',
+            originChannel: 'dotcraft-desktop',
+            createdAt: '2026-04-16T08:00:00.000Z',
+            lastActiveAt: '2026-04-16T08:00:00.000Z'
+          }
+        }
+      }
+      if (method === 'thread/goal/set') return { goal: makeGoal('thread-welcome', 'Panel goal') }
+      return {}
+    })
+
+    renderWelcome()
+
+    const textbox = await screen.findByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setTextboxCaret(textbox, 1)
+    fireEvent.input(textbox)
+    fireEvent.click(await screen.findByRole('option', { name: /goal/i }))
+
+    fireEvent.change(await screen.findByPlaceholderText('Describe the goal for this thread'), {
+      target: { value: 'Panel goal' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Set goal' }))
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/set', {
+        threadId: 'thread-welcome',
+        objective: 'Panel goal',
+        mode: 'upsertOrUpdate'
+      })
+    })
+    expect(appServerSendRequest.mock.calls.some((call) => call[0] === 'turn/start')).toBe(false)
   })
 
   it('opens the compact attachment menu and still routes file references through pickFiles', async () => {

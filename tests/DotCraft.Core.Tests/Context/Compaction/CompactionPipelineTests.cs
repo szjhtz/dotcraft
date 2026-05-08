@@ -111,6 +111,30 @@ public sealed class CompactionPipelineTests
     }
 
     [Fact]
+    public async Task TryManualCompactHistoryAsync_SingleApiRoundSkipsWithoutFailure()
+    {
+        var cfg = DefaultConfig();
+        cfg.MicrocompactEnabled = false;
+        var pipeline = new CompactionPipeline(cfg, new DummyChatClient());
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "user " + new string('u', 1200)),
+            new(ChatRole.Assistant, "assistant " + new string('a', 1200)),
+        };
+
+        var result = await pipeline.TryManualCompactHistoryAsync(
+            messages,
+            "thread-1",
+            lastAssistantTimestampUtc: null,
+            CancellationToken.None);
+
+        Assert.Equal(CompactionOutcome.Skipped, result.Status.Outcome);
+        Assert.Equal("no_summarizable_prefix", result.Status.FailureReason);
+        Assert.Equal(messages, result.Messages);
+        Assert.False(pipeline.Failures.IsTripped("thread-1"));
+    }
+
+    [Fact]
     public async Task TryAutoCompactHistoryAsync_AboveThresholdReturnsReplacementHistory()
     {
         var cfg = new CompactionConfig

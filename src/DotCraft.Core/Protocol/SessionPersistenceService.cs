@@ -73,6 +73,23 @@ public sealed class SessionPersistenceService(
     public Task SaveContextUsageTokensAsync(string threadId, long tokens, CancellationToken ct = default)
         => threadStore.SaveContextUsageTokensAsync(threadId, tokens, ct);
 
+    public Task<ThreadGoal?> GetThreadGoalAsync(string threadId, CancellationToken ct = default)
+        => threadStore.GetThreadGoalAsync(threadId, ct);
+
+    public Task UpsertThreadGoalAsync(ThreadGoal goal, CancellationToken ct = default)
+        => threadStore.UpsertThreadGoalAsync(goal, ct);
+
+    public Task<ThreadGoal?> AccountThreadGoalUsageAsync(
+        string threadId,
+        string expectedGoalId,
+        TokenUsageInfo usageDelta,
+        long timeDeltaSeconds,
+        CancellationToken ct = default)
+        => threadStore.AccountThreadGoalUsageAsync(threadId, expectedGoalId, usageDelta, timeDeltaSeconds, ct);
+
+    public Task<bool> DeleteThreadGoalAsync(string threadId, CancellationToken ct = default)
+        => threadStore.DeleteThreadGoalAsync(threadId, ct);
+
     public Task UpsertThreadSpawnEdgeAsync(ThreadSpawnEdge edge, CancellationToken ct = default)
         => threadStore.UpsertThreadSpawnEdgeAsync(edge, ct);
 

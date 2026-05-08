@@ -47,13 +47,14 @@ public sealed class PartialCompactorTests
     }
 
     [Fact]
-    public async Task CompactAsync_EmptyHistoryReturnsNull()
+    public async Task CompactAsync_EmptyHistoryReturnsReason()
     {
         var cfg = new CompactionConfig();
         var partial = new PartialCompactor(new StubChatClient("summary"), cfg);
 
         var result = await partial.CompactAsync(Array.Empty<ChatMessage>());
-        Assert.Null(result);
+        Assert.Null(result.Result);
+        Assert.Equal("empty_history", result.Reason);
     }
 
     [Fact]
@@ -76,13 +77,13 @@ public sealed class PartialCompactorTests
         }
 
         var result = await partial.CompactAsync(messages);
-        Assert.NotNull(result);
-        Assert.True(result!.SummarizedPrefix.Count > 0);
-        Assert.True(result.PreservedTail.Count > 0);
-        Assert.Contains("important bits", result.FormattedSummary);
+        Assert.NotNull(result.Result);
+        Assert.True(result.Result!.SummarizedPrefix.Count > 0);
+        Assert.True(result.Result.PreservedTail.Count > 0);
+        Assert.Contains("important bits", result.Result.FormattedSummary);
         // analysis should be stripped from FormattedSummary.
-        Assert.DoesNotContain("<analysis>", result.FormattedSummary);
-        Assert.Equal("<analysis>thinking</analysis><summary>important bits</summary>", result.RawSummary);
+        Assert.DoesNotContain("<analysis>", result.Result.FormattedSummary);
+        Assert.Equal("<analysis>thinking</analysis><summary>important bits</summary>", result.Result.RawSummary);
     }
 
     [Fact]
@@ -115,8 +116,8 @@ public sealed class PartialCompactorTests
 
         var result = await partial.CompactAsync(messages, snapshot);
 
-        Assert.NotNull(result);
-        Assert.Contains("important bits", result!.FormattedSummary);
+        Assert.NotNull(result.Result);
+        Assert.Contains("important bits", result.Result!.FormattedSummary);
         Assert.Equal(["user:user turn 0", "assistant:assistant turn 0"], client.Messages.Take(2).Select(m => $"{m.Role}:{m.Text}"));
         Assert.Equal(ChatRole.User, client.Messages[^1].Role);
         Assert.Contains("## Maintenance Task", client.Messages[^1].Text);
@@ -128,7 +129,7 @@ public sealed class PartialCompactorTests
     }
 
     [Fact]
-    public async Task CompactAsync_NullOnChatClientFailure()
+    public async Task CompactAsync_ReturnsReasonOnChatClientFailure()
     {
         var cfg = new CompactionConfig
         {
@@ -146,7 +147,8 @@ public sealed class PartialCompactorTests
         };
 
         var result = await partial.CompactAsync(messages);
-        Assert.Null(result);
+        Assert.Null(result.Result);
+        Assert.Equal("summary_unavailable", result.Reason);
     }
 
     private sealed class StubChatClient : IChatClient

@@ -9,7 +9,7 @@ import { ContextMenu } from '../ui/ContextMenu'
 import { useConfirmDialog } from '../ui/ConfirmDialog'
 import { RunningSpinner } from '../ui/RunningSpinner'
 import { ChannelIconBadge } from '../ui/channelMeta'
-import { Archive } from 'lucide-react'
+import { Archive, CornerDownRight } from 'lucide-react'
 import { AUTOMATION_TASK_DRAG_MIME } from '../automations/TaskCard'
 import { useAutomationsStore } from '../../stores/automationsStore'
 import { useDragDropStore } from '../../stores/dragDropStore'
@@ -310,52 +310,23 @@ export function ThreadEntry({ thread }: ThreadEntryProps): JSX.Element {
           }
         }}
       >
-        <span
-          style={{
-            width: '16px',
-            minWidth: '16px',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0
-          }}
-        >
-          {hasRunningTurn ? (
-            <RunningSpinner
-              title={t('threadEntry.turnRunning')}
-              testId={`thread-running-indicator-${thread.id}`}
-            />
-          ) : showUnreadCompletedDot ? (
-            <span
-              aria-label={t('threadEntry.unreadCompleted')}
-              title={t('threadEntry.unreadCompleted')}
-              data-testid={`thread-unread-completed-${thread.id}`}
-              style={{
-                width: '6px',
-                height: '6px',
-                borderRadius: '999px',
-                backgroundColor: 'var(--success)',
-                display: 'inline-block'
-              }}
-            />
-          ) : showStatusIcon ? (
-            <span
-              title={thread.status}
-              style={{ fontSize: '10px', color: 'var(--text-dimmed)', flexShrink: 0 }}
-              aria-label={thread.status}
-            >
-              {thread.status === 'paused' ? '⏸' : '🗄'}
-            </span>
-          ) : isSubAgent ? (
-            <span
-              title={t('threadEntry.subAgent')}
-              style={{ fontSize: '12px', color: 'var(--text-dimmed)', flexShrink: 0 }}
-              aria-label={t('threadEntry.subAgent')}
-            >
-              ↳
-            </span>
-          ) : null}
-        </span>
+        {isSubAgent && (
+          <span
+            title={t('threadEntry.subAgent')}
+            style={{
+              width: '16px',
+              minWidth: '16px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-dimmed)',
+              flexShrink: 0
+            }}
+            aria-label={t('threadEntry.subAgent')}
+          >
+            <CornerDownRight size={12} strokeWidth={2} aria-hidden="true" />
+          </span>
+        )}
         {showOriginBadge && (
           <span
             style={{
@@ -536,7 +507,35 @@ export function ThreadEntry({ thread }: ThreadEntryProps): JSX.Element {
                 transition: 'opacity 120ms ease'
               }}
             >
-              {relativeTime}
+              {hasRunningTurn ? (
+                <RunningSpinner
+                  title={t('threadEntry.turnRunning')}
+                  testId={`thread-running-indicator-${thread.id}`}
+                />
+              ) : showUnreadCompletedDot ? (
+                <span
+                  aria-label={t('threadEntry.unreadCompleted')}
+                  title={t('threadEntry.unreadCompleted')}
+                  data-testid={`thread-unread-completed-${thread.id}`}
+                  style={{
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '999px',
+                    backgroundColor: 'var(--success)',
+                    display: 'inline-block'
+                  }}
+                />
+              ) : showStatusIcon ? (
+                <span
+                  title={thread.status}
+                  style={{ fontSize: '10px', color: 'var(--text-dimmed)', flexShrink: 0 }}
+                  aria-label={thread.status}
+                >
+                  {thread.status === 'paused' ? '⏸' : '🗄'}
+                </span>
+              ) : (
+                relativeTime
+              )}
             </span>
             {!isSubAgent && (
               <>

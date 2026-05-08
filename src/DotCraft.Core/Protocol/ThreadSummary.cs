@@ -65,6 +65,12 @@ public sealed class ThreadSummary
     public ThreadSummaryRuntime? Runtime { get; set; }
 
     /// <summary>
+    /// Optional current goal snapshot for list hydration.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ThreadGoal? Goal { get; set; }
+
+    /// <summary>
     /// Channel-specific metadata copied from the Thread.
     /// </summary>
     public Dictionary<string, string> Metadata { get; set; } = [];

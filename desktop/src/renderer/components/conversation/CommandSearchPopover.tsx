@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Sparkle, Terminal } from 'lucide-react'
 import { useT } from '../../contexts/LocaleContext'
 import type { CustomCommandInfo } from '../../hooks/useCustomCommandCatalog'
 import { ActionTooltip } from '../ui/ActionTooltip'
+
+export interface SlashSystemActionInfo {
+  id: string
+  label: string
+  description: string
+  icon?: ReactNode
+}
 
 export interface SlashSkillInfo {
   name: string
@@ -13,8 +20,10 @@ interface CommandSearchPopoverProps {
   query: string
   visible: boolean
   loading: boolean
+  systemActions?: SlashSystemActionInfo[]
   commands: CustomCommandInfo[]
   skills?: SlashSkillInfo[]
+  onSelectSystemAction?: (actionId: string) => void
   onSelectCommand: (commandName: string) => void
   onSelectSkill?: (skillName: string) => void
   onDismiss: () => void
@@ -24,15 +33,26 @@ export function CommandSearchPopover({
   query,
   visible,
   loading,
+  systemActions,
   commands,
   skills,
+  onSelectSystemAction,
   onSelectCommand,
   onSelectSkill,
   onDismiss
 }: CommandSearchPopoverProps): JSX.Element | null {
   const t = useT()
   const skillList = skills ?? []
+  const systemActionList = systemActions ?? []
   const [highlight, setHighlight] = useState(0)
+  const filteredSystemActions = useMemo(() => {
+    const prefix = query.toLowerCase()
+    if (!prefix) return systemActionList
+    return systemActionList.filter((action) => {
+      if (action.label.toLowerCase().startsWith(prefix)) return true
+      return action.id.toLowerCase().startsWith(prefix)
+    })
+  }, [query, systemActionList])
   const filteredCommands = useMemo(() => {
     const prefix = query.toLowerCase()
     if (!prefix) return commands
@@ -51,10 +71,11 @@ export function CommandSearchPopover({
   }, [query, skillList])
   const entries = useMemo(
     () => [
+      ...filteredSystemActions.map((action) => ({ type: 'system' as const, action })),
       ...filteredCommands.map((command) => ({ type: 'command' as const, command })),
       ...filteredSkills.map((skill) => ({ type: 'skill' as const, skill }))
     ],
-    [filteredCommands, filteredSkills]
+    [filteredCommands, filteredSkills, filteredSystemActions]
   )
 
   useEffect(() => {
@@ -84,7 +105,8 @@ export function CommandSearchPopover({
         e.stopPropagation()
         const item = entries[highlight]
         if (!item) return
-        if (item.type === 'command') onSelectCommand(item.command.name)
+        if (item.type === 'system') onSelectSystemAction?.(item.action.id)
+        else if (item.type === 'command') onSelectCommand(item.command.name)
         else onSelectSkill?.(item.skill.name)
       }
     }
@@ -92,7 +114,7 @@ export function CommandSearchPopover({
     return () => {
       window.removeEventListener('keydown', onKey, true)
     }
-  }, [entries, highlight, onDismiss, onSelectCommand, onSelectSkill, visible])
+  }, [entries, highlight, onDismiss, onSelectCommand, onSelectSkill, onSelectSystemAction, visible])
 
   if (!visible) return null
 
@@ -131,6 +153,70 @@ export function CommandSearchPopover({
           {t('slashSearch.hint')}
         </div>
       )}
+      {!loading && filteredSystemActions.length > 0 && (
+        <SectionHeader label={t('slashSearch.systemGroup')} />
+      )}
+      {!loading &&
+        filteredSystemActions.map((action) => {
+          const index = entries.findIndex((entry) => entry.type === 'system' && entry.action.id === action.id)
+          return (
+            <ActionTooltip key={action.id} label={action.description} wrapperStyle={{ display: 'block', width: '100%' }}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={index === highlight}
+                onMouseEnter={() => {
+                  setHighlight(index)
+                }}
+                onClick={() => {
+                  onSelectSystemAction?.(action.id)
+                }}
+                style={{
+                  display: 'flex',
+                  width: '100%',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '7px 12px',
+                  border: 'none',
+                  background: index === highlight ? 'var(--bg-active)' : 'transparent',
+                  color: 'var(--text-primary)',
+                  cursor: 'pointer',
+                  textAlign: 'left'
+                }}
+              >
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    borderRadius: '5px',
+                    padding: '1px 6px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    background: 'color-mix(in srgb, var(--info) 16%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--info) 38%, transparent)',
+                    color: 'var(--info)',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {action.icon}
+                  {highlightMatch(action.label, query)}
+                </span>
+                <span
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--text-secondary)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {action.description}
+                </span>
+              </button>
+            </ActionTooltip>
+          )
+        })}
       {!loading && filteredCommands.length > 0 && (
         <SectionHeader label={t('slashSearch.commandsGroup')} />
       )}

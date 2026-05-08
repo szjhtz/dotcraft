@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useThreadStore, selectFilteredThreads } from '../stores/threadStore'
-import type { ThreadSummary, Thread } from '../types/thread'
+import type { ThreadSummary, Thread, ThreadGoal } from '../types/thread'
 
 function makeThreadSummary(id: string, overrides: Partial<ThreadSummary> = {}): ThreadSummary {
   return {
@@ -21,6 +21,25 @@ function makeThread(id: string, overrides: Partial<Thread> = {}): Thread {
     userId: 'local',
     metadata: {},
     turns: [],
+    ...overrides
+  }
+}
+
+function makeGoal(threadId: string, overrides: Partial<ThreadGoal> = {}): ThreadGoal {
+  return {
+    threadId,
+    goalId: `goal-${threadId}`,
+    objective: `Goal ${threadId}`,
+    status: 'active',
+    tokenBudget: null,
+    tokensUsed: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    },
+    timeUsedSeconds: 0,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z',
     ...overrides
   }
 }
@@ -150,6 +169,24 @@ describe('threadStore.addThread', () => {
     expect(useThreadStore.getState().threadList).toHaveLength(1)
     expect(useThreadStore.getState().threadList[0].id).toBe('existing')
   })
+
+  it('hydrates goal snapshots from thread list entries', () => {
+    const goal = makeGoal('goal-thread')
+    useThreadStore.getState().setThreadList([
+      makeThreadSummary('goal-thread', { goal }),
+      makeThreadSummary('plain-thread')
+    ])
+
+    expect(useThreadStore.getState().goalSnapshots.get('goal-thread')).toEqual(goal)
+    expect(useThreadStore.getState().goalSnapshots.has('plain-thread')).toBe(false)
+  })
+
+  it('removes stale goal snapshots when thread list omits the thread', () => {
+    useThreadStore.getState().setThreadGoal(makeGoal('old-thread'))
+    useThreadStore.getState().setThreadList([makeThreadSummary('new-thread')])
+
+    expect(useThreadStore.getState().goalSnapshots.has('old-thread')).toBe(false)
+  })
 })
 
 describe('threadStore.upsertThreads', () => {
@@ -201,6 +238,15 @@ describe('threadStore.removeThread', () => {
     expect(useThreadStore.getState().threadList.map((t) => t.id)).toEqual(['t2'])
   })
 
+  it('clears any cached goal for the removed thread', () => {
+    useThreadStore.getState().setThreadList([makeThreadSummary('t1')])
+    useThreadStore.getState().setThreadGoal(makeGoal('t1'))
+
+    useThreadStore.getState().removeThread('t1')
+
+    expect(useThreadStore.getState().goalSnapshots.has('t1')).toBe(false)
+  })
+
   it('clears activeThreadId when the active thread is removed', () => {
     useThreadStore.getState().setThreadList([makeThreadSummary('t1')])
     useThreadStore.getState().setActiveThreadId('t1')
@@ -235,6 +281,32 @@ describe('threadStore.renameThread', () => {
     useThreadStore.getState().setActiveThread(thread)
     useThreadStore.getState().renameThread('t1', 'New name')
     expect(useThreadStore.getState().activeThread?.displayName).toBe('New name')
+  })
+})
+
+describe('threadStore goal snapshots', () => {
+  it('stores thread/goal/updated snapshots on the list and active thread', () => {
+    const goal = makeGoal('t1')
+    useThreadStore.getState().setThreadList([makeThreadSummary('t1')])
+    useThreadStore.getState().setActiveThread(makeThread('t1'))
+
+    useThreadStore.getState().setThreadGoal(goal)
+
+    expect(useThreadStore.getState().goalSnapshots.get('t1')).toEqual(goal)
+    expect(useThreadStore.getState().threadList[0].goal).toEqual(goal)
+    expect(useThreadStore.getState().activeThread?.goal).toEqual(goal)
+  })
+
+  it('clears thread/goal/cleared snapshots on the list and active thread', () => {
+    const goal = makeGoal('t1')
+    useThreadStore.getState().setThreadList([makeThreadSummary('t1', { goal })])
+    useThreadStore.getState().setActiveThread(makeThread('t1', { goal }))
+
+    useThreadStore.getState().clearThreadGoal('t1')
+
+    expect(useThreadStore.getState().goalSnapshots.has('t1')).toBe(false)
+    expect(useThreadStore.getState().threadList[0].goal).toBeNull()
+    expect(useThreadStore.getState().activeThread?.goal).toBeNull()
   })
 })
 

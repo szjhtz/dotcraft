@@ -18,6 +18,7 @@ pub enum LocalSlashCommand {
     Plan,
     Agent,
     Clear,
+    Goal { argument_text: String },
     Model { model_name: Option<String> },
     Quit,
 }
@@ -30,6 +31,11 @@ pub fn local_command_catalog() -> Vec<SlashCommandDescriptor> {
         SlashCommandDescriptor::new("/load", "Resume a thread by ID (/load <id>)", "local-ui"),
         SlashCommandDescriptor::new("/plan", "Switch to Plan mode", "local-ui"),
         SlashCommandDescriptor::new("/agent", "Switch to Agent mode", "local-ui"),
+        SlashCommandDescriptor::new(
+            "/goal",
+            "Show, set, pause, resume, or clear the thread goal",
+            "local-ui",
+        ),
         SlashCommandDescriptor::new("/clear", "Clear the chat display", "local-ui"),
         SlashCommandDescriptor::new(
             "/model",
@@ -103,6 +109,9 @@ pub fn to_local_command(parsed: &ParsedSlashCommand) -> Option<LocalSlashCommand
         "/plan" => LocalSlashCommand::Plan,
         "/agent" => LocalSlashCommand::Agent,
         "/clear" => LocalSlashCommand::Clear,
+        "/goal" => LocalSlashCommand::Goal {
+            argument_text: parsed.argument_text.clone(),
+        },
         "/model" => LocalSlashCommand::Model {
             model_name: if parsed.argument_text.is_empty() {
                 None

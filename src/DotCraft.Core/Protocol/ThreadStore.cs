@@ -179,6 +179,52 @@ public sealed class ThreadStore
     }
 
     /// <summary>
+    /// Loads the current persistent goal for a thread, if one exists.
+    /// </summary>
+    public Task<ThreadGoal?> GetThreadGoalAsync(string threadId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_metadataStore.LoadThreadGoal(threadId));
+    }
+
+    /// <summary>
+    /// Upserts the current persistent goal for a thread.
+    /// </summary>
+    public Task UpsertThreadGoalAsync(ThreadGoal goal, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _metadataStore.UpsertThreadGoal(goal);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Atomically adds usage to the current thread goal when its id still matches the expected goal id.
+    /// </summary>
+    public Task<ThreadGoal?> AccountThreadGoalUsageAsync(
+        string threadId,
+        string expectedGoalId,
+        TokenUsageInfo usageDelta,
+        long timeDeltaSeconds,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_metadataStore.AccountThreadGoalUsage(
+            threadId,
+            expectedGoalId,
+            usageDelta,
+            timeDeltaSeconds));
+    }
+
+    /// <summary>
+    /// Deletes the current persistent goal for a thread.
+    /// </summary>
+    public Task<bool> DeleteThreadGoalAsync(string threadId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(_metadataStore.DeleteThreadGoal(threadId));
+    }
+
+    /// <summary>
     /// Returns all persisted thread summaries from SQLite metadata, ordered by activity.
     /// </summary>
     public Task<List<ThreadSummary>> LoadIndexAsync(CancellationToken ct = default)

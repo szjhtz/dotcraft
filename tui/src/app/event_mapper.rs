@@ -862,11 +862,26 @@ pub fn apply(state: &mut AppState, msg: &JsonRpcMessage) -> bool {
                     .get("displayName")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
+                state.current_goal = thread
+                    .get("goal")
+                    .and_then(|goal| serde_json::from_value(goal.clone()).ok());
             }
             true
         }
 
         "thread/statusChanged" => true,
+
+        "thread/goal/updated" => {
+            state.current_goal = params
+                .get("goal")
+                .and_then(|goal| serde_json::from_value(goal.clone()).ok());
+            true
+        }
+
+        "thread/goal/cleared" => {
+            state.current_goal = None;
+            true
+        }
 
         _ => false,
     }

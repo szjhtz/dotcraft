@@ -34,9 +34,11 @@ export function SystemNoticeBlock({ item }: SystemNoticeBlockProps): JSX.Element
   if (notice.kind !== 'compacted') return null
 
   const title =
-    notice.trigger === 'reactive'
-      ? t('systemNotice.compacted.reactive')
-      : t('systemNotice.compacted.auto')
+    notice.trigger === 'manual'
+      ? t('systemNotice.compacted.manual')
+      : notice.trigger === 'reactive'
+        ? t('systemNotice.compacted.reactive')
+        : t('systemNotice.compacted.auto')
 
   const before = typeof notice.tokensBefore === 'number' ? notice.tokensBefore : 0
   const after = typeof notice.tokensAfter === 'number' ? notice.tokensAfter : 0

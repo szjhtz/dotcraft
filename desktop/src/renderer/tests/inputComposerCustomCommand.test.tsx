@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LocaleProvider } from '../contexts/LocaleContext'
 import { InputComposer } from '../components/conversation/InputComposer'
+import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { useConnectionStore } from '../stores/connectionStore'
 import { useConversationStore } from '../stores/conversationStore'
 import { useThreadStore } from '../stores/threadStore'
 import { useUIStore } from '../stores/uiStore'
 import { useToastStore } from '../stores/toastStore'
+import type { ThreadGoal } from '../types/thread'
+import type { ConversationTurn } from '../types/conversation'
 
 const settingsGet = vi.fn()
 const appServerSendRequest = vi.fn()
@@ -16,6 +19,28 @@ const getPathForFile = vi.fn((file: File) => file.name === 'notes.txt' ? 'C:\\te
 
 function renderWithLocale(node: JSX.Element): void {
   render(<LocaleProvider>{node}</LocaleProvider>)
+}
+
+function renderWithLocaleAndConfirm(node: JSX.Element): void {
+  render(<LocaleProvider><ConfirmDialogHost />{node}</LocaleProvider>)
+}
+
+function makeGoal(threadId = 'thread-1', objective = 'Existing goal'): ThreadGoal {
+  return {
+    threadId,
+    goalId: `goal-${threadId}`,
+    objective,
+    status: 'active',
+    tokenBudget: null,
+    tokensUsed: {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0
+    },
+    timeUsedSeconds: 0,
+    createdAt: '2024-01-01T00:00:00Z',
+    updatedAt: '2024-01-01T00:00:00Z'
+  }
 }
 
 function setCaretToEnd(element: HTMLElement): void {
@@ -252,6 +277,360 @@ describe('InputComposer custom command expansion', () => {
         })
       )
     })
+  })
+
+  it('shows the Goal system action above commands when thread goals are supported', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        commandManagement: true,
+        skillsManagement: true,
+        threadGoals: true
+      }
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('command/list', { language: 'en' })
+    })
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setCaretToEnd(textbox)
+    fireEvent.input(textbox)
+
+    const systemHeader = await screen.findByText('System')
+    const commandHeader = await screen.findByText('Commands')
+    expect(systemHeader.compareDocumentPosition(commandHeader) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('option', { name: /goal/i }))
+
+    expect(await screen.findByRole('dialog', { name: 'Goal' })).toBeInTheDocument()
+    expect(screen.getAllByRole('textbox').length).toBeGreaterThan(0)
+  })
+
+  it('shows plan mode system action and toggles mode without starting a turn', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setCaretToEnd(textbox)
+    fireEvent.input(textbox)
+
+    expect(await screen.findByText('Enable Plan mode')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('option', { name: /Plan mode/i }))
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/mode/set', {
+        threadId: 'thread-1',
+        mode: 'plan'
+      })
+    })
+    expect(textbox.textContent?.trim()).toBe('')
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('handles /agent locally without starting a turn', async () => {
+    useConversationStore.setState({ threadMode: 'plan' })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    textbox.textContent = '/agent'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/mode/set', {
+        threadId: 'thread-1',
+        mode: 'agent'
+      })
+    })
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('shows compact system action only for idle threads with history and calls manual compaction', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        manualCompaction: true
+      }
+    })
+    useConversationStore.setState({
+      turnStatus: 'idle',
+      turns: [{
+        id: 'turn_001',
+        threadId: 'thread-1',
+        status: 'completed',
+        items: [],
+        startedAt: '2026-05-08T00:00:00Z',
+        completedAt: '2026-05-08T00:00:01Z'
+      }] as ConversationTurn[]
+    })
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'thread/compact/start') {
+        return {
+          outcome: 'partial',
+          contextUsage: {
+            tokens: 100,
+            contextWindow: 1000,
+            autoCompactThreshold: 800,
+            warningThreshold: 700,
+            errorThreshold: 750,
+            percentLeft: 0.9
+          }
+        }
+      }
+      return {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setCaretToEnd(textbox)
+    fireEvent.input(textbox)
+
+    expect(await screen.findByText("Compact this session's context")).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('option', { name: /Compact/i }))
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/compact/start', { threadId: 'thread-1' })
+    })
+    expect(useConversationStore.getState().contextUsage?.tokens).toBe(100)
+  })
+
+  it('shows a specific toast when compact skips because there is no older context', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        manualCompaction: true
+      }
+    })
+    useConversationStore.setState({
+      turnStatus: 'idle',
+      turns: [{
+        id: 'turn_001',
+        threadId: 'thread-1',
+        status: 'completed',
+        items: [],
+        startedAt: '2026-05-08T00:00:00Z',
+        completedAt: '2026-05-08T00:00:01Z'
+      }] as ConversationTurn[]
+    })
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'thread/compact/start') {
+        return {
+          outcome: 'skipped',
+          message: 'no_summarizable_prefix'
+        }
+      }
+      return {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setCaretToEnd(textbox)
+    fireEvent.input(textbox)
+
+    fireEvent.click(await screen.findByRole('option', { name: /Compact/i }))
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts.some(
+        (toast) => toast.message === 'This session does not have older context to compact yet'
+      )).toBe(true)
+    })
+  })
+
+  it('shows the generic toast for other compact skipped reasons', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        manualCompaction: true
+      }
+    })
+    useConversationStore.setState({
+      turnStatus: 'idle',
+      turns: [{
+        id: 'turn_001',
+        threadId: 'thread-1',
+        status: 'completed',
+        items: [],
+        startedAt: '2026-05-08T00:00:00Z',
+        completedAt: '2026-05-08T00:00:01Z'
+      }] as ConversationTurn[]
+    })
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'thread/compact/start') {
+        return {
+          outcome: 'skipped',
+          message: 'below_threshold'
+        }
+      }
+      return {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    fireEvent.focus(textbox)
+    textbox.textContent = '/'
+    setCaretToEnd(textbox)
+    fireEvent.input(textbox)
+
+    fireEvent.click(await screen.findByRole('option', { name: /Compact/i }))
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts.some(
+        (toast) => toast.message === 'Nothing needed compaction'
+      )).toBe(true)
+    })
+  })
+
+  it('handles /goal set locally without starting a turn', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        threadGoals: true
+      }
+    })
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'thread/goal/get') return { goal: null }
+      if (method === 'thread/goal/set') return { goal: makeGoal('thread-1', 'Fix tests') }
+      return {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    textbox.textContent = '/goal Fix tests'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/set', {
+        threadId: 'thread-1',
+        objective: 'Fix tests',
+        mode: 'upsertOrUpdate'
+      })
+    })
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('handles /goal pause resume and clear with goal RPCs', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        threadGoals: true
+      }
+    })
+    useThreadStore.getState().setThreadGoal(makeGoal('thread-1'))
+    appServerSendRequest.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/goal/set') {
+        return { goal: makeGoal('thread-1', params.status === 'paused' ? 'Existing goal' : 'Existing goal') }
+      }
+      if (method === 'thread/goal/clear') return { cleared: true }
+      return {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    textbox.textContent = '/goal pause'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/set', {
+        threadId: 'thread-1',
+        status: 'paused',
+        mode: 'updateOnly'
+      })
+    })
+
+    textbox.textContent = '/goal resume'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/set', {
+        threadId: 'thread-1',
+        status: 'active',
+        mode: 'updateOnly'
+      })
+    })
+
+    textbox.textContent = '/goal clear'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/clear', { threadId: 'thread-1' })
+    })
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('confirms before replacing a different active goal', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {
+        threadGoals: true
+      }
+    })
+    useThreadStore.getState().setThreadGoal(makeGoal('thread-1', 'Old goal'))
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'thread/goal/set') return { goal: makeGoal('thread-1', 'New goal') }
+      return {}
+    })
+
+    renderWithLocaleAndConfirm(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    textbox.textContent = '/goal New goal'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace goal' }))
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/goal/set', {
+        threadId: 'thread-1',
+        objective: 'New goal',
+        mode: 'replaceExisting'
+      })
+    })
+  })
+
+  it('intercepts /goal when the capability is unavailable', async () => {
+    useConnectionStore.setState({
+      status: 'connected',
+      capabilities: {}
+    })
+
+    renderWithLocale(<InputComposer threadId="thread-1" workspacePath="E:\\Git\\dotcraft" />)
+
+    const textbox = screen.getByRole('textbox')
+    textbox.textContent = '/goal Fix tests'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toasts.some((toast) => toast.message.includes('Goals are not available'))).toBe(true)
+    })
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+    expect(appServerSendRequest.mock.calls.some((call) => String(call[0]).startsWith('thread/goal/'))).toBe(false)
   })
 
   it('opens a compact attachment menu with image and file actions', async () => {

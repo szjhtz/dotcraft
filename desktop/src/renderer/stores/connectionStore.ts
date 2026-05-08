@@ -30,6 +30,8 @@ export interface ServerCapabilities {
   subAgentManagement?: boolean
   externalChannelManagement?: boolean
   mcpStatus?: boolean
+  threadGoals?: boolean
+  manualCompaction?: boolean
   extensions?: Record<string, unknown>
   [key: string]: unknown
 }

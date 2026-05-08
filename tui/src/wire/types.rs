@@ -86,6 +86,7 @@ pub struct ServerInfo {
 pub struct ServerCapabilities {
     pub thread_management: Option<bool>,
     pub thread_subscriptions: Option<bool>,
+    pub thread_goals: Option<bool>,
     pub approval_flow: Option<bool>,
     pub mode_switch: Option<bool>,
     pub config_override: Option<bool>,
@@ -94,6 +95,51 @@ pub struct ServerCapabilities {
     pub command_management: Option<bool>,
     pub model_catalog_management: Option<bool>,
     pub workspace_config_management: Option<bool>,
+}
+
+// ── thread/goal/* ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoal {
+    pub thread_id: String,
+    pub goal_id: String,
+    pub objective: String,
+    pub status: String,
+    pub token_budget: Option<i64>,
+    pub tokens_used: TokenUsage,
+    pub time_used_seconds: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsage {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub cache_write_input_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalGetResult {
+    pub goal: Option<ThreadGoal>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalSetResult {
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalClearResult {
+    pub cleared: bool,
 }
 
 // ── command/* ──────────────────────────────────────────────────────────────

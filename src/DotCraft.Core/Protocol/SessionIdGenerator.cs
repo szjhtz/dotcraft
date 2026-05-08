@@ -36,6 +36,11 @@ public static class SessionIdGenerator
     /// </summary>
     public static string NewQueuedInputId() => $"queued_{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}_{GenerateRandom(6)}";
 
+    /// <summary>
+    /// Generates a new Thread Goal ID.
+    /// </summary>
+    public static string NewGoalId() => $"goal_{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}_{GenerateRandom(6)}";
+
     private static string GenerateRandom(int length)
     {
         var chars = new char[length];

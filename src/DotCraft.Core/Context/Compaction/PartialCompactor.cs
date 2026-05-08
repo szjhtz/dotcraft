@@ -14,6 +14,17 @@ public sealed record PartialCompactResult(
     int TailEstimatedTokens);
 
 /// <summary>
+/// Result envelope for a partial compaction attempt, including a machine-readable
+/// reason when no summary can be produced.
+/// </summary>
+public sealed record PartialCompactAttempt(PartialCompactResult? Result, string? Reason)
+{
+    public static PartialCompactAttempt Succeeded(PartialCompactResult result) => new(result, null);
+
+    public static PartialCompactAttempt Unavailable(string reason) => new(null, reason);
+}
+
+/// <summary>
 /// Summarizes the older portion of a conversation while preserving a tail of
 /// recent API-round groups verbatim. Port of openclaude's
 /// <c>sessionMemoryCompact.ts</c> / <c>calculateMessagesToKeepIndex</c>.
@@ -81,12 +92,12 @@ public sealed class PartialCompactor
     }
 
     /// <summary>
-    /// Runs the partial summary. Returns <c>null</c> when the model rejected
-    /// the request, nothing meaningful was summarized, or there is no prefix
-    /// to summarize. The caller is responsible for replacing the prefix in the
-    /// session's chat history.
+    /// Runs the partial summary and returns either a summary result or a
+    /// machine-readable reason explaining why no summary can be produced. The
+    /// caller is responsible for replacing the prefix in the session's chat
+    /// history when the attempt succeeds.
     /// </summary>
-    public async Task<PartialCompactResult?> CompactAsync(
+    public async Task<PartialCompactAttempt> CompactAsync(
         IReadOnlyList<ChatMessage> messages,
         CancellationToken cancellationToken = default)
     {
@@ -98,27 +109,27 @@ public sealed class PartialCompactor
     /// The snapshot path preserves the main request prefix and appends only a
     /// maintenance task at the tail.
     /// </summary>
-    public async Task<PartialCompactResult?> CompactAsync(
+    public async Task<PartialCompactAttempt> CompactAsync(
         IReadOnlyList<ChatMessage> messages,
         PromptRequestSnapshot? snapshot,
         CancellationToken cancellationToken = default)
     {
         if (messages.Count == 0)
-            return null;
+            return PartialCompactAttempt.Unavailable("empty_history");
 
         var splitIndex = CalculateSplitIndex(messages, _config);
         if (splitIndex <= 0)
-            return null;
+            return PartialCompactAttempt.Unavailable("no_summarizable_prefix");
 
         var prefix = messages.Take(splitIndex).ToList();
         var tail = messages.Skip(splitIndex).ToList();
 
         if (prefix.Count == 0)
-            return null;
+            return PartialCompactAttempt.Unavailable("no_summarizable_prefix");
 
         var paired = MessageGrouper.EnsurePairing(prefix);
         if (paired.Count == 0)
-            return null;
+            return PartialCompactAttempt.Unavailable("no_summarizable_prefix");
 
         var prefixTokens = MessageTokenEstimator.Estimate(prefix);
         var tailTokens = MessageTokenEstimator.Estimate(tail);
@@ -127,20 +138,20 @@ public sealed class PartialCompactor
             ? await RunSnapshotForkAsync(snapshot, splitIndex, tail, cancellationToken)
             : await RunLegacySummaryAsync(paired, cancellationToken);
         if (string.IsNullOrWhiteSpace(rawSummary))
-            return null;
+            return PartialCompactAttempt.Unavailable("summary_unavailable");
 
         var formatted = CompactionPrompts.GetCompactUserSummaryMessage(
             rawSummary,
             transcriptPath: null,
             recentMessagesPreserved: tail.Count > 0);
 
-        return new PartialCompactResult(
+        return PartialCompactAttempt.Succeeded(new PartialCompactResult(
             SummarizedPrefix: prefix,
             PreservedTail: tail,
             FormattedSummary: formatted,
             RawSummary: rawSummary,
             PrefixEstimatedTokens: prefixTokens,
-            TailEstimatedTokens: tailTokens);
+            TailEstimatedTokens: tailTokens));
     }
 
     private async Task<string?> RunSnapshotForkAsync(

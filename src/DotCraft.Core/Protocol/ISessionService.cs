@@ -59,6 +59,28 @@ public interface ISessionService
     Task PauseThreadAsync(string threadId, CancellationToken ct = default);
 
     /// <summary>
+    /// Returns the current goal attached to a thread, if one exists.
+    /// </summary>
+    Task<ThreadGoal?> GetThreadGoalAsync(string threadId, CancellationToken ct = default) =>
+        throw new NotSupportedException("Thread goals are not supported by this session service.");
+
+    /// <summary>
+    /// Creates, replaces, or updates the current goal attached to a thread.
+    /// </summary>
+    Task<ThreadGoal> SetThreadGoalAsync(
+        string threadId,
+        ThreadGoalUpdate update,
+        GoalSetMode mode = GoalSetMode.UpsertOrUpdate,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("Thread goals are not supported by this session service.");
+
+    /// <summary>
+    /// Clears the current goal attached to a thread.
+    /// </summary>
+    Task<ThreadGoalClearResult> ClearThreadGoalAsync(string threadId, CancellationToken ct = default) =>
+        throw new NotSupportedException("Thread goals are not supported by this session service.");
+
+    /// <summary>
     /// Transitions a Thread to Archived status. Archived threads are read-only.
     /// </summary>
     Task ArchiveThreadAsync(string threadId, CancellationToken ct = default);
@@ -195,6 +217,13 @@ public interface ISessionService
     Task SetThreadModeAsync(string threadId, string mode, CancellationToken ct = default);
 
     /// <summary>
+    /// Manually compacts the model-visible context for an idle server-managed Thread.
+    /// Emits thread-scoped system events and persists a compaction notice on success.
+    /// </summary>
+    Task<ThreadCompactResult> CompactThreadAsync(string threadId, CancellationToken ct = default) =>
+        throw new NotSupportedException("Manual context compaction is not supported by this session service.");
+
+    /// <summary>
     /// Updates the per-thread agent configuration (e.g., MCP servers, extensions).
     /// </summary>
     Task UpdateThreadConfigurationAsync(
@@ -266,6 +295,26 @@ public interface ISessionService
     /// <c>thread/runtimeChanged</c> to connected clients.
     /// </summary>
     Action<string, SessionThreadRuntimeSignal>? ThreadRuntimeSignalForBroadcast { get; set; }
+
+    /// <summary>
+    /// Optional hook invoked after a thread goal changes in Session Core or goal runtime.
+    /// Hosts broadcast <c>thread/goal/updated</c> so clients keep goal controls synchronized.
+    /// </summary>
+    Action<ThreadGoal, string?>? ThreadGoalUpdatedForBroadcast
+    {
+        get => null;
+        set { }
+    }
+
+    /// <summary>
+    /// Optional hook invoked after a thread goal is cleared in Session Core.
+    /// Hosts broadcast <c>thread/goal/cleared</c> so clients drop cached goal snapshots.
+    /// </summary>
+    Action<string>? ThreadGoalClearedForBroadcast
+    {
+        get => null;
+        set { }
+    }
 }
 
 /// <summary>

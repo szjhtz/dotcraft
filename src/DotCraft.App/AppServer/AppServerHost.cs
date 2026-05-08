@@ -227,6 +227,8 @@ public sealed class AppServerHost(
         _runtime.ThreadDeleted += BroadcastThreadDeleted;
         _runtime.ThreadStatusChanged += BroadcastThreadStatusChanged;
         _runtime.ThreadRuntimeSignal += OnThreadRuntimeSignal;
+        _runtime.ThreadGoalUpdated += BroadcastThreadGoalUpdated;
+        _runtime.ThreadGoalCleared += BroadcastThreadGoalCleared;
         _runtime.SubAgentGraphChanged += BroadcastSubAgentGraphChanged;
         _runtime.CronStateChanged += OnCronStateChanged;
         _runtime.BackgroundJobResultProduced += OnBackgroundJobResultProduced;
@@ -245,6 +247,8 @@ public sealed class AppServerHost(
         _runtime.ThreadDeleted -= BroadcastThreadDeleted;
         _runtime.ThreadStatusChanged -= BroadcastThreadStatusChanged;
         _runtime.ThreadRuntimeSignal -= OnThreadRuntimeSignal;
+        _runtime.ThreadGoalUpdated -= BroadcastThreadGoalUpdated;
+        _runtime.ThreadGoalCleared -= BroadcastThreadGoalCleared;
         _runtime.SubAgentGraphChanged -= BroadcastSubAgentGraphChanged;
         _runtime.CronStateChanged -= OnCronStateChanged;
         _runtime.BackgroundJobResultProduced -= OnBackgroundJobResultProduced;
@@ -994,6 +998,62 @@ public sealed class AppServerHost(
     private static bool IsSubAgentThread(SessionThread thread) =>
         string.Equals(thread.Source.Kind, ThreadSourceKinds.SubAgent, StringComparison.OrdinalIgnoreCase)
         || string.Equals(thread.OriginChannel, SubAgentThreadOrigin.ChannelName, StringComparison.OrdinalIgnoreCase);
+
+    private void BroadcastThreadGoalUpdated(ThreadGoal goal, string? turnId)
+    {
+        var notification = new
+        {
+            jsonrpc = "2.0",
+            method = AppServerMethods.ThreadGoalUpdated,
+            @params = new { threadId = goal.ThreadId, goal, turnId }
+        };
+
+        foreach (var (transport, connection) in _activeTransports)
+        {
+            if (!connection.ShouldSendNotification(AppServerMethods.ThreadGoalUpdated))
+                continue;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await transport.WriteMessageAsync(notification, CancellationToken.None);
+                }
+                catch
+                {
+                    _activeTransports.TryRemove(transport, out _);
+                }
+            });
+        }
+    }
+
+    private void BroadcastThreadGoalCleared(string threadId)
+    {
+        var notification = new
+        {
+            jsonrpc = "2.0",
+            method = AppServerMethods.ThreadGoalCleared,
+            @params = new { threadId }
+        };
+
+        foreach (var (transport, connection) in _activeTransports)
+        {
+            if (!connection.ShouldSendNotification(AppServerMethods.ThreadGoalCleared))
+                continue;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await transport.WriteMessageAsync(notification, CancellationToken.None);
+                }
+                catch
+                {
+                    _activeTransports.TryRemove(transport, out _);
+                }
+            });
+        }
+    }
 
     /// <summary>
     /// Broadcasts <c>thread/renamed</c> to all connected transports when a thread's display name changes

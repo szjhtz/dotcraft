@@ -9,6 +9,29 @@ export type ThreadStatus = 'active' | 'paused' | 'archived'
 
 export type ApprovalPolicyWire = 'default' | 'autoApprove' | 'interrupt'
 
+export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete'
+
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+  cachedInputTokens?: number
+  cacheWriteInputTokens?: number
+  reasoningOutputTokens?: number
+  totalTokens: number
+}
+
+export interface ThreadGoal {
+  threadId: string
+  goalId: string
+  objective: string
+  status: ThreadGoalStatus
+  tokenBudget?: number | null
+  tokensUsed: TokenUsage
+  timeUsedSeconds: number
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ThreadRuntimeSnapshot {
   running: boolean
   waitingOnApproval: boolean
@@ -52,6 +75,8 @@ export interface ThreadSummary {
   metadata?: Record<string, unknown>
   /** Best-effort current runtime snapshot from thread/list. Omitted by older hosts. */
   runtime?: ThreadRuntimeSnapshot
+  /** Best-effort current goal snapshot from thread/list. Omitted by older hosts. */
+  goal?: ThreadGoal | null
 }
 
 /**
