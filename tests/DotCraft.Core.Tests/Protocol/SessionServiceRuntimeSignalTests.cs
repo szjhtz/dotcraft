@@ -78,6 +78,47 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
     }
 
     [Fact]
+    public async Task SubmitInputAsync_WhenAgentThrowsAfterPartialResponse_RebuildsSessionFromFailedTurn()
+    {
+        var seedChatClient = new RecordingChatClient("first answer");
+        await using var seedFactory = CreateAgentFactory(seedChatClient);
+        var seedService = CreateService(seedFactory, seedChatClient);
+        var thread = await seedService.CreateThreadAsync(MakeIdentity());
+        await DrainAsync(seedService.SubmitInputAsync(thread.Id, [new TextContent("first")]));
+
+        IChatClient firstChatClient = new ThrowingAfterUpdatesChatClient(
+            [new ChatResponseUpdate(ChatRole.Assistant, [new TextContent("partial answer")])],
+            new InvalidOperationException("boom"));
+        await using var firstFactory = CreateAgentFactory(firstChatClient);
+        var firstService = CreateService(firstFactory, firstChatClient);
+        await firstService.ResumeThreadAsync(thread.Id);
+
+        await DrainAsync(firstService.SubmitInputAsync(thread.Id, [new TextContent("fail now")]));
+
+        var failedThread = await firstService.GetThreadAsync(thread.Id);
+        var failedTurn = failedThread.Turns.Last();
+        Assert.Equal(TurnStatus.Failed, failedTurn.Status);
+        Assert.True(new ThreadStore(_tempDir).SessionFileExists(thread.Id));
+
+        var secondChatClient = new RecordingChatClient("second answer");
+        await using var secondFactory = CreateAgentFactory(secondChatClient);
+        var secondService = CreateService(secondFactory, secondChatClient);
+        await secondService.ResumeThreadAsync(thread.Id);
+
+        await DrainAsync(secondService.SubmitInputAsync(thread.Id, [new TextContent("follow up")]));
+
+        Assert.Equal(
+            [
+                "user:first",
+                "assistant:first answer",
+                "user:fail now",
+                "assistant:partial answer",
+                "user:follow up"
+            ],
+            secondChatClient.LastMessages.Select(FormatMessageWithContents).ToList());
+    }
+
+    [Fact]
     public async Task SubmitInputAsync_WhenSdkNetworkTimeoutCancellationOccurs_MarksTurnFailed()
     {
         const string timeoutMessage =
@@ -727,6 +768,22 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         return $"{message.Role}:{text.Trim()}";
     }
 
+    private static string FormatMessageWithContents(ChatMessage message)
+    {
+        var parts = message.Contents.Select(content => content switch
+        {
+            TextContent text => text.Text,
+            FunctionCallContent call => $"function_call:{call.Name}:{call.CallId}",
+            FunctionResultContent result => $"function_result:{result.CallId}:{result.Result}",
+            _ => content.ToString() ?? string.Empty
+        });
+        var text = StripSystemReminderBlocks(string.Concat(parts));
+        var runtimeContextIndex = text.IndexOf("\n[Runtime Context]", StringComparison.Ordinal);
+        if (runtimeContextIndex >= 0)
+            text = text[..runtimeContextIndex];
+        return $"{message.Role}:{text.Trim()}";
+    }
+
     private static string StripSystemReminderBlocks(string input)
     {
         const string openTag = "<system-reminder>";
@@ -816,6 +873,34 @@ public sealed class SessionServiceRuntimeSignalTests : IDisposable
         {
             if (Environment.TickCount < 0)
                 yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextContent(string.Empty)]);
+            await Task.Yield();
+            throw exception;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ThrowingAfterUpdatesChatClient(
+        ChatResponseUpdate[] streamUpdates,
+        Exception exception) : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            throw exception;
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var update in streamUpdates)
+                yield return update;
             await Task.Yield();
             throw exception;
         }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronUp, Columns2, FolderOpen, Rows2, Undo2 } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -30,6 +30,8 @@ export function ChangesTab({ workspacePath }: ChangesTabProps): JSX.Element {
   const confirm = useConfirmDialog()
   const { revertFileDiff, reapplyFileDiff } = useFileChangeActions(workspacePath)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const initialExpansionAppliedRef = useRef(false)
+  const appliedSelectedFileRef = useRef<string | null>(null)
 
   const files = useMemo(() => Array.from(changedFiles.values()), [changedFiles])
   const writtenFiles = files.filter((f) => f.status === 'written')
@@ -37,13 +39,30 @@ export function ChangesTab({ workspacePath }: ChangesTabProps): JSX.Element {
   const totalDel = files.reduce((s, f) => s + f.deletions, 0)
 
   useEffect(() => {
+    initialExpansionAppliedRef.current = false
+    appliedSelectedFileRef.current = null
+    setExpanded(new Set())
+  }, [activeThreadId])
+
+  useEffect(() => {
+    if (files.length === 0) {
+      initialExpansionAppliedRef.current = false
+      appliedSelectedFileRef.current = null
+      setExpanded((current) => current.size === 0 ? current : new Set())
+      return
+    }
+
     setExpanded((current) => {
       const available = new Set(files.map((file) => file.filePath))
       const next = new Set([...current].filter((filePath) => available.has(filePath)))
-      const target = selectedFile && available.has(selectedFile)
-        ? selectedFile
-        : files[0]?.filePath
-      if (target) next.add(target)
+      if (selectedFile && available.has(selectedFile) && appliedSelectedFileRef.current !== selectedFile) {
+        next.add(selectedFile)
+        appliedSelectedFileRef.current = selectedFile
+      } else if (!initialExpansionAppliedRef.current) {
+        const firstFile = files[0]?.filePath
+        if (firstFile) next.add(firstFile)
+      }
+      initialExpansionAppliedRef.current = true
       return next
     })
   }, [files, selectedFile])

@@ -665,7 +665,8 @@ rather than part of the model conversation.
 
 - `Running` → `Failed`
   - An unrecoverable error occurs: agent exception, tool execution error, timeout.
-  - Session Core creates an `Error` Item, sets `Turn.Error`, and runs cleanup.
+  - Session Core creates an `Error` Item, sets `Turn.Error`, saves the partial Thread state, and runs cleanup.
+  - For server-managed history, the persisted `thread_sessions` row is a rebuildable cache and must be rebuilt from the canonical Thread rollout, or cleared if rebuilding fails. The next Turn must include the failed Turn's completed user, assistant, and paired tool-call/tool-result Items that were durably recorded before the failure.
 
 - `Running` or `WaitingApproval` → `Cancelled`
 - The adapter requests cancellation (e.g., user sends `/cancel`, channel disconnects).

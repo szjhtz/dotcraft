@@ -1671,6 +1671,29 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 }
             }
 
+            async Task FailAndPersistTurnAsync(
+                string errorMsg,
+                string errorCode,
+                bool saveCurrentSession = false)
+            {
+                FinalizeStreamingAgentMessage();
+                FinalizeStreamingReasoning();
+                await RestoreUndrainedGuidanceAsync();
+
+                var errorItem = CreateErrorItem(turn, NextItemSeq(), errorMsg, errorCode, fatal: true);
+                turn.Items.Add(errorItem);
+                eventChannel.EmitItemStarted(errorItem);
+                eventChannel.EmitItemCompleted(errorItem);
+
+                FailTurn(turn, eventChannel, errorMsg);
+                ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnFailed);
+                await TrySaveThreadAsync(thread);
+                if (saveCurrentSession && session is not null)
+                    await TrySaveSessionAsync(agent, session, threadId);
+                else
+                    await TryRebuildAndSaveSessionAsync(agent, threadId);
+            }
+
             try
             {
                 // Step 5a: Acquire SessionGate
@@ -1681,7 +1704,9 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 catch (SessionGateOverflowException ex)
                 {
                     logger?.LogWarning("Session gate overflow for thread {ThreadId}: {Message}", threadId, ex.Message);
-                    FailTurn(turn, eventChannel, $"Session queue overflow: {ex.Message}");
+                    await FailAndPersistTurnAsync(
+                        $"Session queue overflow: {ex.Message}",
+                        "session_gate_overflow");
                     return;
                 }
 
@@ -1754,11 +1779,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                     if (hookResult.Blocked)
                     {
                         var errorMsg = $"Prompt blocked by hook: {hookResult.BlockReason ?? "no reason given"}";
-                        var errorItem = CreateErrorItem(turn, NextItemSeq(), errorMsg, "hook_blocked", fatal: true);
-                        turn.Items.Add(errorItem);
-                        eventChannel.EmitItemStarted(errorItem);
-                        eventChannel.EmitItemCompleted(errorItem);
-                        FailTurn(turn, eventChannel, errorMsg);
+                        await FailAndPersistTurnAsync(errorMsg, "hook_blocked");
                         return;
                     }
                 }
@@ -2409,20 +2430,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
             catch (OperationCanceledException ex) when (IsConfiguredNetworkTimeoutCancellation(ex))
             {
                 logger?.LogError(ex, "Turn execution failed due to network timeout for thread {ThreadId}", threadId);
-                FinalizeStreamingAgentMessage();
-                FinalizeStreamingReasoning();
-                await RestoreUndrainedGuidanceAsync();
-
-                var errorMsg = ex.Message;
-                var errorItem = CreateErrorItem(turn, NextItemSeq(), errorMsg, "agent_error", fatal: true);
-                turn.Items.Add(errorItem);
-                eventChannel.EmitItemStarted(errorItem);
-                eventChannel.EmitItemCompleted(errorItem);
-                FailTurn(turn, eventChannel, errorMsg);
-                ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnFailed);
-                await TrySaveThreadAsync(thread);
-                if (session is not null)
-                    await TrySaveSessionAsync(agent, session, threadId);
+                await FailAndPersistTurnAsync(ex.Message, "agent_error");
             }
             catch (OperationCanceledException)
             {
@@ -2446,6 +2454,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 // already gone), but the compacted history lets the user re-send their
                 // prompt and succeed without any manual cleanup.
                 var reactiveMessage = ex.Message;
+                var reactiveCompactionSucceeded = false;
                 if (IsPromptTooLongError(ex) && session is not null)
                 {
                     try
@@ -2485,6 +2494,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                             reactiveMessage =
                                 "The request exceeded the model's context window. "
                                 + "History has been compacted; please re-send the message.";
+                            reactiveCompactionSucceeded = true;
                         }
                         else
                         {
@@ -2504,12 +2514,10 @@ Choose the next concrete action that advances the goal. Before doing substantial
                     }
                 }
 
-                await RestoreUndrainedGuidanceAsync();
-                FailTurn(turn, eventChannel, reactiveMessage);
-                ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnFailed);
-                await TrySaveThreadAsync(thread);
-                if (session is not null)
-                    await TrySaveSessionAsync(agent, session, threadId);
+                await FailAndPersistTurnAsync(
+                    reactiveMessage,
+                    "agent_error",
+                    saveCurrentSession: reactiveCompactionSucceeded);
             }
             finally
             {

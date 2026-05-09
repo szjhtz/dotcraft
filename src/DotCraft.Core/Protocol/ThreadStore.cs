@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DotCraft.State;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -292,11 +293,13 @@ public sealed class ThreadStore
 
         foreach (var turn in thread.Turns.OrderBy(t => t.StartedAt).ThenBy(t => t.Id, StringComparer.Ordinal))
         {
-            foreach (var item in turn.Items)
-            {
-                if (item.Status != ItemStatus.Completed)
-                    continue;
+            var completedItems = turn.Items
+                .Where(static item => item.Status == ItemStatus.Completed)
+                .ToList();
+            var pairedToolCallIds = CollectPairedToolCallIds(completedItems);
 
+            foreach (var item in completedItems)
+            {
                 if (item.Type == ItemType.UserMessage && TryBuildUserMessage(item, out var userMessage))
                 {
                     history.Add(userMessage);
@@ -305,6 +308,16 @@ public sealed class ThreadStore
                          !string.IsNullOrWhiteSpace(agentText))
                 {
                     history.Add(new ChatMessage(ChatRole.Assistant, agentText.Trim()));
+                }
+                else if (item.Type == ItemType.ToolCall &&
+                         TryBuildToolCallMessage(item, pairedToolCallIds, out var toolCallMessage))
+                {
+                    history.Add(toolCallMessage);
+                }
+                else if (item.Type == ItemType.ToolResult &&
+                         TryBuildToolResultMessage(item, pairedToolCallIds, out var toolResultMessage))
+                {
+                    history.Add(toolResultMessage);
                 }
             }
         }
@@ -354,5 +367,81 @@ public sealed class ThreadStore
 
         message = new ChatMessage(ChatRole.User, user.Text.Trim());
         return true;
+    }
+
+    private static HashSet<string> CollectPairedToolCallIds(IReadOnlyList<SessionItem> items)
+    {
+        var resultIds = items
+            .Select(static item => item.Payload as ToolResultPayload)
+            .Where(static payload => !string.IsNullOrWhiteSpace(payload?.CallId))
+            .Select(static payload => payload!.CallId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (resultIds.Count == 0)
+            return [];
+
+        return items
+            .Select(static item => item.Payload as ToolCallPayload)
+            .Where(payload =>
+                !string.IsNullOrWhiteSpace(payload?.CallId) &&
+                !string.IsNullOrWhiteSpace(payload.ToolName) &&
+                resultIds.Contains(payload.CallId))
+            .Select(static payload => payload!.CallId)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static bool TryBuildToolCallMessage(
+        SessionItem item,
+        IReadOnlySet<string> pairedToolCallIds,
+        out ChatMessage message)
+    {
+        message = new ChatMessage(ChatRole.Assistant, string.Empty);
+        if (item.Payload is not ToolCallPayload payload ||
+            string.IsNullOrWhiteSpace(payload.CallId) ||
+            string.IsNullOrWhiteSpace(payload.ToolName) ||
+            !pairedToolCallIds.Contains(payload.CallId))
+        {
+            return false;
+        }
+
+        message = new ChatMessage(
+            ChatRole.Assistant,
+            (IList<AIContent>)
+            [
+                new FunctionCallContent(
+                    payload.CallId,
+                    payload.ToolName,
+                    BuildToolArguments(payload.Arguments))
+            ]);
+        return true;
+    }
+
+    private static bool TryBuildToolResultMessage(
+        SessionItem item,
+        IReadOnlySet<string> pairedToolCallIds,
+        out ChatMessage message)
+    {
+        message = new ChatMessage(ChatRole.Tool, string.Empty);
+        if (item.Payload is not ToolResultPayload payload ||
+            string.IsNullOrWhiteSpace(payload.CallId) ||
+            !pairedToolCallIds.Contains(payload.CallId))
+        {
+            return false;
+        }
+
+        message = new ChatMessage(
+            ChatRole.Tool,
+            (IList<AIContent>)[new FunctionResultContent(payload.CallId, payload.Result)]);
+        return true;
+    }
+
+    private static IDictionary<string, object?>? BuildToolArguments(JsonObject? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+            return null;
+
+        return JsonSerializer.Deserialize<Dictionary<string, object?>>(
+            arguments.ToJsonString(),
+            SessionPersistenceJsonOptions.Default);
     }
 }

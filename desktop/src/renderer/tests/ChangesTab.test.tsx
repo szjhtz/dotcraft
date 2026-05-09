@@ -113,6 +113,45 @@ describe('ChangesTab diff stream', () => {
     })
   })
 
+  it('keeps a manually collapsed first file collapsed when diffs refresh', async () => {
+    cs().upsertChangedFile(makeDiff({ filePath: 'src/a.ts' }))
+    cs().upsertChangedFile(makeDiff({
+      filePath: 'src/b.ts',
+      diffHunks: [
+        {
+          oldStart: 1,
+          oldLines: 1,
+          newStart: 1,
+          newLines: 1,
+          lines: [
+            { type: 'remove', content: 'second old' },
+            { type: 'add', content: 'second new' }
+          ]
+        }
+      ]
+    }))
+
+    render(<Harness />)
+
+    await waitFor(() => {
+      expect(screen.getByText('old line')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('src/a.ts'))
+
+    await waitFor(() => {
+      expect(screen.queryByText('old line')).toBeNull()
+    })
+
+    act(() => {
+      cs().upsertChangedFile(makeDiff({ filePath: 'src/a.ts', additions: 2 }))
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('old line')).toBeNull()
+    })
+  })
+
   it('stores split diff mode per thread', async () => {
     cs().upsertChangedFile(makeDiff({ filePath: 'src/a.ts' }))
 

@@ -409,6 +409,116 @@ public sealed class ThreadStoreTests : IDisposable
         Assert.Equal("guidance", guidance.DeliveryMode);
     }
 
+    [Fact]
+    public async Task RebuildAndSaveSessionFromThreadAsync_IncludesPairedToolCallAndResult()
+    {
+        var thread = CreateThread();
+        AddTurnWithMessages(thread, "hello", "before tool", TurnStatus.Failed);
+        var turn = thread.Turns[0];
+        turn.Error = "boom";
+
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(3),
+            TurnId = turn.Id,
+            Type = ItemType.ToolCall,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolCallPayload
+            {
+                ToolName = "ReadFile",
+                CallId = "call-1",
+                Arguments = new JsonObject { ["path"] = "a.txt" }
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(4),
+            TurnId = turn.Id,
+            Type = ItemType.ToolResult,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolResultPayload
+            {
+                CallId = "call-1",
+                Result = "tool result",
+                Success = true
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(5),
+            TurnId = turn.Id,
+            Type = ItemType.AgentMessage,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new AgentMessagePayload { Text = "partial answer" }
+        });
+        await _store.SaveThreadAsync(thread);
+
+        var agent = CreateAgent();
+        await _store.RebuildAndSaveSessionFromThreadAsync(agent, thread.Id);
+        var session = await _store.LoadOrCreateSessionAsync(agent, thread.Id);
+
+        Assert.Equal(
+            [
+                "user:hello",
+                "assistant:before tool",
+                "assistant:function_call:ReadFile:call-1",
+                "tool:function_result:call-1:tool result",
+                "assistant:partial answer"
+            ],
+            FormatHistoryWithContents(session));
+    }
+
+    [Fact]
+    public async Task RebuildAndSaveSessionFromThreadAsync_SkipsDanglingToolPairs()
+    {
+        var thread = CreateThread();
+        AddTurnWithMessages(thread, "hello", "before", TurnStatus.Failed);
+        var turn = thread.Turns[0];
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(3),
+            TurnId = turn.Id,
+            Type = ItemType.ToolCall,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolCallPayload
+            {
+                ToolName = "ReadFile",
+                CallId = "missing",
+                Arguments = new JsonObject()
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(4),
+            TurnId = turn.Id,
+            Type = ItemType.ToolResult,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolResultPayload
+            {
+                CallId = string.Empty,
+                Result = "ignored",
+                Success = true
+            }
+        });
+        await _store.SaveThreadAsync(thread);
+
+        var agent = CreateAgent();
+        await _store.RebuildAndSaveSessionFromThreadAsync(agent, thread.Id);
+        var session = await _store.LoadOrCreateSessionAsync(agent, thread.Id);
+
+        Assert.Equal(["user:hello", "assistant:before"], FormatHistoryWithContents(session));
+    }
+
     // -------------------------------------------------------------------------
     // Thread discovery (LoadIndexAsync reads persisted SQLite metadata)
     // -------------------------------------------------------------------------
@@ -582,6 +692,25 @@ public sealed class ThreadStoreTests : IDisposable
         }
 
         return Task.FromResult(history);
+    }
+
+    private static List<string> FormatHistoryWithContents(AgentSession session)
+    {
+        Assert.True(session.TryGetInMemoryChatHistory(
+            out var chatHistory,
+            jsonSerializerOptions: SessionPersistenceJsonOptions.Default));
+
+        return chatHistory.Select(message =>
+        {
+            var text = string.Concat(message.Contents.Select(content => content switch
+            {
+                TextContent tc => tc.Text,
+                FunctionCallContent fc => $"function_call:{fc.Name}:{fc.CallId}",
+                FunctionResultContent fr => $"function_result:{fr.CallId}:{fr.Result}",
+                _ => content.ToString() ?? string.Empty
+            }));
+            return $"{message.Role}:{text}";
+        }).ToList();
     }
 
     private static void AddTurnWithMessages(
