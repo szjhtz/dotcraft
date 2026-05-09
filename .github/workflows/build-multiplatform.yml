@@ -35,7 +35,7 @@ jobs:
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build')
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
         include:
           - os: ubuntu-latest
             os_name: linux
@@ -47,7 +47,7 @@ jobs:
             runtime_id: win-x64
             output_name: DotCraft-win-x64
             cargo_target: x86_64-pc-windows-msvc
-          - os: macos-latest
+          - os: macos-15-intel
             os_name: macos
             runtime_id: osx-x64
             output_name: DotCraft-macos-x64
@@ -124,7 +124,7 @@ jobs:
       if: runner.os != 'Linux'
       uses: actions/setup-node@v6
       with:
-        node-version: '20'
+        node-version: '22'
         cache: 'npm'
         cache-dependency-path: |
           desktop/package-lock.json

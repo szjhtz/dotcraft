@@ -30,7 +30,7 @@
     "@lydell/node-pty": "^1.2.0-beta.3",
     "@monaco-editor/react": "^4.7.0",
     "@types/ws": "^8.18.1",
-    "@vscode/ripgrep": "^1.17.1",
+    "@vscode/ripgrep": "^1.18.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -61,7 +61,7 @@
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^35.1.2",
+    "electron": "^42.0.1",
     "electron-builder": "^26.8.1",
     "electron-vite": "^3.0.0",
     "jsdom": "^29.0.1",
@@ -84,7 +84,8 @@
       "out/**/*"
     ],
     "asarUnpack": [
-      "node_modules/@vscode/ripgrep/bin/**"
+      "node_modules/@vscode/ripgrep/bin/**",
+      "node_modules/@vscode/ripgrep-*/bin/**"
     ],
     "extraResources": [
       {

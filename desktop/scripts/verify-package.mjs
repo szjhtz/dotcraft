@@ -43,6 +43,16 @@ if (resourcesDirs.length === 0) {
     path.join(unpackedRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg.exe'),
     path.join(unpackedRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg')
   ]
+  const vscodeModulesDir = path.join(unpackedRoot, 'node_modules', '@vscode')
+  if (existsSync(vscodeModulesDir)) {
+    for (const packageName of readdirSync(vscodeModulesDir)) {
+      if (!packageName.startsWith('ripgrep-')) continue
+      rgCandidates.push(
+        path.join(vscodeModulesDir, packageName, 'bin', 'rg.exe'),
+        path.join(vscodeModulesDir, packageName, 'bin', 'rg')
+      )
+    }
+  }
   const rgPath = rgCandidates.find((candidate) => existsSync(candidate))
 
   if (!rgPath) {
