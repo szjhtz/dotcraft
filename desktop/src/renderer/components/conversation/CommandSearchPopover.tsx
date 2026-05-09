@@ -8,6 +8,7 @@ export interface SlashSystemActionInfo {
   id: string
   label: string
   description: string
+  keywords?: string[]
   icon?: ReactNode
 }
 
@@ -50,7 +51,8 @@ export function CommandSearchPopover({
     if (!prefix) return systemActionList
     return systemActionList.filter((action) => {
       if (action.label.toLowerCase().startsWith(prefix)) return true
-      return action.id.toLowerCase().startsWith(prefix)
+      if (action.id.toLowerCase().startsWith(prefix)) return true
+      return (action.keywords ?? []).some((keyword) => keyword.toLowerCase().startsWith(prefix))
     })
   }, [query, systemActionList])
   const filteredCommands = useMemo(() => {

@@ -50,7 +50,7 @@ Consolidation runs after successful turns, using a simple per-thread counter:
 
 `CompactionPipeline` does not trigger consolidation. A compaction attempt, success, failure, or circuit-breaker state must not affect whether memory consolidation is eligible to run.
 
-Manual consolidation commands may be added later, but the baseline behavior is automatic turn-count-based consolidation.
+Manual consolidation may also be triggered explicitly through AppServer `thread/memory/consolidate/start`. Manual attempts use the same input scope and persistence contract as automatic attempts, but bypass `Memory.AutoConsolidateEnabled` because the user requested the maintenance action directly.
 
 ## 4. Input Scope
 
@@ -93,6 +93,8 @@ Memory consolidation emits transient `system/event` notifications so clients can
 
 On `consolidated`, Session Core also persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the completed Turn and broadcasts `item/started` + `item/completed` through the thread event broker. This gives Desktop and other timeline clients a durable divider that survives thread reloads. Skipped and failed attempts do not create persistent conversation items.
 
+Manual consolidation uses thread-scoped `system/event` notifications because there is no active turn-scoped event channel. It still emits `consolidating` before running and one terminal event after completion. On success, the `memoryConsolidated` notice is appended to the latest completed Turn.
+
 ## 8. Configuration
 
 Memory consolidation is controlled by memory-specific configuration:
@@ -125,7 +127,6 @@ Potential extensions:
 
 - Incremental consolidation windows that include only messages since the last successful consolidation.
 - Token-based or idle-time triggers.
-- Manual consolidation commands.
 - Vector or semantic retrieval over consolidated history.
 - User-reviewable memory diffs before writing `MEMORY.md`.
 

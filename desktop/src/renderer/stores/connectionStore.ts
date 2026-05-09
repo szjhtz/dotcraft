@@ -32,6 +32,7 @@ export interface ServerCapabilities {
   mcpStatus?: boolean
   threadGoals?: boolean
   manualCompaction?: boolean
+  manualMemoryConsolidation?: boolean
   extensions?: Record<string, unknown>
   [key: string]: unknown
 }

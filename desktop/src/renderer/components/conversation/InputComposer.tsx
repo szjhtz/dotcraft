@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect, useMemo, type CSSProperties } from 'react'
-import { ChevronsDown, ListChecks, Target } from 'lucide-react'
+import { Archive, ChevronsDown, ListChecks, Target } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { useConversationStore } from '../../stores/conversationStore'
 import { addToast } from '../../stores/toastStore'
@@ -24,7 +24,7 @@ import { PendingMessageIndicator } from './PendingMessageIndicator'
 import { RichInputArea, type RichInputAreaHandle } from './RichInputArea'
 import { AttachmentStrip } from './AttachmentStrip'
 import { FileSearchPopover } from './FileSearchPopover'
-import { CommandSearchPopover } from './CommandSearchPopover'
+import { CommandSearchPopover, type SlashSystemActionInfo } from './CommandSearchPopover'
 import { GoalControlPopover } from './GoalControlPopover'
 import { ModelPicker } from './ModelPicker'
 import { ComposerAttachmentMenu } from './ComposerAttachmentMenu'
@@ -47,6 +47,7 @@ const MAX_TEXT_LENGTH = 100_000
 const MAX_IMAGES = 5
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MANUAL_COMPACTION_TIMEOUT_MS = 5 * 60 * 1000
+const MANUAL_MEMORY_CONSOLIDATION_TIMEOUT_MS = 5 * 60 * 1000
 
 interface InputComposerProps {
   threadId: string
@@ -92,6 +93,7 @@ export function InputComposer({
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false)
   const [goalBusy, setGoalBusy] = useState(false)
   const [compactBusy, setCompactBusy] = useState(false)
+  const [consolidateBusy, setConsolidateBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [editorFocused, setEditorFocused] = useState(false)
   /** Bumps on rich-input edits so `canSend` re-evaluates from ref (contentEditable has no React state). */
@@ -119,13 +121,15 @@ export function InputComposer({
   const canUseSkillPicker = capabilities?.skillsManagement === true
   const canUseThreadGoals = capabilities?.threadGoals === true
   const canUseManualCompaction = capabilities?.manualCompaction === true
+  const canUseManualMemoryConsolidation = capabilities?.manualMemoryConsolidation === true
   const canCompactCurrentThread = canUseManualCompaction && turnsLength > 0 && turnStatus === 'idle'
+  const canConsolidateCurrentThread = canUseManualMemoryConsolidation && turnsLength > 0 && turnStatus === 'idle'
   const canUseSystemActions = true
   const canUseSlashPicker = canUseCommandPicker || canUseSkillPicker || canUseThreadGoals || canUseSystemActions
 
   const showMentionPopover = atQuery !== null && !mentionDismissed
   const normalizedSlashQuery = slashQuery?.toLowerCase() ?? null
-  const isExactSystemSlashQuery = normalizedSlashQuery === 'plan' || normalizedSlashQuery === 'agent' || normalizedSlashQuery === 'compact'
+  const isExactSystemSlashQuery = normalizedSlashQuery === 'plan' || normalizedSlashQuery === 'agent' || normalizedSlashQuery === 'compact' || normalizedSlashQuery === 'consolidate'
   const showSlashPopover = slashQuery !== null && !slashDismissed && canUseSlashPicker && !isExactSystemSlashQuery
   const showSkillPopover = skillQuery !== null && !skillDismissed && canUseSkillPicker
   const { commands: customCommands, status: customCommandStatus } = useCustomCommandCatalog({
@@ -155,13 +159,14 @@ export function InputComposer({
   )
   const systemActions = useMemo(
     () => {
-      const actions = [
+      const actions: SlashSystemActionInfo[] = [
         {
           id: 'planMode',
           label: t('composer.system.plan'),
           description: threadMode === 'agent'
             ? t('composer.system.plan.enable')
             : t('composer.system.plan.disable'),
+          keywords: ['plan', 'agent'],
           icon: <ListChecks size={11} strokeWidth={2} aria-hidden />
         }
       ]
@@ -170,7 +175,17 @@ export function InputComposer({
           id: 'compact',
           label: t('composer.system.compact'),
           description: t('composer.system.compact.description'),
+          keywords: ['compact'],
           icon: <ChevronsDown size={11} strokeWidth={2} aria-hidden />
+        })
+      }
+      if (canConsolidateCurrentThread) {
+        actions.push({
+          id: 'consolidate',
+          label: t('composer.system.consolidate'),
+          description: t('composer.system.consolidate.description'),
+          keywords: ['consolidate', 'memory'],
+          icon: <Archive size={11} strokeWidth={2} aria-hidden />
         })
       }
       if (canUseThreadGoals) {
@@ -178,12 +193,13 @@ export function InputComposer({
           id: 'goal',
           label: 'goal',
           description: t('goal.system.description'),
+          keywords: ['goal'],
           icon: <Target size={11} strokeWidth={2} aria-hidden />
         })
       }
       return actions
     },
-    [canCompactCurrentThread, canUseThreadGoals, t, threadMode]
+    [canCompactCurrentThread, canConsolidateCurrentThread, canUseThreadGoals, t, threadMode]
   )
 
   useEffect(() => {
@@ -490,7 +506,8 @@ export function InputComposer({
       let clearInput = false
       if (systemCommand.kind === 'plan') clearInput = await setComposerMode('plan')
       else if (systemCommand.kind === 'agent') clearInput = await setComposerMode('agent')
-      else clearInput = await compactThreadContext()
+      else if (systemCommand.kind === 'compact') clearInput = await compactThreadContext()
+      else clearInput = await consolidateThreadMemory()
       if (clearInput) {
         richRef.current?.clear()
         setImages([])
@@ -563,7 +580,7 @@ export function InputComposer({
     } finally {
       sendInFlightRef.current = false
     }
-  }, [compactThreadContext, executeGoalCommand, files, images, isRunning, isWaitingApproval, modelLoading, setComposerMode, threadId, workspacePath, t])
+  }, [compactThreadContext, consolidateThreadMemory, executeGoalCommand, files, images, isRunning, isWaitingApproval, modelLoading, setComposerMode, threadId, workspacePath, t])
 
   const removeQueuedInput = useCallback(async (queuedInputId: string): Promise<void> => {
     try {
@@ -682,6 +699,43 @@ export function InputComposer({
     }
   }
 
+  async function consolidateThreadMemory(): Promise<boolean> {
+    if (consolidateBusy) return false
+    if (!canConsolidateCurrentThread) {
+      addToast(t('composer.consolidate.unavailable'), 'warning')
+      return false
+    }
+
+    setConsolidateBusy(true)
+    addToast(t('composer.consolidate.started'), 'info')
+    try {
+      const result = (await window.api.appServer.sendRequest(
+        'thread/memory/consolidate/start',
+        { threadId },
+        MANUAL_MEMORY_CONSOLIDATION_TIMEOUT_MS
+      )) as {
+        outcome?: string
+        message?: string
+        memoryWritten?: boolean
+        historyWritten?: boolean
+      }
+      const outcome = String(result.outcome ?? '').toLowerCase()
+      if (outcome === 'succeeded') {
+        addToast(t('composer.consolidate.succeeded'), 'success')
+      } else if (outcome === 'skipped') {
+        addToast(t('composer.consolidate.skipped'), 'info')
+      } else {
+        addToast(t('composer.consolidate.failed', { error: result.message || outcome || 'unknown' }), 'error')
+      }
+      return true
+    } catch (err) {
+      addToast(t('composer.consolidate.failed', { error: err instanceof Error ? err.message : String(err) }), 'error')
+      return false
+    } finally {
+      setConsolidateBusy(false)
+    }
+  }
+
   const canSend = useMemo(() => {
     const textLen = (richRef.current?.getText() ?? '').trim().length
     return (textLen > 0 || images.length > 0 || files.length > 0) && !isWaitingApproval && !modelLoading
@@ -731,10 +785,14 @@ export function InputComposer({
       void compactThreadContext()
       return
     }
+    if (actionId === 'consolidate') {
+      void consolidateThreadMemory()
+      return
+    }
     if (actionId !== 'goal') return
     setGoalPopoverOpen(true)
     void ensureCurrentGoal().catch(() => {})
-  }, [clearSlashSystemInput, ensureCurrentGoal, compactThreadContext, toggleMode])
+  }, [clearSlashSystemInput, ensureCurrentGoal, compactThreadContext, consolidateThreadMemory, toggleMode])
 
   const onSelectSkill = useCallback((skillName: string): void => {
     richRef.current?.insertSkillTag(skillName)
@@ -1076,11 +1134,12 @@ const queuedTextButtonStyle: CSSProperties = {
   padding: '2px 4px'
 }
 
-function parseSystemSlashCommand(text: string): { kind: 'plan' | 'agent' | 'compact' } | null {
+function parseSystemSlashCommand(text: string): { kind: 'plan' | 'agent' | 'compact' | 'consolidate' } | null {
   const trimmed = text.trim().toLowerCase()
   if (trimmed === '/plan') return { kind: 'plan' }
   if (trimmed === '/agent') return { kind: 'agent' }
   if (trimmed === '/compact') return { kind: 'compact' }
+  if (trimmed === '/consolidate') return { kind: 'consolidate' }
   return null
 }
 

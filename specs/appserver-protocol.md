@@ -360,6 +360,7 @@ Built-in channels do not negotiate these capabilities over `initialize`; they pr
 | `capabilities.threadSubscriptions` | boolean | Server supports passive `thread/subscribe` observers independent from `turn/start`. |
 | `capabilities.threadGoals` | boolean | Server supports the complete thread goal runtime contract: `thread/goal/*` control methods, goal notifications, prompt-visible goal context, usage accounting, budget transitions, and model goal tools. Automatic idle continuation still depends on server config. |
 | `capabilities.manualCompaction` | boolean | Server supports manual context compaction with `thread/compact/start`. |
+| `capabilities.manualMemoryConsolidation` | boolean | Server supports manual long-term memory consolidation with `thread/memory/consolidate/start`. |
 | `capabilities.approvalFlow` | boolean | Server may send approval requests. |
 | `capabilities.modeSwitch` | boolean | Server supports `thread/mode/set`. |
 | `capabilities.configOverride` | boolean | Server supports `thread/config/update`. |
@@ -923,6 +924,29 @@ Manually compact the model-visible context for an idle server-managed thread.
 | `contextUsage` | ContextUsageSnapshot? | Updated snapshot when available. |
 
 Servers advertise this method with `capabilities.manualCompaction = true`. The method is valid only for Active, server-managed threads that have history and no `Running` / `WaitingApproval` turn. The server emits `system/event` in the order `compacting` → `compacted` / `compactSkipped` / `compactFailed`. Manual compaction first tries partial compaction; if there is no older prefix, or the partial attempt cannot produce a summary, it falls back to full-history compaction so short histories can still be compacted. On success it persists the compacted agent session and appends a `SystemNotice` item with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
+
+### 4.17 `thread/memory/consolidate/start`
+
+Manually consolidate the current thread's model-visible history into workspace long-term memory.
+
+**Direction**: client → server (request)
+
+**Params**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `threadId` | string | yes | Thread ID. |
+
+**Result**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `outcome` | string | `"succeeded"`, `"skipped"`, or `"failed"`. |
+| `message` | string? | Optional skip/failure reason. |
+| `memoryWritten` | boolean | Whether `MEMORY.md` was updated. |
+| `historyWritten` | boolean | Whether `HISTORY.md` was appended. |
+
+Servers advertise this method with `capabilities.manualMemoryConsolidation = true`. The method is valid only for Active, server-managed, idle threads with at least one completed turn and non-empty model-visible history. Manual consolidation bypasses `Memory.AutoConsolidateEnabled` because it is an explicit user action, but it still requires the server to have a memory consolidator. The server emits `system/event` in the order `consolidating` → `consolidated` / `consolidationSkipped` / `consolidationFailed`. On success it persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the latest completed turn.
 
 ---
 

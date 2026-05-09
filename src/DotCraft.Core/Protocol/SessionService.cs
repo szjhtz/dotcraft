@@ -2881,6 +2881,58 @@ Choose the next concrete action that advances the goal. Before doing substantial
         }
     }
 
+    /// <inheritdoc/>
+    public async Task<ThreadMemoryConsolidationResult> ConsolidateThreadMemoryAsync(
+        string threadId,
+        CancellationToken ct = default)
+    {
+        var thread = await GetOrLoadThreadAsync(threadId, ct);
+        if (thread.Status != ThreadStatus.Active)
+            throw new InvalidOperationException($"Thread '{threadId}' is not Active (current status: {thread.Status}). Cannot consolidate memory.");
+        if (thread.HistoryMode != HistoryMode.Server)
+            throw new InvalidOperationException($"Thread '{threadId}' uses client-managed history and cannot be consolidated by Session Core.");
+        if (thread.Turns.Count == 0)
+            throw new InvalidOperationException($"Thread '{threadId}' has no history to consolidate.");
+        if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
+            throw new InvalidOperationException($"Thread '{threadId}' has a running Turn. Wait for it to complete or cancel it first.");
+
+        IReadOnlyList<ChatMessage> history;
+        SessionTurn completedTurn;
+        PromptRequestSnapshot? requestSnapshot;
+        using (await sessionGate.AcquireAsync(threadId, ct))
+        {
+            thread = await GetOrLoadThreadAsync(threadId, ct);
+            if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
+                throw new InvalidOperationException($"Thread '{threadId}' has a running Turn. Wait for it to complete or cancel it first.");
+
+            completedTurn = thread.Turns.LastOrDefault(t => t.Status == TurnStatus.Completed)
+                ?? throw new InvalidOperationException($"Thread '{threadId}' has no completed turn to consolidate.");
+
+            await EnsurePerThreadAgentIfMissingAsync(threadId, thread, ct);
+            var agent = _threadAgents.GetValueOrDefault(threadId, defaultAgent);
+            var session = await persistence.LoadOrCreateSessionAsync(agent, threadId, ct);
+            history = SnapshotSessionHistoryForConsolidation(session, thread);
+            if (history.Count == 0)
+                throw new InvalidOperationException($"Thread '{threadId}' has no model-visible history to consolidate.");
+
+            _turnsSinceConsolidation[threadId] = 0;
+            requestSnapshot = TryGetLastPromptRequestSnapshot(threadId);
+        }
+
+        var broker = GetOrCreateBroker(threadId);
+        broker.PublishSystemEvent("consolidating");
+
+        return await RunMemoryConsolidationAsync(
+            threadId,
+            thread,
+            completedTurn,
+            history,
+            requestSnapshot,
+            () => completedTurn.Items.Count + 1,
+            broker,
+            ct);
+    }
+
     // =========================================================================
     // Configuration
     // =========================================================================
@@ -3531,43 +3583,112 @@ Choose the next concrete action that advances the goal. Before doing substantial
         var broker = GetOrCreateBroker(threadId);
         _ = Task.Run(async () =>
         {
-            try
-            {
-                var result = consolidator is IMemoryForkConsolidator forkConsolidator
-                    ? await forkConsolidator.ConsolidateAsync(history, requestSnapshot)
-                    : await consolidator.ConsolidateAsync(history);
-                switch (result.Outcome)
-                {
-                    case MemoryConsolidationOutcome.Succeeded:
-                        await AppendMemoryConsolidationNoticeAsync(
-                            threadId,
-                            thread,
-                            turn,
-                            nextItemSequence,
-                            broker);
-                        ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.MemoryConsolidated);
-                        broker.PublishSystemEvent("consolidated");
-                        break;
-
-                    case MemoryConsolidationOutcome.Skipped:
-                        broker.PublishSystemEvent("consolidationSkipped", message: result.Message);
-                        break;
-
-                    case MemoryConsolidationOutcome.Failed:
-                        logger?.LogWarning(
-                            "Memory consolidation failed for thread {ThreadId}: {Message}",
-                            threadId,
-                            result.Message);
-                        broker.PublishSystemEvent("consolidationFailed", message: result.Message);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "Memory consolidation failed for thread {ThreadId}", threadId);
-                broker.PublishSystemEvent("consolidationFailed", message: ex.Message);
-            }
+            await RunMemoryConsolidationAsync(
+                threadId,
+                thread,
+                turn,
+                history,
+                requestSnapshot,
+                nextItemSequence,
+                broker,
+                CancellationToken.None);
         });
+    }
+
+    private async Task<ThreadMemoryConsolidationResult> RunMemoryConsolidationAsync(
+        string threadId,
+        SessionThread thread,
+        SessionTurn turn,
+        IReadOnlyList<ChatMessage> history,
+        PromptRequestSnapshot? requestSnapshot,
+        Func<int> nextItemSequence,
+        ThreadEventBroker broker,
+        CancellationToken ct)
+    {
+        var consolidator = agentFactory.Consolidator;
+        if (consolidator is null)
+        {
+            const string message = "memory_consolidator_unavailable";
+            broker.PublishSystemEvent("consolidationFailed", message: message);
+            return new ThreadMemoryConsolidationResult
+            {
+                Outcome = "failed",
+                Message = message
+            };
+        }
+
+        try
+        {
+            var result = consolidator is IMemoryForkConsolidator forkConsolidator
+                ? await forkConsolidator.ConsolidateAsync(history, requestSnapshot, ct)
+                : await consolidator.ConsolidateAsync(history, ct);
+            switch (result.Outcome)
+            {
+                case MemoryConsolidationOutcome.Succeeded:
+                    await AppendMemoryConsolidationNoticeAsync(
+                        threadId,
+                        thread,
+                        turn,
+                        nextItemSequence,
+                        broker,
+                        ct);
+                    ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.MemoryConsolidated);
+                    broker.PublishSystemEvent("consolidated");
+                    return new ThreadMemoryConsolidationResult
+                    {
+                        Outcome = "succeeded",
+                        MemoryWritten = result.MemoryWritten,
+                        HistoryWritten = result.HistoryWritten
+                    };
+
+                case MemoryConsolidationOutcome.Skipped:
+                    broker.PublishSystemEvent("consolidationSkipped", message: result.Message);
+                    return new ThreadMemoryConsolidationResult
+                    {
+                        Outcome = "skipped",
+                        Message = result.Message,
+                        MemoryWritten = result.MemoryWritten,
+                        HistoryWritten = result.HistoryWritten
+                    };
+
+                case MemoryConsolidationOutcome.Failed:
+                    logger?.LogWarning(
+                        "Memory consolidation failed for thread {ThreadId}: {Message}",
+                        threadId,
+                        result.Message);
+                    broker.PublishSystemEvent("consolidationFailed", message: result.Message);
+                    return new ThreadMemoryConsolidationResult
+                    {
+                        Outcome = "failed",
+                        Message = result.Message,
+                        MemoryWritten = result.MemoryWritten,
+                        HistoryWritten = result.HistoryWritten
+                    };
+
+                default:
+                    var outcome = result.Outcome.ToString().ToLowerInvariant();
+                    broker.PublishSystemEvent("consolidationFailed", message: outcome);
+                    return new ThreadMemoryConsolidationResult
+                    {
+                        Outcome = "failed",
+                        Message = outcome
+                    };
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Memory consolidation failed for thread {ThreadId}", threadId);
+            broker.PublishSystemEvent("consolidationFailed", message: ex.Message);
+            return new ThreadMemoryConsolidationResult
+            {
+                Outcome = "failed",
+                Message = ex.Message
+            };
+        }
     }
 
     private static IReadOnlyList<ChatMessage> SnapshotSessionHistoryForConsolidation(
@@ -3778,12 +3899,13 @@ Choose the next concrete action that advances the goal. Before doing substantial
         SessionThread thread,
         SessionTurn turn,
         Func<int> nextItemSequence,
-        ThreadEventBroker broker)
+        ThreadEventBroker broker,
+        CancellationToken ct = default)
     {
         if (IsPendingPermanentDeletion(threadId))
             return;
 
-        using var gateLock = await sessionGate.AcquireAsync(threadId, CancellationToken.None);
+        using var gateLock = await sessionGate.AcquireAsync(threadId, ct);
         if (IsPendingPermanentDeletion(threadId))
             return;
 
@@ -3791,7 +3913,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
         turn.Items.Add(noticeItem);
         broker.PublishItemEvent(SessionEventType.ItemStarted, turn.Id, noticeItem);
         broker.PublishItemEvent(SessionEventType.ItemCompleted, turn.Id, noticeItem);
-        await PersistThreadWithMaterializationAsync(thread, CancellationToken.None);
+        await PersistThreadWithMaterializationAsync(thread, ct);
     }
 
     private async Task<AIAgent> BuildAgentForThreadAsync(

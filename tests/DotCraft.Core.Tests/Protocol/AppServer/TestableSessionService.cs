@@ -27,6 +27,7 @@ internal sealed class TestableSessionService : ISessionService, IThreadAgentRefr
     public IReadOnlyList<ChatMessage>? LastSubmittedMessages { get; private set; }
     public CancellationToken LastSubmitCancellationToken { get; private set; }
     public Func<string, IList<AIContent>, ChatMessage[]?, IEnumerable<SessionEvent>>? SubmitInputHandler { get; set; }
+    public Func<string, CancellationToken, Task<ThreadMemoryConsolidationResult>>? ConsolidateThreadMemoryHandler { get; set; }
     public IReadOnlyList<string> RefreshedThreadAgents => _refreshedThreadAgents;
     private readonly List<string> _refreshedThreadAgents = new();
 
@@ -471,6 +472,16 @@ internal sealed class TestableSessionService : ISessionService, IThreadAgentRefr
 
     public Task CleanBackgroundTerminalsAsync(string threadId, CancellationToken ct = default) =>
         Task.CompletedTask;
+
+    public Task<ThreadMemoryConsolidationResult> ConsolidateThreadMemoryAsync(
+        string threadId,
+        CancellationToken ct = default) =>
+        ConsolidateThreadMemoryHandler?.Invoke(threadId, ct)
+        ?? Task.FromResult(new ThreadMemoryConsolidationResult
+        {
+            Outcome = "skipped",
+            Message = "not_configured"
+        });
 
     public async Task<SessionThread> RollbackThreadAsync(string threadId, int numTurns, CancellationToken ct = default)
     {

@@ -224,6 +224,14 @@ public interface ISessionService
         throw new NotSupportedException("Manual context compaction is not supported by this session service.");
 
     /// <summary>
+    /// Manually consolidates the model-visible context for an idle server-managed Thread
+    /// into durable workspace memory.
+    /// Emits thread-scoped system events and persists a memory notice on success.
+    /// </summary>
+    Task<ThreadMemoryConsolidationResult> ConsolidateThreadMemoryAsync(string threadId, CancellationToken ct = default) =>
+        throw new NotSupportedException("Manual memory consolidation is not supported by this session service.");
+
+    /// <summary>
     /// Updates the per-thread agent configuration (e.g., MCP servers, extensions).
     /// </summary>
     Task UpdateThreadConfigurationAsync(

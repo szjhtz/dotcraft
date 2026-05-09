@@ -528,6 +528,12 @@ public sealed class AppServerServerCapabilities
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool ManualCompaction { get; set; }
 
+    /// <summary>
+    /// Server supports manual long-term memory consolidation via <c>thread/memory/consolidate/start</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ManualMemoryConsolidation { get; set; }
+
     public bool ApprovalFlow { get; set; } = true;
 
     public bool ModeSwitch { get; set; } = true;
@@ -809,6 +815,25 @@ public sealed class ThreadCompactStartResponse
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ContextUsageSnapshot? ContextUsage { get; set; }
+}
+
+// ───── thread/memory/consolidate/start ─────
+
+public sealed class ThreadMemoryConsolidateStartParams
+{
+    public string ThreadId { get; set; } = string.Empty;
+}
+
+public sealed class ThreadMemoryConsolidateStartResponse
+{
+    public string Outcome { get; set; } = "skipped";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; set; }
+
+    public bool MemoryWritten { get; set; }
+
+    public bool HistoryWritten { get; set; }
 }
 
 // ───── thread/rollback ─────
@@ -2716,6 +2741,7 @@ public static class AppServerMethods
     public const string ThreadGoalSet = "thread/goal/set";
     public const string ThreadGoalClear = "thread/goal/clear";
     public const string ThreadCompactStart = "thread/compact/start";
+    public const string ThreadMemoryConsolidateStart = "thread/memory/consolidate/start";
     public const string ThreadRollback = "thread/rollback";
     public const string ThreadSubscribe = "thread/subscribe";
     public const string ThreadUnsubscribe = "thread/unsubscribe";

@@ -233,6 +233,7 @@ public sealed class AppServerRequestHandler(
                 AppServerMethods.ThreadGoalSet => HandleThreadGoalSetAsync(msg, ct),
                 AppServerMethods.ThreadGoalClear => HandleThreadGoalClearAsync(msg, ct),
                 AppServerMethods.ThreadCompactStart => HandleThreadCompactStartAsync(msg, ct),
+                AppServerMethods.ThreadMemoryConsolidateStart => HandleThreadMemoryConsolidateStartAsync(msg, ct),
                 AppServerMethods.ThreadRollback => HandleThreadRollbackAsync(msg, ct),
                 AppServerMethods.ThreadSubscribe => HandleThreadSubscribeAsync(msg, ct),
                 AppServerMethods.ThreadUnsubscribe => HandleThreadUnsubscribeAsync(msg, ct),
@@ -327,6 +328,7 @@ public sealed class AppServerRequestHandler(
             ThreadSubscriptions = true,
             ThreadGoals = GoalsCapabilityEnabled(),
             ManualCompaction = true,
+            ManualMemoryConsolidation = memoryStore != null,
             ApprovalFlow = true,
             ModeSwitch = true,
             ConfigOverride = true,
@@ -1108,6 +1110,19 @@ public sealed class AppServerRequestHandler(
             Outcome = result.Outcome,
             Message = result.Message,
             ContextUsage = result.ContextUsage
+        };
+    }
+
+    private async Task<object?> HandleThreadMemoryConsolidateStartAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        var p = GetParams<ThreadMemoryConsolidateStartParams>(msg);
+        var result = await sessionService.ConsolidateThreadMemoryAsync(p.ThreadId, ct);
+        return new ThreadMemoryConsolidateStartResponse
+        {
+            Outcome = result.Outcome,
+            Message = result.Message,
+            MemoryWritten = result.MemoryWritten,
+            HistoryWritten = result.HistoryWritten
         };
     }
 
@@ -3801,7 +3816,7 @@ public sealed class AppServerRequestHandler(
         if (msg.Contains("archived and cannot be resumed") || msg.Contains("is not Active"))
             return AppServerErrors.ThreadNotActive(id);
 
-        if (msg.Contains("already has a running Turn"))
+        if (msg.Contains("already has a running Turn") || msg.Contains("has a running Turn"))
             return AppServerErrors.TurnInProgress(id);
 
         // historyMode contract violations are caller errors → InvalidParams (-32602)
@@ -3809,7 +3824,10 @@ public sealed class AppServerRequestHandler(
             || msg.Contains("server-managed history")
             || msg.Contains("SubAgent child thread")
             || msg.Contains("has no goal")
-            || msg.Contains("already has a goal"))
+            || msg.Contains("already has a goal")
+            || msg.Contains("has no history")
+            || msg.Contains("has no completed turn")
+            || msg.Contains("has no model-visible history"))
             return AppServerErrors.InvalidParams(msg);
 
         return AppServerErrors.InternalError(msg);
