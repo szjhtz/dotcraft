@@ -307,6 +307,11 @@ describe('SettingsView self-learning settings', () => {
   it('shows restart banner for LLM edits and ignore only hides the banner', async () => {
     renderView()
 
+    expect(await screen.findByRole('button', { name: 'LLM Service' })).toBeInTheDocument()
+    expect(screen.queryByText('OpenAI API Service')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'LLM Service' }))
+    expect(await screen.findByText('OpenAI API Service')).toBeInTheDocument()
     const endpointInput = await screen.findByPlaceholderText('https://api.openai.com/v1') as HTMLInputElement
     fireEvent.change(endpointInput, { target: { value: 'https://models.example.test/v1' } })
 

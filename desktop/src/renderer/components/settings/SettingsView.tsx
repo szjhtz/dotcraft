@@ -4,6 +4,7 @@ import {
   BarChart3,
   Bot,
   Cable,
+  Cpu,
   Globe2,
   KeyRound,
   MessageSquare,
@@ -202,7 +203,7 @@ export async function readWorkspaceCoreStrictFromApi(
 }
 
 type ConnectionMode = 'local' | 'remote'
-type SettingsTab = 'general' | 'personalization' | 'connection' | 'proxy' | 'browserUse' | 'usage' | 'channels' | 'archivedThreads' | 'mcp' | 'subAgents'
+type SettingsTab = 'general' | 'personalization' | 'connection' | 'llmService' | 'proxy' | 'browserUse' | 'usage' | 'channels' | 'archivedThreads' | 'mcp' | 'subAgents'
 type ProxyRuntimeStatus = 'stopped' | 'starting' | 'running' | 'error'
 type ProxyProviderStatus = 'idle' | 'checking' | 'pending' | 'ok' | 'error'
 
@@ -2207,6 +2208,7 @@ export function SettingsView({
   const tabs: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
     { id: 'general', label: t('settings.tab.general'), icon: SettingsIcon },
     { id: 'connection', label: t('settings.tab.connection'), icon: Cable },
+    { id: 'llmService', label: t('settings.tab.llmService'), icon: Cpu },
     { id: 'proxy', label: t('settings.tab.proxy'), icon: KeyRound },
     { id: 'browserUse', label: t('settings.tab.browserUse'), icon: Globe2 },
     { id: 'usage', label: t('settings.tab.usage'), icon: BarChart3 },
@@ -2403,6 +2405,13 @@ export function SettingsView({
                   />
                 </SettingsGroup>
 
+              </div>
+              </GeneralPanel>
+            )}
+
+            {activeSettingsTab === 'llmService' && (
+              <GeneralPanel>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <SettingsGroup title={t('settings.llm.title')}>
                   {proxyLockActive && (
                     <SettingsRow>

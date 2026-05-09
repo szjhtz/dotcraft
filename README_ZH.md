@@ -4,7 +4,7 @@
 
 [English](./README.md) · [官方文档](https://dotharness.github.io/dotcraft/) · [快速开始](https://dotharness.github.io/dotcraft/getting-started) · [下载 Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
 
-最适合您项目的 Agent Harness。你想要的所有功能尽在工作区内。
+最适合您项目的 AI Agent, 你想要的所有功能尽在工作区内。
 
 ![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
@@ -37,11 +37,8 @@ DotCraft 是一个 .NET 10 / C# Agent Harness。它围绕真实项目目录组�
 | 第一次安装、配置和运行 | [快速开始](https://dotharness.github.io/dotcraft/getting-started) |
 | 使用图形化桌面客户端 | [Desktop 指南](https://dotharness.github.io/dotcraft/desktop_guide) |
 | 在终端里使用完整界面 | [TUI 指南](https://dotharness.github.io/dotcraft/tui_guide) |
-| 配置模型、工具、审批和安全策略 | [配置指南](https://dotharness.github.io/dotcraft/config_guide) |
-| 查看 Trace、工具调用和配置合并结果 | [Dashboard 指南](https://dotharness.github.io/dotcraft/dash_board_guide) |
 | 运行本地自动化任务 | [Automations 指南](https://dotharness.github.io/dotcraft/automations_guide) |
 | 接入外部客户端、机器人或自定义适配器 | [SDK 总览](https://dotharness.github.io/dotcraft/sdk/) |
-| 查找完整文档路径 | [文档索引](https://dotharness.github.io/dotcraft/reference) |
 
 ## 贡献代码
 

@@ -4,7 +4,7 @@
 
 [中文](./README_ZH.md) · [Documentation](https://dotharness.github.io/dotcraft/en/) · [Getting Started](https://dotharness.github.io/dotcraft/en/getting-started) · [Download Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
 
-Agent Harness best for your project. All in one workspace.
+AI Agent lives in your project. All in one workspace.
 
 ![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
@@ -37,11 +37,8 @@ See [Getting Started](https://dotharness.github.io/dotcraft/en/getting-started) 
 | Install, configure, and run DotCraft for the first time | [Getting Started](https://dotharness.github.io/dotcraft/en/getting-started) |
 | Use the graphical desktop client | [Desktop Guide](https://dotharness.github.io/dotcraft/en/desktop_guide) |
 | Use the full terminal interface | [TUI Guide](https://dotharness.github.io/dotcraft/en/tui_guide) |
-| Configure models, tools, approvals, and security | [Configuration Guide](https://dotharness.github.io/dotcraft/en/config_guide) |
-| Inspect traces, tool calls, and merged configuration | [Dashboard Guide](https://dotharness.github.io/dotcraft/en/dash_board_guide) |
 | Run local automation tasks | [Automations Guide](https://dotharness.github.io/dotcraft/en/automations_guide) |
-| Connect external clients, bots, or custom adapters | [SDK Overview](https://dotharness.github.io/dotcraft/en/sdk/) |
-| Find the full docs path | [Documentation Index](https://dotharness.github.io/dotcraft/en/reference) |
+| Connect clients, bots, or custom adapters | [SDK Overview](https://dotharness.github.io/dotcraft/en/sdk/) |
 
 ## Contributing
 
