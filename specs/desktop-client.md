@@ -308,8 +308,8 @@ At the Desktop UX level:
 The slash reference surface includes Desktop-owned system actions above custom Commands and Skills:
 
 - Plan mode is always shown with the label "Plan mode". Its hint reflects the current mode: "Enable Plan mode" in Agent mode and "Disable Plan mode" in Plan mode. Selecting it uses the same local mode toggle path as `Shift+Tab` and calls `thread/mode/set`.
-- Manual compaction is shown as "Compact" with the hint "Compact this session's context" only when `capabilities.manualCompaction = true`, the active thread has at least one turn, and no turn is running or waiting for approval. Selecting it calls `thread/compact/start` with the active `threadId`.
-- If manual compaction returns `outcome = "skipped"` with `message = "no_summarizable_prefix"`, Desktop shows a specific short-history hint instead of the generic skipped message.
+- Manual compaction is shown as "Compact" with the hint "Compact this session's context" only when `capabilities.manualCompaction = true`, the active thread has at least one turn, and no turn is running or waiting for approval. Selecting it calls `thread/compact/start` with the active `threadId` and a long maintenance timeout of 300 seconds.
+- If manual compaction returns `outcome = "skipped"` or `outcome = "failed"`, Desktop shows the returned message using the same compact status surface. Short histories should normally compact through the server's full-history fallback.
 - Selecting a system action from slash search clears the slash query from the composer instead of leaving `/` behind.
 - Direct `/plan`, `/agent`, and `/compact` submissions are handled locally and must not start a normal agent turn. `/compact` shows an unavailable message instead of submitting a turn when the visibility conditions are not met. On the welcome screen, Plan mode is also shown as a system action, and `/plan` / `/agent` update the pending welcome mode without starting a thread.
 - Desktop updates the context ring from the RPC response when it includes `contextUsage`, and also consumes the standard `system/event` notifications emitted during compaction.

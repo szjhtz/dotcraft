@@ -31,6 +31,7 @@ public sealed record PartialCompactAttempt(PartialCompactResult? Result, string?
 /// </summary>
 public sealed class PartialCompactor
 {
+    private const int MaxPromptTooLongRetries = 3;
     private readonly IChatClient _chatClient;
     private readonly CompactionConfig _config;
     private readonly MaintenanceForkRunner? _maintenanceForkRunner;
@@ -175,6 +176,39 @@ public sealed class PartialCompactor
         IReadOnlyList<ChatMessage> paired,
         CancellationToken cancellationToken)
     {
+        var candidate = paired.ToList();
+        for (var attempt = 0; attempt <= MaxPromptTooLongRetries; attempt++)
+        {
+            try
+            {
+                return await RunLegacySummaryOnceAsync(candidate, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (CompactionErrors.IsPromptTooLong(ex))
+            {
+                if (attempt == MaxPromptTooLongRetries)
+                    return null;
+
+                candidate = CompactionMessageTruncator.TruncateOldestGroups(candidate);
+                if (candidate.Count == 0)
+                    return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<string?> RunLegacySummaryOnceAsync(
+        IReadOnlyList<ChatMessage> paired,
+        CancellationToken cancellationToken)
+    {
         var summaryPrompt = CompactionPrompts.GetPartialCompactPrompt();
         var summaryMessages = new List<ChatMessage>(paired.Count + 1)
         {
@@ -182,18 +216,11 @@ public sealed class PartialCompactor
         };
         summaryMessages.AddRange(paired);
 
-        try
-        {
-            var response = await _chatClient.GetResponseAsync(
-                summaryMessages,
-                new ChatOptions { Tools = null },
-                cancellationToken);
-            return response?.Text;
-        }
-        catch
-        {
-            return null;
-        }
+        var response = await _chatClient.GetResponseAsync(
+            summaryMessages,
+            new ChatOptions { Tools = null },
+            cancellationToken);
+        return response?.Text;
     }
 
     private static string BuildContextCompactionTaskInstructions(

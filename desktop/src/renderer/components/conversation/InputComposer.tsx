@@ -46,6 +46,7 @@ import { useConfirmDialog } from '../ui/ConfirmDialog'
 const MAX_TEXT_LENGTH = 100_000
 const MAX_IMAGES = 5
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MANUAL_COMPACTION_TIMEOUT_MS = 5 * 60 * 1000
 
 interface InputComposerProps {
   threadId: string
@@ -652,7 +653,11 @@ export function InputComposer({
     setCompactBusy(true)
     addToast(t('composer.compact.started'), 'info')
     try {
-      const result = await window.api.appServer.sendRequest('thread/compact/start', { threadId }) as {
+      const result = (await window.api.appServer.sendRequest(
+        'thread/compact/start',
+        { threadId },
+        MANUAL_COMPACTION_TIMEOUT_MS
+      )) as {
         outcome?: string
         message?: string
         contextUsage?: ContextUsageSnapshotWire | null
@@ -664,12 +669,7 @@ export function InputComposer({
       if (outcome === 'micro' || outcome === 'partial') {
         addToast(t('composer.compact.succeeded'), 'success')
       } else if (outcome === 'skipped') {
-        addToast(
-          result.message === 'no_summarizable_prefix'
-            ? t('composer.compact.skipped.noSummarizablePrefix')
-            : t('composer.compact.skipped'),
-          'info'
-        )
+        addToast(t('composer.compact.skipped'), 'info')
       } else {
         addToast(t('composer.compact.failed', { error: result.message || outcome || 'unknown' }), 'error')
       }

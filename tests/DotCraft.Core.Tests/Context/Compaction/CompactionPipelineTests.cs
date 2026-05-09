@@ -111,11 +111,13 @@ public sealed class CompactionPipelineTests
     }
 
     [Fact]
-    public async Task TryManualCompactHistoryAsync_SingleApiRoundSkipsWithoutFailure()
+    public async Task TryManualCompactHistoryAsync_SingleApiRoundFallsBackToFullCompaction()
     {
         var cfg = DefaultConfig();
         cfg.MicrocompactEnabled = false;
-        var pipeline = new CompactionPipeline(cfg, new DummyChatClient());
+        var pipeline = new CompactionPipeline(
+            cfg,
+            new SummaryChatClient("<summary>single round summary</summary>"));
         var messages = new List<ChatMessage>
         {
             new(ChatRole.User, "user " + new string('u', 1200)),
@@ -128,9 +130,10 @@ public sealed class CompactionPipelineTests
             lastAssistantTimestampUtc: null,
             CancellationToken.None);
 
-        Assert.Equal(CompactionOutcome.Skipped, result.Status.Outcome);
-        Assert.Equal("no_summarizable_prefix", result.Status.FailureReason);
-        Assert.Equal(messages, result.Messages);
+        Assert.Equal(CompactionOutcome.Partial, result.Status.Outcome);
+        Assert.Null(result.Status.FailureReason);
+        Assert.Single(result.Messages);
+        Assert.Contains("single round summary", result.Messages[0].Text);
         Assert.False(pipeline.Failures.IsTripped("thread-1"));
     }
 
@@ -171,6 +174,38 @@ public sealed class CompactionPipelineTests
         Assert.True(result.Status.EstimatedTokensAfter < result.Status.EstimatedTokensBefore);
     }
 
+    [Fact]
+    public async Task TryManualCompactHistoryAsync_PartialFailureFallsBackToFullCompaction()
+    {
+        var cfg = DefaultConfig();
+        cfg.MicrocompactEnabled = false;
+        cfg.KeepRecentMinTokens = 1;
+        cfg.KeepRecentMinGroups = 1;
+        cfg.KeepRecentMaxTokens = 100_000;
+        var chat = new SequenceChatClient(
+            "",
+            "<summary>full fallback summary</summary>");
+        var pipeline = new CompactionPipeline(cfg, chat);
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 4; i++)
+        {
+            messages.Add(new ChatMessage(ChatRole.User, $"user {i} " + new string('u', 1200)));
+            messages.Add(new ChatMessage(ChatRole.Assistant, $"assistant {i} " + new string('a', 1200)));
+        }
+
+        var result = await pipeline.TryManualCompactHistoryAsync(
+            messages,
+            "thread-1",
+            lastAssistantTimestampUtc: null,
+            CancellationToken.None);
+
+        Assert.Equal(CompactionOutcome.Partial, result.Status.Outcome);
+        Assert.Equal(2, chat.CallCount);
+        Assert.Single(result.Messages);
+        Assert.Contains("full fallback summary", result.Messages[0].Text);
+        Assert.False(pipeline.Failures.IsTripped("thread-1"));
+    }
+
     private sealed class DummyChatClient : Microsoft.Extensions.AI.IChatClient
     {
         public Task<Microsoft.Extensions.AI.ChatResponse> GetResponseAsync(
@@ -198,6 +233,36 @@ public sealed class CompactionPipelineTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new Microsoft.Extensions.AI.ChatResponse(
                 new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, responseText)));
+
+        public IAsyncEnumerable<Microsoft.Extensions.AI.ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            Microsoft.Extensions.AI.ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose() { }
+    }
+
+    private sealed class SequenceChatClient(params string[] responseTexts) : Microsoft.Extensions.AI.IChatClient
+    {
+        private int _index;
+
+        public int CallCount { get; private set; }
+
+        public Task<Microsoft.Extensions.AI.ChatResponse> GetResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            Microsoft.Extensions.AI.ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            var responseText = _index < responseTexts.Length
+                ? responseTexts[_index++]
+                : responseTexts[^1];
+            return Task.FromResult(new Microsoft.Extensions.AI.ChatResponse(
+                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, responseText)));
+        }
 
         public IAsyncEnumerable<Microsoft.Extensions.AI.ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,

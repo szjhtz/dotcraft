@@ -151,18 +151,50 @@ public sealed class PartialCompactorTests
         Assert.Equal("summary_unavailable", result.Reason);
     }
 
+    [Fact]
+    public async Task CompactAsync_RetriesPromptTooLongByDroppingOldestGroups()
+    {
+        var cfg = new CompactionConfig
+        {
+            KeepRecentMinTokens = 1,
+            KeepRecentMinGroups = 1,
+            KeepRecentMaxTokens = 100_000,
+        };
+        var client = new StubChatClient(
+            "<analysis>thinking</analysis><summary>retried summary</summary>",
+            promptTooLongFailures: 1);
+        var partial = new PartialCompactor(client, cfg);
+
+        var messages = new List<ChatMessage>();
+        for (var round = 0; round < 5; round++)
+        {
+            messages.Add(new ChatMessage(ChatRole.User, $"user turn {round}"));
+            messages.Add(new ChatMessage(ChatRole.Assistant, $"assistant turn {round}"));
+        }
+
+        var result = await partial.CompactAsync(messages);
+
+        Assert.NotNull(result.Result);
+        Assert.Equal(2, client.CallCount);
+        Assert.Contains("retried summary", result.Result!.FormattedSummary);
+        Assert.DoesNotContain(client.Messages, m => m.Text?.Contains("user turn 0", StringComparison.Ordinal) == true);
+    }
+
     private sealed class StubChatClient : IChatClient
     {
         private readonly string _responseText;
         private readonly bool _throwOnCall;
+        private int _promptTooLongFailures;
 
         public IReadOnlyList<ChatMessage> Messages { get; private set; } = [];
         public ChatOptions? Options { get; private set; }
+        public int CallCount { get; private set; }
 
-        public StubChatClient(string responseText, bool throwOnCall = false)
+        public StubChatClient(string responseText, bool throwOnCall = false, int promptTooLongFailures = 0)
         {
             _responseText = responseText;
             _throwOnCall = throwOnCall;
+            _promptTooLongFailures = promptTooLongFailures;
         }
 
         public Task<ChatResponse> GetResponseAsync(
@@ -170,8 +202,14 @@ public sealed class PartialCompactorTests
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            CallCount++;
             if (_throwOnCall)
                 throw new InvalidOperationException("boom");
+            if (_promptTooLongFailures > 0)
+            {
+                _promptTooLongFailures--;
+                throw new InvalidOperationException("prompt_too_long");
+            }
 
             Messages = messages.ToArray();
             Options = options;

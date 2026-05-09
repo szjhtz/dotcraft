@@ -922,7 +922,7 @@ Manually compact the model-visible context for an idle server-managed thread.
 | `message` | string? | Optional skip/failure reason. |
 | `contextUsage` | ContextUsageSnapshot? | Updated snapshot when available. |
 
-Servers advertise this method with `capabilities.manualCompaction = true`. The method is valid only for Active, server-managed threads that have history and no `Running` / `WaitingApproval` turn. The server emits `system/event` in the order `compacting` → `compacted` / `compactSkipped` / `compactFailed`. Short histories with no older prefix to summarize return `outcome = "skipped"` and `message = "no_summarizable_prefix"` instead of failing. On success it persists the compacted agent session and appends a `SystemNotice` item with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
+Servers advertise this method with `capabilities.manualCompaction = true`. The method is valid only for Active, server-managed threads that have history and no `Running` / `WaitingApproval` turn. The server emits `system/event` in the order `compacting` → `compacted` / `compactSkipped` / `compactFailed`. Manual compaction first tries partial compaction; if there is no older prefix, or the partial attempt cannot produce a summary, it falls back to full-history compaction so short histories can still be compacted. On success it persists the compacted agent session and appends a `SystemNotice` item with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
 
 ---
 

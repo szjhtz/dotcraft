@@ -404,12 +404,16 @@ describe('InputComposer custom command expansion', () => {
     fireEvent.click(await screen.findByRole('option', { name: /Compact/i }))
 
     await waitFor(() => {
-      expect(appServerSendRequest).toHaveBeenCalledWith('thread/compact/start', { threadId: 'thread-1' })
+      expect(appServerSendRequest).toHaveBeenCalledWith(
+        'thread/compact/start',
+        { threadId: 'thread-1' },
+        300_000
+      )
     })
     expect(useConversationStore.getState().contextUsage?.tokens).toBe(100)
   })
 
-  it('shows a specific toast when compact skips because there is no older context', async () => {
+  it('shows the generic toast when compact skips because there is no older context', async () => {
     useConnectionStore.setState({
       status: 'connected',
       capabilities: {
@@ -449,7 +453,7 @@ describe('InputComposer custom command expansion', () => {
 
     await waitFor(() => {
       expect(useToastStore.getState().toasts.some(
-        (toast) => toast.message === 'This session does not have older context to compact yet'
+        (toast) => toast.message === 'Nothing needed compaction'
       )).toBe(true)
     })
   })

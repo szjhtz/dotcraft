@@ -77,6 +77,7 @@ public sealed class SessionService(
     private readonly ConcurrentDictionary<string, byte> _materializedThreads = new();
     private readonly ConcurrentDictionary<string, int> _turnsSinceConsolidation = new();
     private readonly ConcurrentDictionary<string, PromptRequestSnapshot> _lastPromptRequestSnapshots = new();
+    private readonly ConcurrentDictionary<string, ContextUsageAnchor> _contextUsageAnchors = new();
     private readonly ConcurrentDictionary<string, byte> _threadsPendingPermanentDeletion = new();
     private readonly ConcurrentDictionary<string, IReadOnlySet<string>> _threadPluginFunctionToolNames = new();
     private readonly ConcurrentDictionary<string, IReadOnlySet<string>> _threadDynamicToolNames = new();
@@ -175,6 +176,13 @@ public sealed class SessionService(
             ? snapshot
             : null;
 
+    internal long? TryEstimateContextTokensFromAnchor(
+        string threadId,
+        IReadOnlyList<ChatMessage> modelVisibleHistory) =>
+        _contextUsageAnchors.TryGetValue(threadId, out var anchor)
+            ? ContextUsageTokenCounter.EstimateFromAnchor(anchor, modelVisibleHistory)
+            : null;
+
     private ContextUsageSnapshot CreateContextUsageSnapshot(string threadId, long tokens)
     {
         var pipeline = GetCompactionPipelineForThread(threadId);
@@ -199,6 +207,25 @@ public sealed class SessionService(
         var normalizedTokens = Math.Max(0, tokens);
         await persistence.SaveContextUsageTokensAsync(threadId, normalizedTokens, ct);
         return CreateContextUsageSnapshot(threadId, normalizedTokens);
+    }
+
+    private void UpdateContextUsageAnchor(string threadId, long tokens)
+    {
+        var anchorMessageCount = TryGetLastPromptRequestSnapshot(threadId)?.Messages.Count;
+        if (anchorMessageCount is not > 0)
+            return;
+
+        var normalizedTokens = Math.Max(0, tokens);
+        if (_contextUsageAnchors.TryGetValue(threadId, out var existing)
+            && existing.MessageCount == anchorMessageCount.Value
+            && existing.Tokens >= normalizedTokens)
+        {
+            return;
+        }
+
+        _contextUsageAnchors[threadId] = new ContextUsageAnchor(
+            normalizedTokens,
+            anchorMessageCount.Value);
     }
 
     private AppConfig.GoalsConfig CurrentGoalsConfig =>
@@ -1162,6 +1189,8 @@ Choose the next concrete action that advances the goal. Before doing substantial
             agentLock.Dispose();
         _materializedThreads.TryRemove(threadId, out _);
         _turnsSinceConsolidation.TryRemove(threadId, out _);
+        _lastPromptRequestSnapshots.TryRemove(threadId, out _);
+        _contextUsageAnchors.TryRemove(threadId, out _);
         _threadPluginFunctionToolNames.TryRemove(threadId, out _);
         _threadDynamicToolNames.TryRemove(threadId, out _);
         if (_threadMcpManagers.TryRemove(threadId, out var mcpManager))
@@ -1544,9 +1573,13 @@ Choose the next concrete action that advances the goal. Before doing substantial
 
                 var estimatedTokens = MessageTokenEstimator.Estimate(modelVisibleHistory);
                 var persistedTokens = persistence.LoadContextUsageTokens(threadId) ?? 0;
-                var tokenHint = Math.Max(
-                    estimatedTokens,
-                    Math.Max(tokenTracker.LastInputTokens, persistedTokens));
+                var anchoredTokens = TryEstimateContextTokensFromAnchor(threadId, modelVisibleHistory);
+                var providerTokens = Math.Max(tokenTracker.LastInputTokens, persistedTokens);
+                var tokenHint = anchoredTokens is { } anchored
+                    ? Math.Max(anchored, providerTokens)
+                    : providerTokens > 0
+                        ? providerTokens
+                        : estimatedTokens;
                 var pipeline = GetCompactionPipelineForThread(thread);
                 var threshold = pipeline.EvaluateThreshold(tokenHint);
                 if (!threshold.AboveAuto)
@@ -1596,6 +1629,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                             threadId,
                             status.ThresholdAfter.Tokens,
                             CancellationToken.None);
+                        _contextUsageAnchors.TryRemove(threadId, out _);
                         traceCollector?.RecordContextCompaction(threadId);
                         eventChannel.EmitSystemEvent(
                             "compacted",
@@ -2183,6 +2217,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                                                 threadId,
                                                 tokenTracker.LastInputTokens,
                                                 CancellationToken.None);
+                                            UpdateContextUsageAnchor(threadId, tokenTracker.LastInputTokens);
                                             eventChannel.EmitUsageDelta(
                                                 delta.InputTokens,
                                                 delta.OutputTokens,
@@ -2428,6 +2463,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                                 threadId,
                                 status.ThresholdAfter.Tokens,
                                 CancellationToken.None);
+                            _contextUsageAnchors.TryRemove(threadId, out _);
                             traceCollector?.RecordContextCompaction(threadId);
                             eventChannel.EmitSystemEvent(
                                 "compacted",
@@ -2697,6 +2733,8 @@ Choose the next concrete action that advances the goal. Before doing substantial
         thread.LastActiveAt = DateTimeOffset.UtcNow;
 
         await persistence.RollbackThreadAsync(thread, numTurns, ct);
+        _lastPromptRequestSnapshots.TryRemove(threadId, out _);
+        _contextUsageAnchors.TryRemove(threadId, out _);
         await TryRebuildAndSaveSessionAsync(_threadAgents.GetValueOrDefault(threadId, defaultAgent), threadId);
         ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnCompleted);
         return thread;
@@ -2725,7 +2763,9 @@ Choose the next concrete action that advances the goal. Before doing substantial
         var session = await persistence.LoadOrCreateSessionAsync(agent, threadId, ct);
         var pipeline = GetCompactionPipelineForThread(thread);
         var historyForEstimate = SnapshotSessionHistoryForConsolidation(session, thread);
-        var before = MessageTokenEstimator.Estimate(historyForEstimate);
+        var estimatedBefore = MessageTokenEstimator.Estimate(historyForEstimate);
+        var persistedBefore = persistence.LoadContextUsageTokens(threadId) ?? 0;
+        var before = Math.Max(estimatedBefore, persistedBefore);
         var beforeThreshold = pipeline.EvaluateThreshold(before);
         var broker = GetOrCreateBroker(threadId);
 
@@ -2741,7 +2781,9 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 historyForEstimate,
                 threadId,
                 thread.LastActiveAt,
-                ct);
+                ct,
+                inputTokenHint: before,
+                snapshot: TryGetLastPromptRequestSnapshot(threadId));
             status = compactResult.Status;
             if (status.Success)
             {
@@ -2781,6 +2823,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                     threadId,
                     status.ThresholdAfter.Tokens,
                     ct);
+                _contextUsageAnchors.TryRemove(threadId, out _);
                 traceCollector?.RecordContextCompaction(threadId);
 
                 broker.PublishSystemEvent(

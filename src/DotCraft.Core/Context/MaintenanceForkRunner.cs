@@ -47,10 +47,27 @@ public sealed class MaintenanceForkRunner(IChatClient chatClient)
         MaintenanceForkTask task,
         CancellationToken cancellationToken = default)
     {
+        return await RunAsync(
+            snapshot,
+            task,
+            messagesBeforeTask: null,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs a maintenance fork with extra messages appended after the cached
+    /// snapshot prefix and before the maintenance task.
+    /// </summary>
+    public async Task<MaintenanceForkResult> RunAsync(
+        PromptRequestSnapshot snapshot,
+        MaintenanceForkTask task,
+        IReadOnlyList<ChatMessage>? messagesBeforeTask,
+        CancellationToken cancellationToken = default)
+    {
         try
         {
             var response = await chatClient.GetResponseAsync(
-                BuildMessages(snapshot, task),
+                BuildMessages(snapshot, task, messagesBeforeTask),
                 BuildOptions(snapshot),
                 cancellationToken);
             TokenUsageSnapshot? usage = response.Usage is null
@@ -74,9 +91,12 @@ public sealed class MaintenanceForkRunner(IChatClient chatClient)
 
     internal static IReadOnlyList<ChatMessage> BuildMessages(
         PromptRequestSnapshot snapshot,
-        MaintenanceForkTask task)
+        MaintenanceForkTask task,
+        IReadOnlyList<ChatMessage>? messagesBeforeTask = null)
     {
         var messages = snapshot.Messages.Select(message => message.Clone()).ToList();
+        if (messagesBeforeTask is { Count: > 0 })
+            messages.AddRange(messagesBeforeTask.Select(message => message.Clone()));
         messages.Add(new ChatMessage(ChatRole.User, FormatTask(task)));
         return messages;
     }

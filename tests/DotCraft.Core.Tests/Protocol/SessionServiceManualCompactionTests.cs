@@ -70,10 +70,11 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
     }
 
     [Fact]
-    public async Task CompactThreadAsync_ShortHistorySkipsWithoutNotice()
+    public async Task CompactThreadAsync_ShortHistoryFallsBackToFullCompaction()
     {
         var mainChat = new StreamingReplyChatClient("ok");
-        await using var agentFactory = CreateAgentFactory(new SummaryChatClient("<summary>unused</summary>"));
+        await using var agentFactory = CreateAgentFactory(
+            new SummaryChatClient("<summary>short context summary</summary>"));
         var service = CreateService(agentFactory, mainChat);
         var thread = await service.CreateThreadAsync(MakeIdentity(), threadId: "thread-short");
 
@@ -82,24 +83,72 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
             [new TextContent("single turn " + new string('u', 1200))]));
 
         var result = await service.CompactThreadAsync(thread.Id);
-        Assert.Equal("skipped", result.Outcome);
-        Assert.Equal("no_summarizable_prefix", result.Message);
+        Assert.Equal("partial", result.Outcome);
+        Assert.Null(result.Message);
+        Assert.NotNull(result.ContextUsage);
 
         var events = await CollectThreadEventsAsync(
             service,
             thread.Id,
             replayRecent: true,
-            events => events.Any(e => IsSystemEvent(e, "compactSkipped")));
+            events => events.Any(e => IsSystemEvent(e, "compacted"))
+                && events.Any(IsManualCompactionNotice));
 
         Assert.Contains(events, e => IsSystemEvent(e, "compacting"));
-        Assert.Contains(events, e => IsSystemEvent(e, "compactSkipped")
-            && e.Payload is SystemEventPayload { Message: "no_summarizable_prefix" });
-        Assert.DoesNotContain(events, IsManualCompactionNotice);
+        Assert.Contains(events, e => IsSystemEvent(e, "compacted"));
+        Assert.Contains(events, IsManualCompactionNotice);
 
         var reloaded = await service.GetThreadAsync(thread.Id);
-        Assert.DoesNotContain(
-            reloaded.Turns.SelectMany(t => t.Items).Select(i => i.Payload).OfType<SystemNoticePayload>(),
-            p => p.Kind == "compacted" && p.Trigger == "manual");
+        var notice = reloaded.Turns
+            .SelectMany(t => t.Items)
+            .Select(i => i.Payload)
+            .OfType<SystemNoticePayload>()
+            .Single(p => p.Kind == "compacted" && p.Trigger == "manual");
+        Assert.Equal("partial", notice.Mode);
+        Assert.Equal(result.ContextUsage!.Tokens, notice.TokensAfter);
+    }
+
+    [Fact]
+    public async Task CompactThreadAsync_TwoTurnsWithHighPersistedUsage_CompactsWithPartialWireOutcome()
+    {
+        var mainChat = new StreamingReplyChatClient("ok");
+        var summaryChat = new SummaryChatClient("<summary>large context summary</summary>");
+        await using var agentFactory = CreateAgentFactory(
+            summaryChat,
+            compaction =>
+            {
+                compaction.ContextWindow = 256_000;
+                compaction.KeepRecentMinTokens = 10_000;
+                compaction.KeepRecentMinGroups = 3;
+                compaction.KeepRecentMaxTokens = 40_000;
+            });
+        var service = CreateService(agentFactory, mainChat);
+        var thread = await service.CreateThreadAsync(MakeIdentity(), threadId: "thread-two-turn-high-context");
+
+        for (var i = 0; i < 2; i++)
+        {
+            await DrainAsync(service.SubmitInputAsync(
+                thread.Id,
+                [new TextContent($"turn {i} " + new string('u', 1200))]));
+        }
+
+        var store = new ThreadStore(_tempDir);
+        await store.SaveContextUsageTokensAsync(thread.Id, 190_000);
+
+        var result = await service.CompactThreadAsync(thread.Id);
+
+        Assert.Equal("partial", result.Outcome);
+        Assert.NotNull(result.ContextUsage);
+        Assert.True(result.ContextUsage!.Tokens < 190_000);
+
+        var reloaded = await service.GetThreadAsync(thread.Id);
+        var notice = reloaded.Turns
+            .SelectMany(t => t.Items)
+            .Select(i => i.Payload)
+            .OfType<SystemNoticePayload>()
+            .Single(p => p.Kind == "compacted" && p.Trigger == "manual");
+        Assert.Equal("partial", notice.Mode);
+        Assert.Equal(result.ContextUsage.Tokens, notice.TokensAfter);
     }
 
     [Fact]
@@ -149,24 +198,28 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
             new SessionGate());
     }
 
-    private AgentFactory CreateAgentFactory(IChatClient compactionChatClient)
+    private AgentFactory CreateAgentFactory(
+        IChatClient compactionChatClient,
+        Action<CompactionConfig>? configureCompaction = null)
     {
+        var compaction = new CompactionConfig
+        {
+            ContextWindow = 200_000,
+            SummaryReserveTokens = 20_000,
+            AutoCompactBufferTokens = 13_000,
+            WarningBufferTokens = 20_000,
+            ErrorBufferTokens = 10_000,
+            KeepRecentMinTokens = 1,
+            KeepRecentMinGroups = 1,
+            KeepRecentMaxTokens = 1_000,
+            MicrocompactEnabled = false
+        };
+        configureCompaction?.Invoke(compaction);
         var config = new AppConfig
         {
             ApiKey = "sk-test-not-used-for-network",
             EndPoint = "https://127.0.0.1:9/v1",
-            Compaction = new CompactionConfig
-            {
-                ContextWindow = 200_000,
-                SummaryReserveTokens = 20_000,
-                AutoCompactBufferTokens = 13_000,
-                WarningBufferTokens = 20_000,
-                ErrorBufferTokens = 10_000,
-                KeepRecentMinTokens = 1,
-                KeepRecentMinGroups = 1,
-                KeepRecentMaxTokens = 1_000,
-                MicrocompactEnabled = false
-            }
+            Compaction = compaction
         };
         return new AgentFactory(
             dotcraftPath: _tempDir,
