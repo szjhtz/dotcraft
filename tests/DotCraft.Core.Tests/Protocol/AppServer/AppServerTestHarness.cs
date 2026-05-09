@@ -103,7 +103,8 @@ internal sealed class AppServerTestHarness : IDisposable
         bool toolExecutionLifecycle = false,
         bool? configChange = null,
         List<string>? optOutMethods = null,
-        bool nodeReplBrowserUse = false)
+        bool nodeReplBrowserUse = false,
+        List<string>? browserUseBackends = null)
     {
         var caps = new
         {
@@ -122,6 +123,7 @@ internal sealed class AppServerTestHarness : IDisposable
                 ? new
                 {
                     backend = "desktop-iab",
+                    backends = browserUseBackends,
                     protocolVersion = 2,
                     supportsCancel = true
                 }

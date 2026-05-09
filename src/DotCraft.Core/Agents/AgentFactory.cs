@@ -59,7 +59,8 @@ public sealed class AgentFactory : IAsyncDisposable
         HookRunner? hookRunner = null,
         OpenAIClientProvider? openAIClientProvider = null,
         IMemoryConsolidator? memoryConsolidator = null,
-        IChatClient? compactionChatClient = null)
+        IChatClient? compactionChatClient = null,
+        IContextPageManager? contextPageManager = null)
     {
         _config = config;
         _traceCollector = traceCollector;
@@ -87,7 +88,8 @@ public sealed class AgentFactory : IAsyncDisposable
 
         CompactionPipeline = new CompactionPipeline(
             ModelContextWindowCatalog.ResolveCompactionConfig(config, mainModel),
-            _compactionChatClientOverride ?? _chatClient.AsIChatClient());
+            _compactionChatClientOverride ?? _chatClient.AsIChatClient(),
+            _traceCollector);
 
         // Build tool provider context
         _toolProviderContext = toolProviderContext ?? new ToolProviderContext
@@ -100,6 +102,7 @@ public sealed class AgentFactory : IAsyncDisposable
             BotPath = dotcraftPath,
             MemoryStore = memoryStore,
             SkillsLoader = skillsLoader,
+            ContextPageManager = contextPageManager,
             ApprovalService = approvalService,
             PathBlacklist = blacklist,
             TraceCollector = traceCollector
@@ -153,7 +156,7 @@ public sealed class AgentFactory : IAsyncDisposable
                     out var resolvedChatClient)
                     ? resolvedChatClient!.AsIChatClient()
                     : factory._chatClient.AsIChatClient());
-            return new CompactionPipeline(resolvedConfig, chatClient);
+            return new CompactionPipeline(resolvedConfig, chatClient, factory._traceCollector);
         }, (this, compactionConfig));
     }
 
@@ -444,7 +447,9 @@ public sealed class AgentFactory : IAsyncDisposable
                     skillVariantModeEnabled: skillVariantModeEnabled,
                     skillVariantTarget: skillVariantTarget,
                     promptProfile: ctx.PromptProfile,
-                    roleInstructions: ctx.RoleInstructions)
+                    roleInstructions: ctx.RoleInstructions,
+                    contextPageManager: ctx.ContextPageManager,
+                    threadId: ctx.CurrentThreadId)
             ];
         }
 

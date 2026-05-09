@@ -1,4 +1,5 @@
 import { BrowserWindow, app } from 'electron'
+import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL, URL as NodeUrl } from 'url'
@@ -60,6 +61,90 @@ function resolveBrowserClientPath(): string {
 
   const dev = join(app.getAppPath(), 'resources', 'browser-use', 'browser-client.mjs')
   return pathToFileURL(dev).href
+}
+
+function resolveChromeBrowserClientPath(): string {
+  const resourcesPath = process.resourcesPath
+  if (resourcesPath) {
+    const packaged = join(resourcesPath, 'chrome', 'browser-client.mjs')
+    if (existsSync(packaged)) return pathToFileURL(packaged).href
+  }
+
+  const dev = join(app.getAppPath(), 'resources', 'chrome', 'browser-client.mjs')
+  return pathToFileURL(dev).href
+}
+
+function resolveChromePluginRoot(workspacePath?: string): string {
+  const workspace = workspacePath?.trim()
+  if (workspace) {
+    const installed = join(workspace, '.craft', 'plugins', 'chrome')
+    if (existsSync(installed)) return installed
+
+    const source = join(workspace, 'src', 'DotCraft.Core', 'Plugins', 'BuiltIn', 'chrome')
+    if (existsSync(source)) return source
+
+    return installed
+  }
+
+  const appPath = app.getAppPath()
+  const source = join(appPath, '..', 'src', 'DotCraft.Core', 'Plugins', 'BuiltIn', 'chrome')
+  return source
+}
+
+function runChromeSetupScript(scriptPath: string, args: string[]): Promise<unknown> {
+  return new Promise((resolve) => {
+    if (!existsSync(scriptPath)) {
+      resolve({ ok: false, script: scriptPath, error: 'Script not found.' })
+      return
+    }
+
+    execFile(process.execPath, [scriptPath, ...args], { timeout: 10_000 }, (error, stdout, stderr) => {
+      const text = String(stdout || '').trim()
+      let parsed: unknown = text
+      if (text) {
+        try {
+          parsed = JSON.parse(text)
+        } catch {
+          parsed = text
+        }
+      }
+      if (error) {
+        resolve({
+          ok: false,
+          script: scriptPath,
+          error: error.message,
+          stderr: String(stderr || '').trim(),
+          result: parsed
+        })
+        return
+      }
+      resolve(parsed || { ok: true, script: scriptPath })
+    })
+  })
+}
+
+function createChromeSetupApi(workspacePath?: string): Record<string, unknown> {
+  const pluginRoot = resolveChromePluginRoot(workspacePath)
+  const scriptsPath = join(pluginRoot, 'scripts')
+  const script = (name: string) => join(scriptsPath, name)
+
+  return Object.freeze({
+    async checkSetup() {
+      const [extension, nativeHost, chromeRunning, installedBrowsers] = await Promise.all([
+        runChromeSetupScript(script('check-extension-installed.js'), ['--json']),
+        runChromeSetupScript(script('check-native-host-manifest.js'), ['--json']),
+        runChromeSetupScript(script('chrome-is-running.js'), ['--check', '--json']),
+        runChromeSetupScript(script('installed-browsers.js'), ['--check', '--json'])
+      ])
+      return { extension, nativeHost, chromeRunning, installedBrowsers }
+    },
+    async checkExtension() {
+      return await runChromeSetupScript(script('check-extension-installed.js'), ['--json'])
+    },
+    async checkNativeHost() {
+      return await runChromeSetupScript(script('check-native-host-manifest.js'), ['--json'])
+    }
+  })
 }
 
 function createReplRuntime(): NodeReplThreadRuntime {
@@ -132,7 +217,7 @@ export class NodeReplManager {
       evaluationId,
       signal: abortController.signal
     })
-    this.refreshContext(runtime, browserRuntime, evaluationId, abortController.signal)
+    this.refreshContext(runtime, browserRuntime, evaluationId, abortController.signal, params.workspacePath)
 
     const timeoutMs = Math.max(1_000, Math.min(params.timeoutMs ?? 30_000, 120_000))
     try {
@@ -219,7 +304,8 @@ export class NodeReplManager {
     runtime: NodeReplThreadRuntime,
     browserRuntime: BrowserRuntimeBindings,
     evaluationId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    workspacePath?: string
   ): void {
     const globals = runtime.globals
     const ensureActive = () => {
@@ -249,7 +335,16 @@ export class NodeReplManager {
     globals.clearTimeout = clearTimeout
     globals.setInterval = setInterval
     globals.clearInterval = clearInterval
-    globals.dotcraft = { browserUseClientPath: resolveBrowserClientPath() }
+    const chromePluginRoot = resolveChromePluginRoot(workspacePath)
+    const dotcraftApi = Object.freeze({
+      browserUseClientPath: resolveBrowserClientPath(),
+      chromeBrowserClientPath: resolveChromeBrowserClientPath(),
+      workspacePath: workspacePath ?? '',
+      chromePluginRoot,
+      chromeScriptsPath: join(chromePluginRoot, 'scripts'),
+      chrome: createChromeSetupApi(workspacePath)
+    })
+    globals.dotcraft = dotcraftApi
     globals.URL = NodeUrl
     globals.__dotcraftDynamicImport = async (specifier: unknown) => import(String(specifier))
     globals.__dotcraftSetupAtlasRuntime = async (

@@ -1,4 +1,5 @@
 using DotCraft.Context;
+using DotCraft.Tracing;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Context.Compaction;
@@ -33,13 +34,16 @@ public sealed class FullCompactor
     private const int MaxPromptTooLongRetries = 3;
     private readonly IChatClient _chatClient;
     private readonly MaintenanceForkRunner? _maintenanceForkRunner;
+    private readonly TraceCollector? _traceCollector;
 
     public FullCompactor(
         IChatClient chatClient,
-        MaintenanceForkRunner? maintenanceForkRunner = null)
+        MaintenanceForkRunner? maintenanceForkRunner = null,
+        TraceCollector? traceCollector = null)
     {
         _chatClient = chatClient;
         _maintenanceForkRunner = maintenanceForkRunner;
+        _traceCollector = traceCollector;
     }
 
     /// <summary>
@@ -52,6 +56,15 @@ public sealed class FullCompactor
         PromptRequestSnapshot? snapshot,
         CancellationToken cancellationToken = default)
     {
+        return await CompactAsync(messages, snapshot, threadId: null, cancellationToken);
+    }
+
+    public async Task<FullCompactAttempt> CompactAsync(
+        IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        string? threadId,
+        CancellationToken cancellationToken = default)
+    {
         if (messages.Count == 0)
             return FullCompactAttempt.Unavailable("empty_history");
 
@@ -60,11 +73,22 @@ public sealed class FullCompactor
         if (paired.Count == 0)
             return FullCompactAttempt.Unavailable("no_summarizable_history");
 
-        var rawSummary = snapshot is not null
+        string? rawSummary;
+        if (snapshot is not null
             && _maintenanceForkRunner is not null
-            && TryBuildSnapshotTail(snapshot, sanitized, out var snapshotTail)
-                ? await RunSnapshotForkAsync(snapshot, snapshotTail, cancellationToken)
-                : await RunLegacySummaryAsync(paired, cancellationToken);
+            && TryBuildSnapshotTail(snapshot, sanitized, out var snapshotTail))
+        {
+            var fork = await RunSnapshotForkAsync(snapshot, snapshotTail, cancellationToken);
+            if (fork.FallbackReason is not null)
+                return FullCompactAttempt.Unavailable(fork.FallbackReason);
+
+            rawSummary = fork.Text;
+        }
+        else
+        {
+            rawSummary = await RunLegacySummaryAsync(paired, threadId, cancellationToken);
+        }
+
         if (string.IsNullOrWhiteSpace(rawSummary))
             return FullCompactAttempt.Unavailable("summary_unavailable");
 
@@ -83,7 +107,7 @@ public sealed class FullCompactor
             EstimatedTokensAfter: MessageTokenEstimator.Estimate([replacement])));
     }
 
-    private async Task<string?> RunSnapshotForkAsync(
+    private async Task<MaintenanceForkResult> RunSnapshotForkAsync(
         PromptRequestSnapshot snapshot,
         IReadOnlyList<ChatMessage> messagesBeforeTask,
         CancellationToken cancellationToken)
@@ -96,18 +120,20 @@ public sealed class FullCompactor
             messagesBeforeTask,
             cancellationToken);
 
-        return result.FallbackReason is null ? result.Text : null;
+        return result;
     }
 
     private async Task<string?> RunLegacySummaryAsync(
         IReadOnlyList<ChatMessage> messages,
+        string? threadId,
         CancellationToken cancellationToken)
     {
-        return await RunLegacySummaryWithRetriesAsync(messages, cancellationToken);
+        return await RunLegacySummaryWithRetriesAsync(messages, threadId, cancellationToken);
     }
 
     private async Task<string?> RunLegacySummaryWithRetriesAsync(
         IReadOnlyList<ChatMessage> messages,
+        string? threadId,
         CancellationToken cancellationToken)
     {
         var candidate = messages.ToList();
@@ -115,7 +141,7 @@ public sealed class FullCompactor
         {
             try
             {
-                return await RunLegacySummaryOnceAsync(candidate, cancellationToken);
+                return await RunLegacySummaryOnceAsync(candidate, threadId, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -141,6 +167,7 @@ public sealed class FullCompactor
 
     private async Task<string?> RunLegacySummaryOnceAsync(
         IReadOnlyList<ChatMessage> messages,
+        string? threadId,
         CancellationToken cancellationToken)
     {
         var summaryPrompt = BuildFullContextCompactionTaskInstructions();
@@ -150,11 +177,47 @@ public sealed class FullCompactor
         };
         summaryMessages.AddRange(messages);
 
-        var response = await _chatClient.GetResponseAsync(
-            summaryMessages,
-            new ChatOptions { Tools = null },
-            cancellationToken);
-        return response?.Text;
+        var sessionKey = CompactionTrace.ResolveSessionKey(threadId);
+        _traceCollector?.RecordMaintenanceForkRequest(
+            sessionKey,
+            MaintenanceForkTaskKind.ContextCompaction,
+            summaryPrompt,
+            threadId,
+            turnId: null,
+            mode: "legacy",
+            modelId: null,
+            providerId: null,
+            snapshotMessageCount: messages.Count,
+            extraTailMessageCount: 0,
+            tools: null,
+            baseInstructionsFingerprint: null,
+            toolFingerprint: null);
+
+        try
+        {
+            var response = await _chatClient.GetResponseAsync(
+                summaryMessages,
+                new ChatOptions { Tools = null },
+                cancellationToken);
+            _traceCollector?.RecordMaintenanceForkResponse(
+                sessionKey,
+                MaintenanceForkTaskKind.ContextCompaction,
+                response,
+                CompactionTrace.ClassifyFallbackReason(response));
+            return response?.Text;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _traceCollector?.RecordMaintenanceForkResponse(
+                sessionKey,
+                MaintenanceForkTaskKind.ContextCompaction,
+                ex.Message);
+            throw;
+        }
     }
 
     private static bool TryBuildSnapshotTail(

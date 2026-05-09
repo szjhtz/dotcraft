@@ -2,6 +2,7 @@ using System.Reflection;
 using DotCraft.Abstractions;
 using DotCraft.Agents;
 using DotCraft.Configuration;
+using DotCraft.Context;
 using DotCraft.Cron;
 using DotCraft.Heartbeat;
 using DotCraft.Lsp;
@@ -37,6 +38,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
         IAutomationsRequestHandler? automationsHandler,
         IAppServerChannelListContributor channelListContributor,
         IReadOnlyList<ConfigSchemaSection> configSchema,
+        IContextPageManager contextPageManager,
         IWorkspaceRuntimeAppServerFeature? appServerFeature)
     {
         public AgentFactory AgentFactory { get; } = agentFactory;
@@ -64,6 +66,8 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
         public IAppServerChannelListContributor ChannelListContributor { get; } = channelListContributor;
 
         public IReadOnlyList<ConfigSchemaSection> ConfigSchema { get; } = configSchema;
+
+        public IContextPageManager ContextPageManager { get; } = contextPageManager;
 
         public IWorkspaceRuntimeAppServerFeature? AppServerFeature { get; } = appServerFeature;
     }
@@ -138,6 +142,8 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
 
     public IReadOnlyList<ConfigSchemaSection> ConfigSchema => EnsureStarted().ConfigSchema;
 
+    public IContextPageManager ContextPageManager => EnsureStarted().ContextPageManager;
+
     public string? DashboardUrl => EnsureStarted().AppServerFeature?.DashboardUrl;
 
     public event Action<AppConfigChangedEventArgs>? WorkspaceConfigChanged;
@@ -184,6 +190,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
             var backgroundTerminalService = Services.GetService<IBackgroundTerminalService>();
             var openAIClientProvider = Services.GetRequiredService<OpenAIClientProvider>();
             var mainModel = openAIClientProvider.ResolveMainModel(Config);
+            var contextPageManager = new ContextPageManager();
 
             ToolProviderCollector.ScanToolIcons(moduleRegistry, Config);
             var toolProviders = ToolProviderCollector.Collect(moduleRegistry, Config);
@@ -220,6 +227,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                         BotPath = Paths.CraftPath,
                         MemoryStore = MemoryStore,
                         SkillsLoader = SkillsLoader,
+                        ContextPageManager = contextPageManager,
                         ApprovalService = scopedApproval,
                         PathBlacklist = PathBlacklist,
                         BackgroundTerminalService = backgroundTerminalService,
@@ -335,6 +343,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                     Services.GetService<IAutomationsRequestHandler>(),
                     channelListContributor,
                     configSchema,
+                    contextPageManager,
                     appServerFeature);
 
                 _appConfigMonitor.Changed += OnAppConfigChanged;

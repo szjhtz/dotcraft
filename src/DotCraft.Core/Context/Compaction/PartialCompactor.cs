@@ -1,3 +1,4 @@
+using DotCraft.Tracing;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Context.Compaction;
@@ -35,15 +36,18 @@ public sealed class PartialCompactor
     private readonly IChatClient _chatClient;
     private readonly CompactionConfig _config;
     private readonly MaintenanceForkRunner? _maintenanceForkRunner;
+    private readonly TraceCollector? _traceCollector;
 
     public PartialCompactor(
         IChatClient chatClient,
         CompactionConfig config,
-        MaintenanceForkRunner? maintenanceForkRunner = null)
+        MaintenanceForkRunner? maintenanceForkRunner = null,
+        TraceCollector? traceCollector = null)
     {
         _chatClient = chatClient;
         _config = config;
         _maintenanceForkRunner = maintenanceForkRunner;
+        _traceCollector = traceCollector;
     }
 
     /// <summary>
@@ -115,6 +119,15 @@ public sealed class PartialCompactor
         PromptRequestSnapshot? snapshot,
         CancellationToken cancellationToken = default)
     {
+        return await CompactAsync(messages, snapshot, threadId: null, cancellationToken);
+    }
+
+    public async Task<PartialCompactAttempt> CompactAsync(
+        IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        string? threadId,
+        CancellationToken cancellationToken = default)
+    {
         if (messages.Count == 0)
             return PartialCompactAttempt.Unavailable("empty_history");
 
@@ -135,9 +148,20 @@ public sealed class PartialCompactor
         var prefixTokens = MessageTokenEstimator.Estimate(prefix);
         var tailTokens = MessageTokenEstimator.Estimate(tail);
 
-        var rawSummary = snapshot is not null && _maintenanceForkRunner is not null
-            ? await RunSnapshotForkAsync(snapshot, splitIndex, tail, cancellationToken)
-            : await RunLegacySummaryAsync(paired, cancellationToken);
+        string? rawSummary;
+        if (snapshot is not null && _maintenanceForkRunner is not null)
+        {
+            var fork = await RunSnapshotForkAsync(snapshot, splitIndex, tail, cancellationToken);
+            if (fork.FallbackReason is not null)
+                return PartialCompactAttempt.Unavailable(fork.FallbackReason);
+
+            rawSummary = fork.Text;
+        }
+        else
+        {
+            rawSummary = await RunLegacySummaryAsync(paired, threadId, cancellationToken);
+        }
+
         if (string.IsNullOrWhiteSpace(rawSummary))
             return PartialCompactAttempt.Unavailable("summary_unavailable");
 
@@ -155,7 +179,7 @@ public sealed class PartialCompactor
             TailEstimatedTokens: tailTokens));
     }
 
-    private async Task<string?> RunSnapshotForkAsync(
+    private async Task<MaintenanceForkResult> RunSnapshotForkAsync(
         PromptRequestSnapshot snapshot,
         int splitIndex,
         IReadOnlyList<ChatMessage> tail,
@@ -169,11 +193,12 @@ public sealed class PartialCompactor
                 instructions),
             cancellationToken);
 
-        return result.FallbackReason is null ? result.Text : null;
+        return result;
     }
 
     private async Task<string?> RunLegacySummaryAsync(
         IReadOnlyList<ChatMessage> paired,
+        string? threadId,
         CancellationToken cancellationToken)
     {
         var candidate = paired.ToList();
@@ -181,7 +206,7 @@ public sealed class PartialCompactor
         {
             try
             {
-                return await RunLegacySummaryOnceAsync(candidate, cancellationToken);
+                return await RunLegacySummaryOnceAsync(candidate, threadId, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -207,6 +232,7 @@ public sealed class PartialCompactor
 
     private async Task<string?> RunLegacySummaryOnceAsync(
         IReadOnlyList<ChatMessage> paired,
+        string? threadId,
         CancellationToken cancellationToken)
     {
         var summaryPrompt = CompactionPrompts.GetPartialCompactPrompt();
@@ -216,11 +242,47 @@ public sealed class PartialCompactor
         };
         summaryMessages.AddRange(paired);
 
-        var response = await _chatClient.GetResponseAsync(
-            summaryMessages,
-            new ChatOptions { Tools = null },
-            cancellationToken);
-        return response?.Text;
+        var sessionKey = CompactionTrace.ResolveSessionKey(threadId);
+        _traceCollector?.RecordMaintenanceForkRequest(
+            sessionKey,
+            MaintenanceForkTaskKind.ContextCompaction,
+            summaryPrompt,
+            threadId,
+            turnId: null,
+            mode: "legacy",
+            modelId: null,
+            providerId: null,
+            snapshotMessageCount: paired.Count,
+            extraTailMessageCount: 0,
+            tools: null,
+            baseInstructionsFingerprint: null,
+            toolFingerprint: null);
+
+        try
+        {
+            var response = await _chatClient.GetResponseAsync(
+                summaryMessages,
+                new ChatOptions { Tools = null },
+                cancellationToken);
+            _traceCollector?.RecordMaintenanceForkResponse(
+                sessionKey,
+                MaintenanceForkTaskKind.ContextCompaction,
+                response,
+                CompactionTrace.ClassifyFallbackReason(response));
+            return response?.Text;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _traceCollector?.RecordMaintenanceForkResponse(
+                sessionKey,
+                MaintenanceForkTaskKind.ContextCompaction,
+                ex.Message);
+            throw;
+        }
     }
 
     private static string BuildContextCompactionTaskInstructions(

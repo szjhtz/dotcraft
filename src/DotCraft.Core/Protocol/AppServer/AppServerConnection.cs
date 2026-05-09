@@ -150,6 +150,34 @@ public sealed class AppServerConnection
     public bool HasBrowserUse => BrowserUse != null;
 
     /// <summary>
+    /// Browser automation backends declared by the client. Falls back to the legacy
+    /// single <c>browserUse.backend</c> field when <c>browserUse.backends</c> is omitted.
+    /// </summary>
+    public IReadOnlyList<string> BrowserUseBackends
+    {
+        get
+        {
+            var browserUse = BrowserUse;
+            if (browserUse == null)
+                return [];
+
+            var backends = new List<string>();
+            if (browserUse.Backends is { Count: > 0 })
+            {
+                backends.AddRange(browserUse.Backends.Where(backend => !string.IsNullOrWhiteSpace(backend)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(browserUse.Backend)
+                && !backends.Contains(browserUse.Backend, StringComparer.OrdinalIgnoreCase))
+            {
+                backends.Insert(0, browserUse.Backend);
+            }
+
+            return backends;
+        }
+    }
+
+    /// <summary>
     /// Marks the connection as initialized and stores the client's identity and capabilities.
     /// Returns <c>false</c> if already initialized (caller should reject with AlreadyInitialized).
     /// </summary>

@@ -54,6 +54,19 @@ public sealed class NodeReplToolProviderTests
     }
 
     [Fact]
+    public void CreateTools_WithChromePluginInstalledAndBrowserUseDisabled_ReturnsNodeReplTool()
+    {
+        var provider = new NodeReplPluginFunctionProvider();
+        var context = CreateContext(new FakeNodeReplProxy(true), [PluginIds.Chrome]);
+        context.Config.Plugins.DisabledPlugins.Add(NodeReplPluginFunctionProvider.PluginId);
+
+        var tools = provider.CreateTools(context).ToList();
+
+        Assert.Contains(tools, t => t.Name == "NodeReplJs");
+        Assert.Single(tools);
+    }
+
+    [Fact]
     public async Task NodeReplJs_WhenProxyReturnsError_ReturnsToolResultText()
     {
         var provider = new NodeReplPluginFunctionProvider();
@@ -93,12 +106,14 @@ public sealed class NodeReplToolProviderTests
         Assert.Equal(ItemType.PluginFunctionCall, item.Type);
     }
 
-    private static ToolProviderContext CreateContext(INodeReplProxy proxy)
+    private static ToolProviderContext CreateContext(INodeReplProxy proxy, IReadOnlyList<string>? pluginIds = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "dotcraft-node-repl-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var botPath = Path.Combine(root, ".craft");
-        new BuiltInPluginDeployer(Path.Combine(botPath, "plugins")).DeployPlugin(NodeReplPluginFunctionProvider.PluginId);
+        var deployer = new BuiltInPluginDeployer(Path.Combine(botPath, "plugins"));
+        foreach (var pluginId in pluginIds ?? [NodeReplPluginFunctionProvider.PluginId])
+            deployer.DeployPlugin(pluginId);
         return new ToolProviderContext
         {
             Config = new AppConfig(),

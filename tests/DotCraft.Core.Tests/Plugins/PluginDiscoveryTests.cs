@@ -607,6 +607,11 @@ public sealed class PluginDiscoveryTests
         Assert.True(File.Exists(Path.Combine(root, "browser-use", ".craft-plugin", "plugin.json")));
         Assert.True(File.Exists(Path.Combine(root, "browser-use", ".builtin")));
         Assert.True(File.Exists(Path.Combine(root, "browser-use", "skills", "browser-use", "SKILL.md")));
+        Assert.True(File.Exists(Path.Combine(root, "chrome", ".craft-plugin", "plugin.json")));
+        Assert.True(File.Exists(Path.Combine(root, "chrome", ".builtin")));
+        Assert.True(File.Exists(Path.Combine(root, "chrome", "skills", "chrome", "SKILL.md")));
+        Assert.True(File.Exists(Path.Combine(root, "chrome", "scripts", "extension-id.json")));
+        Assert.True(File.Exists(Path.Combine(root, "chrome", "extension", "manifest.json")));
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using DotCraft.Tracing;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -78,13 +79,14 @@ public sealed class CompactionPipeline
 
     public CompactionPipeline(
         CompactionConfig config,
-        IChatClient summaryChatClient)
+        IChatClient summaryChatClient,
+        TraceCollector? traceCollector = null)
     {
         _config = config;
         _micro = new MicroCompactor(config);
-        _maintenanceForkRunner = new MaintenanceForkRunner(summaryChatClient);
-        _partial = new PartialCompactor(summaryChatClient, config, _maintenanceForkRunner);
-        _full = new FullCompactor(summaryChatClient, _maintenanceForkRunner);
+        _maintenanceForkRunner = new MaintenanceForkRunner(summaryChatClient, traceCollector);
+        _partial = new PartialCompactor(summaryChatClient, config, _maintenanceForkRunner, traceCollector);
+        _full = new FullCompactor(summaryChatClient, _maintenanceForkRunner, traceCollector);
         _failures = new CompactionFailureTracker(config.MaxConsecutiveFailures);
     }
 
@@ -451,7 +453,7 @@ public sealed class CompactionPipeline
         PartialCompactAttempt partial;
         try
         {
-            partial = await _partial.CompactAsync(historyForPartial, snapshot, cancellationToken);
+            partial = await _partial.CompactAsync(historyForPartial, snapshot, threadId, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -534,7 +536,7 @@ public sealed class CompactionPipeline
         FullCompactAttempt full;
         try
         {
-            full = await _full.CompactAsync(history, snapshot, cancellationToken);
+            full = await _full.CompactAsync(history, snapshot, threadId, cancellationToken);
         }
         catch (OperationCanceledException)
         {

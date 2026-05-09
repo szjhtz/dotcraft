@@ -19,6 +19,8 @@ Dashboard API 面向调试界面和内部工具。普通用户通常只需要使
 
 Dashboard 的 `Thinking` 和 `Response` trace 事件按连续 streaming 内容段记录，而不是按每个 chunk 记录，也不是整轮强制合并为单条。`ThinkingCount` 和 `ResponseCount` 因此表示对应内容段数量。实时事件流会在当前段结束并落库时发送该段事件；历史 trace 不迁移，旧数据可能仍保留旧粒度。
 
+上下文压缩和记忆整理等维护请求会额外记录 `MaintenanceForkRequest` / `MaintenanceForkResponse`。这些事件保留维护请求的 snapshot/cache 元数据、模型原始文本、tool-call-only 响应、空响应和 fallback reason，便于从 Dashboard 诊断 `summary_unavailable` 一类问题。
+
 ## 端点
 
 ### `GET /DashBoard`

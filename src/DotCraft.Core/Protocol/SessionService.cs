@@ -1147,6 +1147,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
         _threadModeManagers.TryRemove(thread.Id, out _);
         _threadPluginFunctionToolNames.TryRemove(thread.Id, out _);
         _threadDynamicToolNames.TryRemove(thread.Id, out _);
+        ForgetContextPages(thread.Id);
         if (backgroundTerminalService != null)
             await backgroundTerminalService.CleanThreadAsync(thread.Id, ct);
         await PersistThreadStatusAsync(thread, ct);
@@ -1193,6 +1194,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
         _contextUsageAnchors.TryRemove(threadId, out _);
         _threadPluginFunctionToolNames.TryRemove(threadId, out _);
         _threadDynamicToolNames.TryRemove(threadId, out _);
+        ForgetContextPages(threadId);
         if (_threadMcpManagers.TryRemove(threadId, out var mcpManager))
             await mcpManager.DisposeAsync();
         if (backgroundTerminalService != null)
@@ -1630,6 +1632,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                             status.ThresholdAfter.Tokens,
                             CancellationToken.None);
                         _contextUsageAnchors.TryRemove(threadId, out _);
+                        ReleaseStableContextPages(threadId);
                         traceCollector?.RecordContextCompaction(threadId);
                         eventChannel.EmitSystemEvent(
                             "compacted",
@@ -2473,6 +2476,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                                 status.ThresholdAfter.Tokens,
                                 CancellationToken.None);
                             _contextUsageAnchors.TryRemove(threadId, out _);
+                            ReleaseStableContextPages(threadId);
                             traceCollector?.RecordContextCompaction(threadId);
                             eventChannel.EmitSystemEvent(
                                 "compacted",
@@ -2743,6 +2747,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
         await persistence.RollbackThreadAsync(thread, numTurns, ct);
         _lastPromptRequestSnapshots.TryRemove(threadId, out _);
         _contextUsageAnchors.TryRemove(threadId, out _);
+        ForgetContextPages(threadId);
         await TryRebuildAndSaveSessionAsync(_threadAgents.GetValueOrDefault(threadId, defaultAgent), threadId);
         ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.TurnCompleted);
         return thread;
@@ -2832,6 +2837,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                     status.ThresholdAfter.Tokens,
                     ct);
                 _contextUsageAnchors.TryRemove(threadId, out _);
+                ReleaseStableContextPages(threadId);
                 traceCollector?.RecordContextCompaction(threadId);
 
                 broker.PublishSystemEvent(
@@ -3016,6 +3022,15 @@ Choose the next concrete action that advances the goal. Before doing substantial
 
     private CompactionPipeline GetCompactionPipelineForThread(string threadId, SessionThread? thread) =>
         agentFactory.GetCompactionPipeline(threadId, thread?.Configuration?.Model);
+
+    private void ReleaseStableContextPages(string threadId) =>
+        agentFactory.ToolProviderContext.ContextPageManager?.ReleaseStablePages(threadId);
+
+    private void ForgetContextPages(string threadId) =>
+        agentFactory.ToolProviderContext.ContextPageManager?.ForgetThread(threadId);
+
+    private void MarkMemoryContextDirty() =>
+        agentFactory.ToolProviderContext.ContextPageManager?.MarkDirty(ContextPageKeys.MemoryLongTerm("*"));
 
     private async Task<SessionThread> GetOrLoadThreadAsync(string threadId, CancellationToken ct)
     {
@@ -3640,6 +3655,8 @@ Choose the next concrete action that advances the goal. Before doing substantial
                         nextItemSequence,
                         broker,
                         ct);
+                    if (result.MemoryWritten)
+                        MarkMemoryContextDirty();
                     ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.MemoryConsolidated);
                     broker.PublishSystemEvent("consolidated");
                     return new ThreadMemoryConsolidationResult
@@ -3981,6 +3998,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 BotPath = craftPath,
                 MemoryStore = scopedMemory,
                 SkillsLoader = scopedSkills,
+                ContextPageManager = baseCtx.ContextPageManager,
                 ApprovalService = baseCtx.ApprovalService,
                 PathBlacklist = new PathBlacklist([]),
                 BackgroundTerminalService = baseCtx.BackgroundTerminalService,
@@ -4140,6 +4158,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
             BotPath = source.BotPath,
             MemoryStore = source.MemoryStore,
             SkillsLoader = source.SkillsLoader,
+            ContextPageManager = source.ContextPageManager,
             ApprovalService = source.ApprovalService,
             PathBlacklist = source.PathBlacklist,
             BackgroundTerminalService = source.BackgroundTerminalService,
@@ -4183,6 +4202,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
             BotPath = source.BotPath,
             MemoryStore = source.MemoryStore,
             SkillsLoader = source.SkillsLoader,
+            ContextPageManager = source.ContextPageManager,
             SkillMutationApplier = source.SkillMutationApplier,
             ApprovalService = source.ApprovalService,
             PathBlacklist = source.PathBlacklist,

@@ -573,6 +573,7 @@ This section defines the user-visible workflow for Desktop-managed TypeScript ch
 ### 10.2 Browser Use Automation
 
 - When Desktop declares the browser-use capability, embedded browser tabs may be controlled by the active agent through the thread-bound browser-use runtime.
+- Desktop must keep the legacy `browserUse.backend` field for compatibility and may also declare `browserUse.backends` when it supports more than one browser automation backend. `desktop-iab` identifies the embedded browser backend; `chrome-extension` identifies the user's Chrome backend.
 - Agent-controlled browser tabs remain regular viewer tabs: opening a browser-use tab may focus it on first open, but subsequent automation updates must not steal focus from the user's current thread or active tab.
 - While an agent is actively operating a browser tab, Desktop must surface an automation state on the tab chrome, including the session name when available and a concise last-action hint when useful.
 - Coordinate and locator-driven browser actions should render a virtual cursor inside the page whenever the page can accept the injected overlay. Failure to render the overlay must not block the underlying browser action.

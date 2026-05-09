@@ -227,8 +227,8 @@ Client                              Server
 | `capabilities.optOutNotificationMethods` | string[] | no | Exact notification method names to suppress for this connection. See [Section 10](#10-notification-opt-out). |
 | `capabilities.channelAdapter` | object | no | External channel adapter metadata. When present, the connection is treated as the remote backend for one unified channel runtime. See [external-channel-adapter.md](external-channel-adapter.md). |
 | `capabilities.acpExtensions` | object | no | ACP tool proxy capabilities. When present, the client can handle server-initiated `ext/acp/*` requests. See [Section 11.2](#112-acp-tool-proxy). Default omitted (no ACP support). |
-| `capabilities.nodeRepl` | object | no | Desktop persistent Node REPL capability. When present with `browserUse`, the client can handle server-initiated `ext/nodeRepl/*` requests for thread-bound local browser automation. Default omitted (no browser-use support). |
-| `capabilities.browserUse` | object | no | Desktop embedded browser IAB capability. When present with `nodeRepl`, the Node REPL is backed by Desktop browser tabs, CDP-style page state, screenshots, coordinate input, virtual mouse state, console logs, and named tab sessions. Default omitted (no browser-use support). |
+| `capabilities.nodeRepl` | object | no | Persistent Node REPL capability. When present with `browserUse`, the client can handle server-initiated `ext/nodeRepl/*` requests for thread-bound local browser automation. Default omitted (no browser automation support). |
+| `capabilities.browserUse` | object | no | Browser automation capability. When present with `nodeRepl`, the Node REPL is backed by one or more client browser backends such as Desktop embedded browser tabs or the Chrome extension backend. Default omitted (no browser automation support). |
 
 `capabilities.configChange` is an opt-out capability. When omitted, the server treats it as `true` and may push `workspace/configChanged` notifications. Modern clients should declare it explicitly for clarity, even when using the default behavior.
 
@@ -251,7 +251,8 @@ Client                              Server
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `backend` | string | Client browser backend identifier, currently `desktop-iab`. |
+| `backend` | string | Legacy single client browser backend identifier, currently `desktop-iab`. Clients that send `backends` should keep this field set to their preferred backend for compatibility. |
+| `backends` | string[] | Optional list of client browser backends. Current values include `desktop-iab`; Chrome extension clients use `chrome-extension`. When omitted, servers treat `backend` as the only backend. |
 | `protocolVersion` | number | Browser-use IAB protocol version. Current value is `2`. |
 | `supportsCancel` | boolean | Optional. When `true`, the client handles `ext/nodeRepl/cancel` for in-flight evaluations. |
 
@@ -2536,9 +2537,11 @@ The ACP (Agent Client Protocol) integration allows the agent's tools to access t
 | `terminal/kill` | `ext/acp/terminal/kill` |
 | `terminal/release` | `ext/acp/terminal/release` |
 
-### 11.4 Desktop Node REPL Browser Runtime
+### 11.4 Node REPL Browser Runtime
 
-The Desktop browser-use integration exposes agent tools through a **server → client** Node REPL backend. The server only sends these requests to a thread-bound client that declared both `capabilities.nodeRepl` and `capabilities.browserUse` during `initialize`.
+The browser-use integrations expose agent tools through a **server -> client** Node REPL backend. The server only sends these requests to a thread-bound client that declared both `capabilities.nodeRepl` and `capabilities.browserUse` during `initialize`.
+
+Clients may back the runtime with Desktop embedded browser tabs, a Chrome extension connected through Native Messaging, or another compatible backend declared in `capabilities.browserUse.backends`. Backend-specific setup and user-consent rules are owned by the contributing plugin skill, but all backends share the same `ext/nodeRepl/*` transport.
 
 #### `ext/nodeRepl/evaluate`
 

@@ -13,12 +13,14 @@ namespace DotCraft.Tools;
 public sealed class NodeReplPluginFunctionProvider : IAgentToolProvider
 {
     public const string PluginId = PluginIds.BrowserUse;
+    private static readonly string[] RuntimePluginIds = [PluginIds.BrowserUse, PluginIds.Chrome];
 
     public int Priority => 120;
 
     public IEnumerable<AITool> CreateTools(ToolProviderContext context)
     {
-        if (!IsBrowserUsePluginEnabledAndInstalled(context))
+        var runtimePluginId = ResolveEnabledRuntimePluginId(context);
+        if (runtimePluginId == null)
             yield break;
 
         var proxy = context.NodeReplProxy;
@@ -27,23 +29,24 @@ public sealed class NodeReplPluginFunctionProvider : IAgentToolProvider
 
         yield return new PluginFunctionRuntimeFunction(
             new PluginFunctionRegistration(
-                CreateDescriptor(),
+                CreateDescriptor(runtimePluginId),
                 new NodeReplJsInvoker(proxy)));
 
     }
 
-    private static bool IsBrowserUsePluginEnabledAndInstalled(ToolProviderContext context) =>
-        context.Config.Plugins.IsPluginEnabled(PluginId, defaultEnabled: true)
-        && PluginRuntimeConfigurator.IsPluginInstalledAndEnabled(
-            context.Config,
-            context.WorkspacePath,
-            context.BotPath,
-            PluginId);
+    private static string? ResolveEnabledRuntimePluginId(ToolProviderContext context) =>
+        RuntimePluginIds.FirstOrDefault(pluginId =>
+            context.Config.Plugins.IsPluginEnabled(pluginId, defaultEnabled: true)
+            && PluginRuntimeConfigurator.IsPluginInstalledAndEnabled(
+                context.Config,
+                context.WorkspacePath,
+                context.BotPath,
+                pluginId));
 
-    private static PluginFunctionDescriptor CreateDescriptor() =>
+    private static PluginFunctionDescriptor CreateDescriptor(string pluginId) =>
         new()
         {
-            PluginId = PluginId,
+            PluginId = pluginId,
             Namespace = "node_repl",
             Name = "NodeReplJs",
             Description = "Evaluate JavaScript in the Desktop persistent Node REPL for the current thread. The runtime supports top-level state, agent.browser, display(), and screenshot image output.",

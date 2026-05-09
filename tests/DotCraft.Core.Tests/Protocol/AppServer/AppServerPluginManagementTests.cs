@@ -55,7 +55,9 @@ public sealed class AppServerPluginManagementTests : IDisposable
 
         using var response = await harness.Transport.ReadNextSentAsync();
         AppServerTestHarness.AssertIsSuccessResponse(response);
-        var plugin = Assert.Single(response.RootElement.GetProperty("result").GetProperty("plugins").EnumerateArray());
+        var plugin = Assert.Single(
+            response.RootElement.GetProperty("result").GetProperty("plugins").EnumerateArray(),
+            item => item.GetProperty("id").GetString() == "browser-use");
         Assert.Equal("browser-use", plugin.GetProperty("id").GetString());
         Assert.False(plugin.GetProperty("enabled").GetBoolean());
         Assert.False(plugin.GetProperty("installed").GetBoolean());
@@ -474,7 +476,9 @@ public sealed class AppServerPluginManagementTests : IDisposable
 
         using var response = await harness.Transport.ReadNextSentAsync();
         AppServerTestHarness.AssertIsSuccessResponse(response);
-        var plugin = Assert.Single(response.RootElement.GetProperty("result").GetProperty("plugins").EnumerateArray());
+        var plugin = Assert.Single(
+            response.RootElement.GetProperty("result").GetProperty("plugins").EnumerateArray(),
+            item => item.GetProperty("id").GetString() == "browser-use");
         Assert.Equal("browser-use", plugin.GetProperty("id").GetString());
         Assert.False(plugin.GetProperty("enabled").GetBoolean());
     }

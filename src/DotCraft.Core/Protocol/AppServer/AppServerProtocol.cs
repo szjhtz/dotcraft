@@ -155,6 +155,9 @@ public sealed class BrowserUseCapability
 {
     public string Backend { get; set; } = string.Empty;
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Backends { get; set; }
+
     public int? ProtocolVersion { get; set; }
 
     public bool? SupportsCancel { get; set; }

@@ -142,6 +142,18 @@ When Browser Use is installed and enabled, DotCraft may expose the server-owned 
 
 The legacy plugin id `node-repl` is accepted only as a configuration alias for disabling Browser Use. New manifests, diagnostics, and configuration writes use `browser-use`.
 
+### Chrome Built-In Plugin
+
+DotCraft ships Chrome automation as the built-in plugin `chrome`. It contributes:
+
+- The `chrome` skill, loaded from the plugin's `skills` directory.
+- Client-facing metadata for Desktop and plugin-management views.
+- Setup and diagnostic scripts for Chrome extension and Native Messaging host installation state.
+
+When Chrome is installed and enabled, DotCraft may expose the server-owned `NodeReplJs` runtime tool for threads bound to an AppServer client that advertises both Node REPL and Browser Use support. The Chrome skill selects the `chrome-extension` browser backend inside the Node runtime; `NodeReplJs` is not declared in the plugin manifest.
+
+Chrome setup detection must not inspect cookies, passwords, session stores, local storage, or browsing databases. The development extension uses a fixed manifest key for deterministic unpacked extension IDs; production distribution must replace it with the official Chrome Web Store, private, unlisted, or enterprise-managed extension ID.
+
 ### External Channel Tools
 
 External channel tools are runtime-declared by channel adapters during AppServer `initialize`. Static plugin manifests are not required for external-channel runtime tools. Execution continues to use the `ext/channel/toolCall` server-to-client request defined by [External Channel Adapter](external-channel-adapter.md).

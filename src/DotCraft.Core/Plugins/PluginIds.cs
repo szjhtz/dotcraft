@@ -3,6 +3,7 @@ namespace DotCraft.Plugins;
 public static class PluginIds
 {
     public const string BrowserUse = "browser-use";
+    public const string Chrome = "chrome";
     public const string LegacyNodeRepl = "node-repl";
 
     public static string Canonicalize(string pluginId) =>

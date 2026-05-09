@@ -1,6 +1,7 @@
 using DotCraft.Abstractions;
 using DotCraft.Agents;
 using DotCraft.Configuration;
+using DotCraft.Context;
 using DotCraft.Context.Compaction;
 using DotCraft.Memory;
 using DotCraft.Protocol;
@@ -152,6 +153,36 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
     }
 
     [Fact]
+    public async Task CompactThreadAsync_Success_ReleasesStableContextPages()
+    {
+        var manager = new ContextPageManager();
+        var mainChat = new StreamingReplyChatClient("ok");
+        var summaryChat = new SummaryChatClient("<summary>older context summary</summary>");
+        await using var agentFactory = CreateAgentFactory(summaryChat, contextPageManager: manager);
+        var service = CreateService(agentFactory, mainChat);
+        var thread = await service.CreateThreadAsync(MakeIdentity(), threadId: "thread-context-pages");
+        var key = new ContextPageKey("test", "page", "variant");
+        var pageValue = "page-v1";
+
+        Assert.Equal(
+            "page-v1",
+            manager.GetOrAdd(thread.Id, key, ContextPageLifecycle.StableUntilCompaction, () => pageValue).Content);
+
+        pageValue = "page-v2";
+
+        await DrainAsync(service.SubmitInputAsync(
+            thread.Id,
+            [new TextContent("turn 0 " + new string('u', 1200))]));
+
+        var result = await service.CompactThreadAsync(thread.Id);
+
+        Assert.Equal("partial", result.Outcome);
+        Assert.Equal(
+            "page-v2",
+            manager.GetOrAdd(thread.Id, key, ContextPageLifecycle.StableUntilCompaction, () => pageValue).Content);
+    }
+
+    [Fact]
     public async Task CompactThreadAsync_RejectsEmptyClientManagedAndActiveThreads()
     {
         var mainChat = new BlockingChatClient();
@@ -200,7 +231,8 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
 
     private AgentFactory CreateAgentFactory(
         IChatClient compactionChatClient,
-        Action<CompactionConfig>? configureCompaction = null)
+        Action<CompactionConfig>? configureCompaction = null,
+        IContextPageManager? contextPageManager = null)
     {
         var compaction = new CompactionConfig
         {
@@ -230,7 +262,8 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
             approvalService: new AutoApproveApprovalService(),
             blacklist: null,
             toolProviders: Array.Empty<IAgentToolProvider>(),
-            compactionChatClient: compactionChatClient);
+            compactionChatClient: compactionChatClient,
+            contextPageManager: contextPageManager);
     }
 
     private SessionIdentity MakeIdentity() => new()

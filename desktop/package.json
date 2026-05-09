@@ -116,6 +116,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/chrome",
+        "to": "chrome",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {

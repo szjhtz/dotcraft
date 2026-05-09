@@ -147,6 +147,19 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
             }
         }
 
+        if (fileName.StartsWith("scripts.", StringComparison.Ordinal))
+            return Path.Combine("scripts", fileName["scripts.".Length..]);
+
+        if (fileName.StartsWith("extension.", StringComparison.Ordinal))
+            return Path.Combine("extension", fileName["extension.".Length..]);
+
+        if (fileName.StartsWith("native-host.", StringComparison.Ordinal))
+        {
+            var parts = fileName["native-host.".Length..].Split('.');
+            if (parts.Length >= 4)
+                return Path.Combine("native-host", parts[0], parts[1], string.Join('.', parts.Skip(2)));
+        }
+
         return fileName;
     }
 

@@ -10,14 +10,27 @@ function createFakeBrowserManager() {
   const images: Array<{ mediaType: string; dataBase64: string }> = []
   const logs: string[] = []
   const pendingActions: Array<() => void> = []
+  const browser = {
+    nameSession: vi.fn(async (name: string) => ({ ok: true, name })),
+    tabs: {
+      describeApi: () => ['selected()', 'new(url?)', 'finalize({ keep })']
+    },
+    describeApi: () => ['nameSession(name)', 'tabs.finalize({ keep })']
+  }
   return {
     prepareNodeRepl: vi.fn(() => ({
       agent: {
         hang: vi.fn(() => new Promise((resolve) => {
           pendingActions.push(() => resolve('late'))
         })),
-        browser: {
-          nameSession: vi.fn(async (name: string) => ({ ok: true, name }))
+        browser,
+        browsers: {
+          list: vi.fn(async () => [{ id: 'iab', name: 'DotCraft Browser', type: 'iab' }]),
+          get: vi.fn(async (id: string) => {
+            if (id === 'iab') return browser
+            throw new Error(`Browser not found: ${id}`)
+          }),
+          describeApi: () => ['list()', 'get("iab")']
         }
       },
       display: vi.fn(async (imageLike: { mediaType?: string; dataBase64?: string }) => {
@@ -117,6 +130,80 @@ describe('NodeReplManager', () => {
 
     expect(result.error).toBeUndefined()
     expect(result.resultText).toContain('"backend": "iab"')
+    manager.reset('thread-1')
+  })
+
+  it('exposes browser-use agent.browsers and the compatibility agent.browser alias', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    const result = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      code: `
+        const { setupAtlasRuntime } = await import(dotcraft.browserUseClientPath)
+        await setupAtlasRuntime({ globals: globalThis, backend: "iab" })
+        const browser = await agent.browsers.get("iab")
+        return JSON.stringify({
+          list: await agent.browsers.list(),
+          sameAlias: browser.describeApi().join(",") === agent.browser.describeApi().join(","),
+          tabsApi: browser.tabs.describeApi()
+        })
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    const payload = JSON.parse(result.resultText ?? '{}')
+    expect(payload.list).toEqual([{ id: 'iab', name: 'DotCraft Browser', type: 'iab' }])
+    expect(payload.sameAlias).toBe(true)
+    expect(payload.tabsApi).toContain('finalize({ keep })')
+    manager.reset('thread-1')
+  })
+
+  it('loads chrome browser-client.mjs and can delegate non-extension backends to IAB globals', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    const result = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      code: `
+        const { setupAtlasRuntime } = await import(dotcraft.chromeBrowserClientPath)
+        return await setupAtlasRuntime({ globals: globalThis, backend: "iab" })
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.resultText).toContain('"backend": "iab"')
+    manager.reset('thread-1')
+  })
+
+  it('exposes safe DotCraft Chrome paths without exposing process or require', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    const result = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      workspacePath: process.cwd(),
+      code: `JSON.stringify({
+        workspacePath: dotcraft.workspacePath,
+        chromePluginRoot: dotcraft.chromePluginRoot,
+        chromeScriptsPath: dotcraft.chromeScriptsPath,
+        hasCheckSetup: typeof dotcraft.chrome.checkSetup,
+        requireType: typeof require,
+        processType: typeof process
+      })`
+    })
+
+    expect(result.error).toBeUndefined()
+    const payload = JSON.parse(result.resultText ?? '{}')
+    expect(payload.workspacePath).toBe(process.cwd())
+    expect(payload.chromePluginRoot).toContain('chrome')
+    expect(payload.chromeScriptsPath).toContain('scripts')
+    expect(payload.hasCheckSetup).toBe('function')
+    expect(payload.requireType).toBe('undefined')
+    expect(payload.processType).toBe('undefined')
     manager.reset('thread-1')
   })
 

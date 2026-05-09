@@ -132,6 +132,8 @@ function createFakeHost(webContents = createFakeWebContents()) {
       loading: webContents.isLoading()
     })),
     setAutomationState: vi.fn(),
+    setBounds: vi.fn(),
+    setVisible: vi.fn(),
     moveMouse: vi.fn(),
     clickMouse: vi.fn(),
     doubleClickMouse: vi.fn(),
@@ -853,6 +855,79 @@ describe('BrowserUseManager IAB backend', () => {
     }))
   })
 
+  it('exposes agent.browsers, browser capabilities, user tabs, and finalize', async () => {
+    const selectedTab = { tabId: 'existing-tab', currentUrl: 'http://127.0.0.1:3000/', title: 'Existing', loading: false }
+    const host = createFakeHost()
+    host.getAutomationTargetTab.mockReturnValue(selectedTab)
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const result = await runBrowserUse(manager, owner, {
+      threadId: 'thread-1',
+      code: `
+        const browsers = await agent.browsers.list();
+        const browser = await agent.browsers.get("iab");
+        const selected = await browser.tabs.selected();
+        const created = await browser.tabs.new("localhost:3000");
+        const viewport = await browser.capabilities.get("viewport");
+        await viewport.set({ width: 800, height: 600 });
+        const visibility = await browser.capabilities.get("visibility");
+        await visibility.set(false);
+        const visible = await visibility.get();
+        const openTabs = await browser.user.openTabs();
+        const finalized = await browser.tabs.finalize({ keep: [] });
+        return JSON.stringify({
+          browserCount: browsers.length,
+          selectedId: selected.id,
+          createdId: created.id,
+          visible,
+          openTabCount: openTabs.length,
+          finalized
+        });
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    const payload = JSON.parse(result.resultText ?? '{}')
+    expect(payload.browserCount).toBe(1)
+    expect(payload.selectedId).toBe('existing-tab')
+    expect(payload.createdId).toMatch(/^browser-use-thread-1-/)
+    expect(payload.visible).toBe(false)
+    expect(payload.openTabCount).toBe(2)
+    expect(payload.finalized.closed).toEqual([payload.createdId])
+    expect(host.destroyTab).toHaveBeenCalledWith(owner, payload.createdId)
+    expect(host.destroyTab).not.toHaveBeenCalledWith(owner, 'existing-tab')
+    expect(host.setBounds).toHaveBeenCalledWith(owner, expect.objectContaining({
+      tabId: 'existing-tab',
+      width: 800,
+      height: 600
+    }))
+    expect(host.setVisible).toHaveBeenCalledWith(owner, expect.objectContaining({
+      tabId: 'existing-tab',
+      visible: false
+    }))
+  })
+
+  it('keeps agent.browser as a compatibility alias', async () => {
+    const host = createFakeHost()
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const result = await runBrowserUse(manager, owner, {
+      threadId: 'thread-1',
+      code: `
+        const browser = await agent.browsers.get("iab");
+        return JSON.stringify({
+          sameTabs: browser.tabs.describeApi().join(",") === agent.browser.tabs.describeApi().join(","),
+          browserApi: agent.browser.describeApi().includes("tabs.finalize({ keep })")
+        });
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(JSON.parse(result.resultText ?? '{}')).toEqual({ sameTabs: true, browserApi: true })
+  })
+
   it('resolves locator clicks strictly and sends coordinate input', async () => {
     const wc = createFakeWebContents()
     ;(wc.executeJavaScript as ReturnType<typeof vi.fn>).mockImplementation(async (script: string) => {
@@ -890,6 +965,199 @@ describe('BrowserUseManager IAB backend', () => {
       x: 60,
       y: 40
     }))
+  })
+
+  it('supports locator nth, allTextContents, check, setChecked, uncheck, and selectOption', async () => {
+    const wc = createFakeWebContents()
+    ;(wc.executeJavaScript as ReturnType<typeof vi.fn>).mockImplementation(async (script: string) => {
+      if (script.includes('__dotcraftPlaywrightInjected &&')) return false
+      if (script.includes('module.exports.InjectedScript')) return true
+      if (script.includes('requestAnimationFrame') && script.includes('readyState')) {
+        return {
+          url: 'http://127.0.0.1:5173/',
+          title: 'DotCraft',
+          readyState: 'complete',
+          bodyTextLength: 30,
+          interactiveCount: 2,
+          appRootTextLength: 30
+        }
+      }
+      if (script.includes('__dotcraftBrowserUseResolveSelector')) {
+        return [{
+          index: 0,
+          tagName: 'button',
+          role: 'button',
+          name: 'First',
+          text: 'First',
+          selector: 'button',
+          visible: true,
+          enabled: true,
+          visibleText: 'First',
+          ariaName: 'First',
+          boundingBox: { x: 10, y: 20, width: 100, height: 40 }
+        }, {
+          index: 1,
+          tagName: 'button',
+          role: 'button',
+          name: 'Second',
+          text: 'Second',
+          selector: 'button',
+          visible: true,
+          enabled: true,
+          visibleText: 'Second',
+          ariaName: 'Second',
+          boundingBox: { x: 210, y: 20, width: 100, height: 40 }
+        }]
+      }
+      return true
+    })
+    const host = createFakeHost(wc)
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const result = await runBrowserUse(manager, owner, {
+      threadId: 'thread-1',
+      code: `
+        const tab = await agent.browser.tabs.new("localhost:3000");
+        const locator = tab.playwright.locator("button");
+        const texts = await locator.allTextContents();
+        await locator.nth(1).click();
+        await locator.first().check();
+        await locator.first().setChecked(false);
+        await locator.first().uncheck();
+        await locator.first().selectOption("value-a");
+        return JSON.stringify(texts);
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(JSON.parse(result.resultText ?? '[]')).toEqual(['First', 'Second'])
+    expect(host.clickMouse).toHaveBeenCalledWith(owner, expect.objectContaining({
+      x: 260,
+      y: 40
+    }))
+  })
+
+  it('supports DOM-CUA snapshots and node actions', async () => {
+    const host = createFakeHost()
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const result = await runBrowserUse(manager, owner, {
+      threadId: 'thread-1',
+      code: `
+        const tab = await agent.browser.tabs.new("localhost:3000");
+        const nodes = await tab.dom_cua.get_visible_dom();
+        await tab.dom_cua.click({ node_id: nodes[0].node_id });
+        await tab.dom_cua.type({ node_id: nodes[0].node_id, text: "hello" });
+        await tab.dom_cua.keypress({ key: "Enter" });
+        await tab.dom_cua.scroll({ node_id: nodes[0].node_id, deltaY: 120 });
+        return JSON.stringify(nodes[0]);
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    const node = JSON.parse(result.resultText ?? '{}')
+    expect(node.node_id).toBe('e1')
+    expect(node.role).toBe('link')
+    expect(host.clickMouse).toHaveBeenCalled()
+    expect(host.typeText).toHaveBeenCalledWith(owner, expect.objectContaining({
+      text: 'hello'
+    }))
+    expect(host.keypress).toHaveBeenCalledWith(owner, expect.objectContaining({
+      keys: ['Enter']
+    }))
+    expect(host.scrollMouse).toHaveBeenCalledWith(owner, expect.objectContaining({
+      scrollY: 120
+    }))
+  })
+
+  it('exposes unsupported APIs with clear errors', async () => {
+    const host = createFakeHost()
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const result = await runBrowserUse(manager, owner, {
+      threadId: 'thread-1',
+      code: `
+        const tab = await agent.browser.tabs.new("localhost:3000");
+        const messages = [];
+        for (const action of [
+          () => tab.playwright.waitForEvent("download"),
+          () => tab.playwright.waitForEvent("filechooser"),
+          () => tab.clipboard.read(),
+          () => tab.cua.download_media(),
+          () => tab.dom_cua.download_media()
+        ]) {
+          try { await action(); } catch (error) { messages.push(error.message); }
+        }
+        return JSON.stringify(messages);
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    const messages = JSON.parse(result.resultText ?? '[]') as string[]
+    expect(messages).toHaveLength(5)
+    expect(messages.every((message) => message.includes('does not support'))).toBe(true)
+  })
+
+  it('reports strict failures for locator state-changing helpers', async () => {
+    const wc = createFakeWebContents()
+    ;(wc.executeJavaScript as ReturnType<typeof vi.fn>).mockImplementation(async (script: string) => {
+      if (script.includes('__dotcraftPlaywrightInjected &&')) return false
+      if (script.includes('module.exports.InjectedScript')) return true
+      if (script.includes('requestAnimationFrame') && script.includes('readyState')) {
+        return {
+          url: 'http://127.0.0.1:5173/',
+          title: 'DotCraft',
+          readyState: 'complete',
+          bodyTextLength: 30,
+          interactiveCount: 2,
+          appRootTextLength: 30
+        }
+      }
+      if (script.includes('__dotcraftBrowserUseResolveSelector')) {
+        return [{
+          index: 0,
+          tagName: 'input',
+          role: 'checkbox',
+          name: 'A',
+          text: 'A',
+          selector: 'input[type="checkbox"]',
+          visible: true,
+          enabled: true,
+          visibleText: 'A',
+          ariaName: 'A',
+          boundingBox: { x: 10, y: 20, width: 20, height: 20 }
+        }, {
+          index: 1,
+          tagName: 'input',
+          role: 'checkbox',
+          name: 'B',
+          text: 'B',
+          selector: 'input[type="checkbox"]',
+          visible: true,
+          enabled: true,
+          visibleText: 'B',
+          ariaName: 'B',
+          boundingBox: { x: 40, y: 20, width: 20, height: 20 }
+        }]
+      }
+      return true
+    })
+    const host = createFakeHost(wc)
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const result = await runBrowserUse(manager, owner, {
+      threadId: 'thread-1',
+      code: `
+        const tab = await agent.browser.tabs.new("localhost:3000");
+        await tab.playwright.locator('input[type="checkbox"]').check();
+      `
+    })
+
+    expect(result.error).toContain('Strict mode violation')
   })
 
   it('aligns getByRole link matching with DOM snapshot output', async () => {

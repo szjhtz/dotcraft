@@ -16,7 +16,9 @@ public enum TraceEventType
     Error,
     ContextCompaction,
     Thinking,
-    PromptCachePoint
+    PromptCachePoint,
+    MaintenanceForkRequest,
+    MaintenanceForkResponse
 }
 
 /// <summary>

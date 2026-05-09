@@ -140,7 +140,8 @@ public sealed class CoreToolProvider : IAgentToolProvider
             var skillManageTool = new SkillManageTool(
                 mutationApplier,
                 selfLearning,
-                context.ApprovalService);
+                context.ApprovalService,
+                context.ContextPageManager);
             tools.Add(AIFunctionFactory.Create(skillManageTool.SkillManage));
         }
 

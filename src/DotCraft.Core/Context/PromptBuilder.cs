@@ -2,6 +2,7 @@ using DotCraft.Commands.Custom;
 using DotCraft.Configuration;
 using DotCraft.Memory;
 using DotCraft.Skills;
+using System.Text;
 
 namespace DotCraft.Context;
 
@@ -21,7 +22,8 @@ public sealed class PromptBuilder(
     bool skillVariantModeEnabled = false,
     SkillVariantTarget? skillVariantTarget = null,
     string? promptProfile = null,
-    string? roleInstructions = null)
+    string? roleInstructions = null,
+    IContextPageManager? contextPageManager = null)
 {
     private readonly string _craftPath = Path.GetFullPath(craftPath);
 
@@ -42,7 +44,7 @@ public sealed class PromptBuilder(
     /// <summary>
     /// Build the complete system prompt with identity, bootstrap files, memory, and skills.
     /// </summary>
-    public string BuildSystemPrompt()
+    public string BuildSystemPrompt(string? threadId = null)
     {
         var subAgentLight = string.Equals(
             promptProfile,
@@ -68,7 +70,10 @@ public sealed class PromptBuilder(
             parts.Add(GetModeProtocolPrompt());
 
         // Bootstrap files (AGENTS.md, SOUL.md, USER.md, TOOLS.md, IDENTITY.md)
-        var bootstrapContent = LoadBootstrapFiles(agentsOnly: subAgentLight);
+        var bootstrapContent = GetContextPage(
+            threadId,
+            ContextPageKeys.BootstrapFiles(BuildBootstrapVariant(subAgentLight)),
+            () => LoadBootstrapFiles(agentsOnly: subAgentLight));
         if (!string.IsNullOrWhiteSpace(bootstrapContent))
         {
             parts.Add(bootstrapContent);
@@ -77,7 +82,10 @@ public sealed class PromptBuilder(
         // Memory context
         if (!subAgentLight)
         {
-            var memory = memoryStore.GetMemoryContext();
+            var memory = GetContextPage(
+                threadId,
+                ContextPageKeys.MemoryLongTerm(Path.GetFullPath(memoryStore.MemoryDirectoryPath)),
+                memoryStore.GetMemoryContext);
             if (!string.IsNullOrWhiteSpace(memory))
                 parts.Add($"# Memory\n\n{memory}");
         }
@@ -87,22 +95,33 @@ public sealed class PromptBuilder(
         if (!subAgentLight && IsToolAvailable(availableToolNames, "SkillManage"))
             parts.Add(GetSelfLearningPrompt());
 
-        var alwaysSkills = skillsLoader.GetAlwaysSkills(availableToolNames);
-        if (alwaysSkills.Count > 0)
+        var skillsVariant = BuildSkillsVariant(availableToolNames);
+        var alwaysContent = GetContextPage(
+            threadId,
+            ContextPageKeys.SkillsAlways(skillsVariant),
+            () =>
+            {
+                var alwaysSkills = skillsLoader.GetAlwaysSkills(availableToolNames);
+                return alwaysSkills.Count == 0
+                    ? string.Empty
+                    : skillsLoader.LoadSkillsForContext(
+                        alwaysSkills,
+                        skillVariantModeEnabled,
+                        skillVariantTarget);
+            });
+        if (!string.IsNullOrWhiteSpace(alwaysContent))
         {
-            var alwaysContent = skillsLoader.LoadSkillsForContext(
-                alwaysSkills,
-                skillVariantModeEnabled,
-                skillVariantTarget);
-            if (!string.IsNullOrWhiteSpace(alwaysContent))
-                parts.Add($"# Active Skills\n\n{alwaysContent}");
+            parts.Add($"# Active Skills\n\n{alwaysContent}");
         }
 
         // 2. Available skills: show summary (agent uses ReadFile to load full content)
-        var skillsSummary = skillsLoader.BuildSkillsSummary(
-            availableToolNames,
-            skillVariantModeEnabled,
-            skillVariantTarget);
+        var skillsSummary = GetContextPage(
+            threadId,
+            ContextPageKeys.SkillsSummary(skillsVariant),
+            () => skillsLoader.BuildSkillsSummary(
+                availableToolNames,
+                skillVariantModeEnabled,
+                skillVariantTarget));
         if (!string.IsNullOrWhiteSpace(skillsSummary))
         {
             var skillLoadInstruction = IsToolAvailable(availableToolNames, "SkillView")
@@ -126,7 +145,10 @@ Only proceed without loading a skill if genuinely none of the listed skills are 
         // Custom commands summary
         if (!subAgentLight && customCommandLoader != null)
         {
-            var commandsSummary = customCommandLoader.BuildCommandsSummary();
+            var commandsSummary = GetContextPage(
+                threadId,
+                ContextPageKeys.CustomCommandsSummary(_craftPath),
+                customCommandLoader.BuildCommandsSummary);
             if (!string.IsNullOrWhiteSpace(commandsSummary))
                 parts.Add(commandsSummary);
         }
@@ -153,6 +175,64 @@ Only proceed without loading a skill if genuinely none of the listed skills are 
 
     private static bool IsToolAvailable(IReadOnlyList<string>? availableToolNames, string toolName) =>
         availableToolNames?.Any(name => string.Equals(name, toolName, StringComparison.OrdinalIgnoreCase)) == true;
+
+    private string GetContextPage(
+        string? threadId,
+        ContextPageKey key,
+        Func<string> loader) =>
+        contextPageManager?.GetOrAdd(
+            threadId,
+            key,
+            ContextPageLifecycle.StableUntilCompaction,
+            loader).Content
+        ?? loader();
+
+    private string BuildBootstrapVariant(bool agentsOnly) =>
+        $"{_craftPath}|agentsOnly:{agentsOnly.ToString().ToLowerInvariant()}";
+
+    private string BuildSkillsVariant(IReadOnlyList<string>? availableToolNames)
+    {
+        var sb = new StringBuilder();
+        sb.Append("workspace:");
+        sb.Append(_workspacePath);
+        sb.Append("|skills:");
+        sb.Append(skillsLoader.WorkspaceSkillsPath);
+        sb.Append("|variantMode:");
+        sb.Append(skillVariantModeEnabled.ToString().ToLowerInvariant());
+        sb.Append("|target:");
+        AppendSkillVariantTarget(sb, skillVariantTarget);
+        sb.Append("|tools:");
+        if (availableToolNames is { Count: > 0 })
+            sb.Append(string.Join(",", availableToolNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)));
+        return sb.ToString();
+    }
+
+    private static void AppendSkillVariantTarget(StringBuilder sb, SkillVariantTarget? target)
+    {
+        if (target == null)
+        {
+            sb.Append("none");
+            return;
+        }
+
+        sb.Append(target.Harness);
+        sb.Append('|');
+        sb.Append(target.HarnessVersion);
+        sb.Append('|');
+        sb.Append(target.Model);
+        sb.Append('|');
+        sb.Append(target.Os);
+        sb.Append('|');
+        sb.Append(target.Shell);
+        sb.Append('|');
+        sb.Append(target.Sandbox);
+        sb.Append('|');
+        sb.Append(target.ToolProfileHash);
+        sb.Append('|');
+        sb.Append(target.ApprovalPolicy);
+        sb.Append('|');
+        sb.Append(target.WorkspaceHash);
+    }
 
     private static string GetSelfLearningPrompt()
     {

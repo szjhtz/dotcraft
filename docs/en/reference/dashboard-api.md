@@ -19,6 +19,8 @@ Dashboard API is intended for the debugging UI and internal tools. Most users sh
 
 Dashboard `Thinking` and `Response` trace events are recorded by contiguous streaming content segment. They are not recorded per chunk, and a full turn is not forced into a single event. `ThinkingCount` and `ResponseCount` therefore represent segment counts. The realtime event stream sends a segment event after that segment ends and is recorded; historical traces are not migrated, so older data may still use the previous granularity.
 
+Maintenance requests such as context compaction and memory consolidation also record `MaintenanceForkRequest` / `MaintenanceForkResponse` events. These events preserve snapshot/cache metadata, raw model text, tool-call-only responses, empty responses, and fallback reasons so Dashboard can diagnose issues such as `summary_unavailable`.
+
 ## Endpoints
 
 ### `GET /DashBoard`

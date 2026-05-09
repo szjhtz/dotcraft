@@ -37,7 +37,7 @@ public sealed record MaintenanceForkResult(
 /// Runs provider-agnostic maintenance requests by reusing a captured prompt
 /// request prefix and appending only a tail task message.
 /// </summary>
-public sealed class MaintenanceForkRunner(IChatClient chatClient)
+public sealed class MaintenanceForkRunner(IChatClient chatClient, TraceCollector? traceCollector = null)
 {
     /// <summary>
     /// Runs a maintenance fork and returns the assistant text, or a fallback reason.
@@ -64,19 +64,44 @@ public sealed class MaintenanceForkRunner(IChatClient chatClient)
         IReadOnlyList<ChatMessage>? messagesBeforeTask,
         CancellationToken cancellationToken = default)
     {
+        var messages = BuildMessages(snapshot, task, messagesBeforeTask);
+        var options = BuildOptions(snapshot);
+        var sessionKey = ResolveTraceSessionKey(snapshot);
+        var taskPrompt = FormatTask(task);
+        traceCollector?.RecordMaintenanceForkRequest(
+            sessionKey,
+            task.Kind,
+            taskPrompt,
+            snapshot.ThreadId,
+            snapshot.TurnId,
+            snapshot.Mode,
+            snapshot.ModelId,
+            snapshot.ProviderId,
+            snapshot.Messages.Count,
+            messagesBeforeTask?.Count ?? 0,
+            snapshot.Tools,
+            snapshot.BaseInstructionsFingerprint,
+            snapshot.ToolFingerprint);
+
         try
         {
             var response = await chatClient.GetResponseAsync(
-                BuildMessages(snapshot, task, messagesBeforeTask),
-                BuildOptions(snapshot),
+                messages,
+                options,
                 cancellationToken);
             TokenUsageSnapshot? usage = response.Usage is null
                 ? null
                 : TokenUsageExtractor.FromResponse(response);
+            var fallbackReason = ClassifyFallbackReason(response);
+            traceCollector?.RecordMaintenanceForkResponse(
+                sessionKey,
+                task.Kind,
+                response,
+                fallbackReason);
             return new MaintenanceForkResult(
                 task.Kind,
                 response.Text,
-                string.IsNullOrWhiteSpace(response.Text) ? "empty_response" : null,
+                fallbackReason,
                 usage);
         }
         catch (OperationCanceledException)
@@ -85,6 +110,10 @@ public sealed class MaintenanceForkRunner(IChatClient chatClient)
         }
         catch (Exception ex)
         {
+            traceCollector?.RecordMaintenanceForkResponse(
+                sessionKey,
+                task.Kind,
+                ex.Message);
             return new MaintenanceForkResult(task.Kind, null, ex.Message, null);
         }
     }
@@ -134,4 +163,37 @@ Task: {FormatKind(task.Kind)}
         MaintenanceForkTaskKind.MemoryConsolidation => "memory_consolidation",
         _ => kind.ToString()
     };
+
+    private static string ResolveTraceSessionKey(PromptRequestSnapshot snapshot)
+    {
+        if (!string.IsNullOrWhiteSpace(snapshot.ThreadId))
+            return snapshot.ThreadId!;
+
+        var active = TracingChatClient.CurrentSessionKey ?? TracingChatClient.GetActiveSessionKey();
+        if (!string.IsNullOrWhiteSpace(active))
+            return active!;
+
+        return "maintenance:" + Guid.NewGuid().ToString("N")[..12];
+    }
+
+    private static string? ClassifyFallbackReason(ChatResponse response)
+    {
+        if (!string.IsNullOrWhiteSpace(response.Text))
+            return null;
+
+        return ResponseContainsToolCall(response)
+            ? "tool_call_without_text"
+            : "empty_response";
+    }
+
+    private static bool ResponseContainsToolCall(ChatResponse response)
+    {
+        foreach (var message in response.Messages)
+        {
+            if (message.Contents.OfType<FunctionCallContent>().Any())
+                return true;
+        }
+
+        return false;
+    }
 }

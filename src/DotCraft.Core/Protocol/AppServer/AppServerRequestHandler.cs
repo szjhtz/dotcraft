@@ -61,7 +61,8 @@ public sealed class AppServerRequestHandler(
     IReadOnlyList<ConfigSchemaSection>? configSchema = null,
     IAppConfigMonitor? appConfigMonitor = null,
     OpenAIClientProvider? openAIClientProvider = null,
-    IBackgroundTerminalService? backgroundTerminalService = null)
+    IBackgroundTerminalService? backgroundTerminalService = null,
+    IContextPageManager? contextPageManager = null)
 {
     private readonly CommandRegistry _commandRegistry = commandRegistry
                                                         ?? CommandRegistry.CreateDefault(
@@ -87,6 +88,12 @@ public sealed class AppServerRequestHandler(
     private readonly IReadOnlyList<IAppServerCapabilityContributor> _capabilityContributors =
         protocolExtensions?.Cast<IAppServerCapabilityContributor>().ToArray()
         ?? [];
+
+    private void MarkMemoryContextDirty() =>
+        contextPageManager?.MarkDirty(ContextPageKeys.MemoryLongTerm("*"));
+
+    private void MarkSkillsContextDirty() =>
+        contextPageManager?.MarkDirty(ContextPageKeys.SkillsWildcard());
 
     private static readonly HashSet<string> ReservedMethodNames =
     [
@@ -2583,7 +2590,10 @@ public sealed class AppServerRequestHandler(
         if (saveResult.WelcomeSuggestionsChanged)
             changedRegions.Add(ConfigChangeRegions.WelcomeSuggestions);
         if (saveResult.SkillsSelfLearningChanged)
+        {
             changedRegions.Add(ConfigChangeRegions.Skills);
+            MarkSkillsContextDirty();
+        }
         if (saveResult.MemoryAutoConsolidateChanged)
         {
             changedRegions.Add(ConfigChangeRegions.Memory);
@@ -2649,6 +2659,7 @@ public sealed class AppServerRequestHandler(
         try
         {
             memoryStore.ClearAll();
+            MarkMemoryContextDirty();
             if (!string.IsNullOrWhiteSpace(_hostWorkspacePath))
                 welcomeSuggestionService?.ClearWorkspaceCache(_hostWorkspacePath);
         }
@@ -2807,6 +2818,8 @@ public sealed class AppServerRequestHandler(
 
         var restored = IsSkillVariantModeEnabled()
             && skillsLoader.RestoreOriginalSkill(p.Name, BuildSkillVariantTarget());
+        if (restored)
+            MarkSkillsContextDirty();
         return Task.FromResult<object?>(new SkillsRestoreOriginalResult
         {
             Name = p.Name,
@@ -2834,6 +2847,7 @@ public sealed class AppServerRequestHandler(
 
         SkillsConfigPersistence.WriteWorkspaceDisabledSkills(workspaceCraftPath, disabled);
         skillsLoader.SetDisabledSkills(disabled);
+        MarkSkillsContextDirty();
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.SkillsSetEnabled,
             [ConfigChangeRegions.Skills]);
@@ -2886,6 +2900,7 @@ public sealed class AppServerRequestHandler(
         SkillsConfigPersistence.WriteWorkspaceDisabledSkills(workspaceCraftPath, disabled);
         skillsLoader.SetDisabledSkills(disabled);
         skillsLoader.RefreshDescriptors();
+        MarkSkillsContextDirty();
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.SkillsUninstall,
             [ConfigChangeRegions.Skills]);
@@ -2983,6 +2998,7 @@ public sealed class AppServerRequestHandler(
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.PluginSetEnabled,
             [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp, ConfigChangeRegions.Lsp]);
+        MarkSkillsContextDirty();
 
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
@@ -3038,6 +3054,7 @@ public sealed class AppServerRequestHandler(
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.PluginInstall,
             [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp, ConfigChangeRegions.Lsp]);
+        MarkSkillsContextDirty();
 
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);
@@ -3095,6 +3112,7 @@ public sealed class AppServerRequestHandler(
         appConfigMonitor?.NotifyChanged(
             AppServerMethods.PluginRemove,
             [ConfigChangeRegions.Plugins, ConfigChangeRegions.Skills, ConfigChangeRegions.Mcp, ConfigChangeRegions.Lsp]);
+        MarkSkillsContextDirty();
 
         var diagnostics = discovery.Diagnostics.ToList();
         var mcpSummaries = BuildPluginMcpSummaryIndex(discovery, diagnostics);

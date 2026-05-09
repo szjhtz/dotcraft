@@ -23,7 +23,9 @@ public sealed class MemoryContextProvider(
     bool skillVariantModeEnabled = false,
     SkillVariantTarget? skillVariantTarget = null,
     string? promptProfile = null,
-    string? roleInstructions = null)
+    string? roleInstructions = null,
+    IContextPageManager? contextPageManager = null,
+    string? threadId = null)
     : AIContextProvider
 {
     private readonly PromptBuilder _promptBuilder = new(
@@ -39,12 +41,13 @@ public sealed class MemoryContextProvider(
         skillVariantModeEnabled,
         skillVariantTarget,
         promptProfile,
-        roleInstructions);
+        roleInstructions,
+        contextPageManager);
 
     protected override ValueTask<AIContext> ProvideAIContextAsync(InvokingContext context, CancellationToken cancellationToken = default)
     {
-        var systemPrompt = _promptBuilder.BuildSystemPrompt();
         var sessionKey = TracingChatClient.CurrentSessionKey ?? TracingChatClient.GetActiveSessionKey();
+        var systemPrompt = _promptBuilder.BuildSystemPrompt(threadId ?? sessionKey);
         if (!string.IsNullOrWhiteSpace(sessionKey))
             traceCollector?.RecordSessionMetadata(sessionKey, systemPrompt, toolNamesProvider?.Invoke());
 

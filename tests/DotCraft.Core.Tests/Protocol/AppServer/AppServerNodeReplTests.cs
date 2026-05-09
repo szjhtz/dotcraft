@@ -40,6 +40,16 @@ public sealed class AppServerNodeReplTests
         AssertThreadNodeReplAvailable(proxy, thread.Id);
     }
 
+    [Fact]
+    public async Task Initialize_WithBrowserUseBackends_PreservesLegacyBackendAndBackendsList()
+    {
+        using var harness = new AppServerTestHarness();
+        await harness.InitializeAsync(nodeReplBrowserUse: true, browserUseBackends: ["desktop-iab", "chrome-extension"]);
+
+        Assert.Equal("desktop-iab", harness.Connection.BrowserUse?.Backend);
+        Assert.Equal(["desktop-iab", "chrome-extension"], harness.Connection.BrowserUseBackends);
+    }
+
     private static void AssertThreadNodeReplAvailable(WireNodeReplProxy proxy, string threadId)
     {
         var previous = TracingChatClient.CurrentSessionKey;

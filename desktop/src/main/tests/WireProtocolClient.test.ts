@@ -333,6 +333,7 @@ describe('WireProtocolClient', () => {
     })
     expect(initReq.params.capabilities.browserUse).toEqual({
       backend: 'desktop-iab',
+      backends: ['desktop-iab'],
       protocolVersion: 2,
       supportsCancel: true
     })

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using DotCraft.Context;
 using DotCraft.Tools;
 using Microsoft.Extensions.AI;
 
@@ -207,6 +208,97 @@ public sealed class TraceCollector(TraceStore store)
         });
     }
 
+    public void RecordMaintenanceForkRequest(
+        string sessionKey,
+        MaintenanceForkTaskKind taskKind,
+        string prompt,
+        string? threadId,
+        string? turnId,
+        string? mode,
+        string? modelId,
+        string? providerId,
+        int snapshotMessageCount,
+        int extraTailMessageCount,
+        IReadOnlyList<AITool>? tools,
+        string? baseInstructionsFingerprint,
+        string? toolFingerprint)
+    {
+        var toolNames = NormalizeToolNames(tools?.Select(static tool => tool.Name ?? string.Empty));
+        store.Record(new TraceEvent
+        {
+            Type = TraceEventType.MaintenanceForkRequest,
+            SessionKey = sessionKey,
+            Content = prompt,
+            ToolName = FormatMaintenanceKind(taskKind),
+            ModelId = modelId,
+            ToolNames = toolNames,
+            MetadataJson = SerializeMetadata(new
+            {
+                taskKind = FormatMaintenanceKind(taskKind),
+                threadId,
+                turnId,
+                mode,
+                modelId,
+                providerId,
+                snapshotMessageCount,
+                extraTailMessageCount,
+                toolCount = toolNames.Length,
+                toolNames,
+                baseInstructionsFingerprint,
+                toolFingerprint
+            })
+        });
+    }
+
+    public void RecordMaintenanceForkResponse(
+        string sessionKey,
+        MaintenanceForkTaskKind taskKind,
+        ChatResponse? response,
+        string? fallbackReason)
+    {
+        var text = response?.Text;
+        var usage = response?.Usage is null
+            ? (TokenUsageSnapshot?)null
+            : TokenUsageExtractor.FromResponse(response);
+        store.Record(new TraceEvent
+        {
+            Type = TraceEventType.MaintenanceForkResponse,
+            SessionKey = sessionKey,
+            Content = string.IsNullOrWhiteSpace(text) ? "(empty)" : text,
+            ToolName = FormatMaintenanceKind(taskKind),
+            ResponseId = response?.ResponseId,
+            ModelId = response?.ModelId,
+            FinishReason = response?.FinishReason?.ToString(),
+            MetadataJson = SerializeMetadata(new
+            {
+                taskKind = FormatMaintenanceKind(taskKind),
+                fallbackReason,
+                responseMessages = DescribeMessages(response?.Messages),
+                usage
+            })
+        });
+    }
+
+    public void RecordMaintenanceForkResponse(
+        string sessionKey,
+        MaintenanceForkTaskKind taskKind,
+        string fallbackReason)
+    {
+        store.Record(new TraceEvent
+        {
+            Type = TraceEventType.MaintenanceForkResponse,
+            SessionKey = sessionKey,
+            Content = "(empty)",
+            ToolName = FormatMaintenanceKind(taskKind),
+            MetadataJson = SerializeMetadata(new
+            {
+                taskKind = FormatMaintenanceKind(taskKind),
+                fallbackReason,
+                responseMessages = Array.Empty<object>()
+            })
+        });
+    }
+
     public void RecordTokenUsage(string sessionKey, long inputTokens, long outputTokens)
         => RecordTokenUsage(sessionKey, new TokenUsageSnapshot(inputTokens, outputTokens, 0, 0));
 
@@ -293,6 +385,71 @@ public sealed class TraceCollector(TraceStore store)
             return metadata.ToString();
         }
     }
+
+    private static string FormatMaintenanceKind(MaintenanceForkTaskKind kind) => kind switch
+    {
+        MaintenanceForkTaskKind.ContextCompaction => "context_compaction",
+        MaintenanceForkTaskKind.MemoryConsolidation => "memory_consolidation",
+        _ => kind.ToString()
+    };
+
+    private static object[] DescribeMessages(IList<ChatMessage>? messages)
+    {
+        if (messages is not { Count: > 0 })
+            return [];
+
+        return messages
+            .Select((message, index) => new
+            {
+                index,
+                role = message.Role.ToString(),
+                messageId = message.MessageId,
+                authorName = message.AuthorName,
+                text = message.Text,
+                contents = message.Contents.Select(DescribeContent).ToArray()
+            })
+            .Cast<object>()
+            .ToArray();
+    }
+
+    private static object DescribeContent(AIContent content) => content switch
+    {
+        TextContent text => new
+        {
+            type = "text",
+            text = text.Text
+        },
+        FunctionCallContent call => new
+        {
+            type = "function_call",
+            callId = call.CallId,
+            name = call.Name,
+            arguments = SerializeMetadata(call.Arguments)
+        },
+        FunctionResultContent result => new
+        {
+            type = "function_result",
+            callId = result.CallId,
+            result = Agents.ImageContentSanitizingChatClient.DescribeResult(result.Result),
+            exception = result.Exception?.Message
+        },
+        DataContent data => new
+        {
+            type = "data",
+            data.MediaType
+        },
+        UriContent uri => new
+        {
+            type = "uri",
+            uri = uri.Uri?.ToString(),
+            uri.MediaType
+        },
+        _ => new
+        {
+            type = content.GetType().Name,
+            text = content.ToString()
+        }
+    };
 
     private static string[] NormalizeToolNames(IEnumerable<string>? toolNames)
     {

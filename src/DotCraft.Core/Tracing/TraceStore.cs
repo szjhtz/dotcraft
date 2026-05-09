@@ -432,11 +432,17 @@ public sealed class TraceStore
                     evt.PromptCacheChangedFields);
                 break;
             case TraceEventType.Request:
+            case TraceEventType.MaintenanceForkRequest:
                 session.RequestCount++;
-                if (string.IsNullOrWhiteSpace(session.FirstUserRequest) && !string.IsNullOrWhiteSpace(evt.Content))
+                if (evt.Type == TraceEventType.Request
+                    && string.IsNullOrWhiteSpace(session.FirstUserRequest)
+                    && !string.IsNullOrWhiteSpace(evt.Content))
+                {
                     session.FirstUserRequest = evt.Content.Trim();
+                }
                 break;
             case TraceEventType.Response:
+            case TraceEventType.MaintenanceForkResponse:
                 session.ResponseCount++;
                 if (!string.IsNullOrEmpty(evt.FinishReason))
                     session.LastFinishReason = evt.FinishReason;

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using DotCraft.Agents;
 using DotCraft.Configuration;
+using DotCraft.Context;
 using DotCraft.Cron;
 using DotCraft.Tracing;
 using DotCraft.Mcp;
@@ -78,6 +79,11 @@ public sealed class ToolProviderContext
     /// The skills loader for skill-based tools.
     /// </summary>
     public required SkillsLoader SkillsLoader { get; init; }
+
+    /// <summary>
+    /// Optional per-process manager for prompt-cache-stable context pages.
+    /// </summary>
+    public IContextPageManager? ContextPageManager { get; init; }
 
     /// <summary>
     /// Applies workspace skill mutations for optional self-learning tools.

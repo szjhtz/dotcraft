@@ -36,6 +36,8 @@ const BROWSER_USE_OPERATION_TIMEOUT_MS = 10_000
 const BROWSER_USE_NAVIGATION_TIMEOUT_MS = 30_000
 const BROWSER_USE_BLANK_TAB_READY_TIMEOUT_MS = 5_000
 const BROWSER_USE_NETWORK_IDLE_QUIET_MS = 500
+const BROWSER_USE_DEFAULT_VIEWPORT_WIDTH = 1280
+const BROWSER_USE_DEFAULT_VIEWPORT_HEIGHT = 900
 
 type BrowserUseLoadState = 'commit' | 'domcontentloaded' | 'load' | 'networkidle'
 
@@ -99,6 +101,8 @@ interface BrowserUseViewerHost {
     sessionName?: string
     action?: string
   }): void
+  setBounds?(win: BrowserWindow, params: { tabId: string; x: number; y: number; width: number; height: number }): void
+  setVisible?(win: BrowserWindow, params: { tabId: string; visible: boolean }): void
   moveMouse(win: BrowserWindow, params: { tabId: string; x: number; y: number; waitForArrival?: boolean }): Promise<void>
   clickMouse(win: BrowserWindow, params: { tabId: string; x: number; y: number; button?: 'left' | 'right' | 'middle' }): Promise<void>
   doubleClickMouse(win: BrowserWindow, params: { tabId: string; x: number; y: number; button?: 'left' | 'right' | 'middle' }): Promise<void>
@@ -120,6 +124,7 @@ interface BrowserUseTabRuntime {
   adopted?: boolean
   cdpAttached?: boolean
   snapshotRefs: Map<string, BrowserUseElementMatch>
+  domCuaNodes: Map<string, BrowserUseElementMatch>
   snapshotGeneration: number
 }
 
@@ -156,6 +161,9 @@ interface BrowserUseThreadRuntime {
   activeAbortSignal?: AbortSignal
   activeOperation?: BrowserUseOperationTrace
   operationHistory: BrowserUseOperationTrace[]
+  viewportWidth: number
+  viewportHeight: number
+  browserVisible: boolean
 }
 
 interface BrowserUseOperationTimeouts {
@@ -171,6 +179,7 @@ interface BrowserUseLocatorDescriptor {
   value: string
   exact?: boolean
   name?: string
+  index?: number
 }
 
 interface BrowserUseElementMatch {
@@ -361,7 +370,10 @@ export class BrowserUseManager {
       logs: [],
       images: [],
       hasFocusedFirstTab: false,
-      operationHistory: []
+      operationHistory: [],
+      viewportWidth: BROWSER_USE_DEFAULT_VIEWPORT_WIDTH,
+      viewportHeight: BROWSER_USE_DEFAULT_VIEWPORT_HEIGHT,
+      browserVisible: true
     }
 
     const display = async (imageLike: unknown): Promise<void> => {
@@ -382,45 +394,196 @@ export class BrowserUseManager {
       }
     }
 
-    const agent = {
-      browser: {
-        nameSession: async (name: string) => {
-          runtime.sessionName = String(name ?? '').trim()
-          for (const tab of runtime.tabs.values()) {
-            this.setAutomationState(runtime, tab, true, 'session')
-          }
-          return { ok: true, name: runtime.sessionName }
-        },
-        goto: async (url: string) => {
-          const tab = await this.getOrAdoptSelectedTab(owner, runtime)
-          await this.navigate(tab, url)
-          return this.createTabApi(tab)
-        },
-        tabs: {
-          list: async () => [...runtime.tabs.values()].map((tab) => this.tabSnapshot(tab)),
-          new: async (url?: string) => {
-            const tab = await this.createTab(owner, runtime, url)
-            runtime.selectedTabId = tab.id
-            return this.createTabApi(tab)
-          },
-          selected: async () => {
-            const tab = await this.getOrAdoptSelectedTab(owner, runtime)
-            return this.createTabApi(tab)
-          },
-          get: async (id: string) => {
-            const tab = runtime.tabs.get(id)
-            if (!tab) throw new Error(`Browser tab not found: ${id}`)
-            return this.createTabApi(tab)
-          }
-        }
-      }
+    const browser = this.createBrowserApi(owner, runtime)
+    const browsers = {
+      list: async () => [this.browserInfo(runtime)],
+      get: async (id: string) => {
+        const normalized = String(id ?? '').toLowerCase()
+        if (normalized === 'iab' || normalized === 'browser-use' || normalized === 'browser') return browser
+        throw new Error(`Browser not found: ${id}. Available browser id: iab.`)
+      },
+      describeApi: () => ['list()', 'get("iab")']
     }
+    const agent = { browser, browsers }
 
     runtime.agent = agent
     runtime.display = display
 
     this.runtimes.set(threadId, runtime)
     return runtime
+  }
+
+  private browserInfo(runtime: BrowserUseThreadRuntime): Record<string, unknown> {
+    return {
+      id: 'iab',
+      name: 'DotCraft Browser',
+      type: 'iab',
+      capabilities: {
+        browser: [
+          { id: 'viewport', description: 'Set or reset the embedded browser viewport size.' },
+          { id: 'visibility', description: 'Show or hide the embedded browser surface.' }
+        ],
+        tab: []
+      },
+      tabCount: runtime.tabs.size
+    }
+  }
+
+  private createBrowserApi(owner: BrowserWindow, runtime: BrowserUseThreadRuntime): Record<string, unknown> {
+    const tabs = this.createTabsApi(owner, runtime)
+    return {
+      browserId: 'iab',
+      nameSession: async (name: string) => {
+        runtime.sessionName = String(name ?? '').trim()
+        for (const tab of runtime.tabs.values()) {
+          this.setAutomationState(runtime, tab, true, 'session')
+        }
+        return { ok: true, name: runtime.sessionName }
+      },
+      goto: async (url: string) => {
+        const tab = await this.getOrAdoptSelectedTab(owner, runtime)
+        await this.navigate(tab, url)
+        return this.createTabApi(tab)
+      },
+      tabs,
+      user: {
+        openTabs: async () => [...runtime.tabs.values()].map((tab) => this.tabSnapshot(tab)),
+        describeApi: () => ['openTabs()']
+      },
+      capabilities: this.createBrowserCapabilitiesApi(runtime),
+      describeApi: () => [
+        'nameSession(name)',
+        'goto(url)',
+        'tabs.list()',
+        'tabs.new(url?)',
+        'tabs.selected()',
+        'tabs.get(id)',
+        'tabs.finalize({ keep })',
+        'user.openTabs()',
+        'capabilities.list()',
+        'capabilities.get(id)'
+      ]
+    }
+  }
+
+  private createTabsApi(owner: BrowserWindow, runtime: BrowserUseThreadRuntime): Record<string, unknown> {
+    return {
+      list: async () => [...runtime.tabs.values()].map((tab) => this.tabSnapshot(tab)),
+      new: async (url?: string) => {
+        const tab = await this.createTab(owner, runtime, url)
+        runtime.selectedTabId = tab.id
+        return this.createTabApi(tab)
+      },
+      selected: async () => {
+        const tab = await this.getOrAdoptSelectedTab(owner, runtime)
+        return this.createTabApi(tab)
+      },
+      get: async (id: string) => {
+        const tab = runtime.tabs.get(id)
+        if (!tab) throw new Error(`Browser tab not found: ${id}`)
+        return this.createTabApi(tab)
+      },
+      finalize: async (options?: { keep?: unknown[] }) => this.finalizeTabs(runtime, options),
+      describeApi: () => ['list()', 'new(url?)', 'selected()', 'get(id)', 'finalize({ keep })']
+    }
+  }
+
+  private createBrowserCapabilitiesApi(runtime: BrowserUseThreadRuntime): Record<string, unknown> {
+    const available = [
+      { id: 'viewport', description: 'Set or reset the embedded browser viewport size.' },
+      { id: 'visibility', description: 'Show or hide the embedded browser surface.' }
+    ]
+    return {
+      list: async () => available,
+      get: async (id: string) => {
+        if (id === 'viewport') return this.createViewportCapability(runtime)
+        if (id === 'visibility') return this.createVisibilityCapability(runtime)
+        throw new Error(`Browser capability not found: ${id}. Available capabilities: viewport, visibility.`)
+      },
+      describeApi: () => ['list()', 'get("viewport")', 'get("visibility")']
+    }
+  }
+
+  private createViewportCapability(runtime: BrowserUseThreadRuntime): Record<string, unknown> {
+    return {
+      set: async (options: { width?: number; height?: number }) => {
+        const width = this.normalizeViewportDimension(options?.width, 'width')
+        const height = this.normalizeViewportDimension(options?.height, 'height')
+        runtime.viewportWidth = width
+        runtime.viewportHeight = height
+        this.applyViewport(runtime)
+        return { ok: true, width, height }
+      },
+      reset: async () => {
+        runtime.viewportWidth = BROWSER_USE_DEFAULT_VIEWPORT_WIDTH
+        runtime.viewportHeight = BROWSER_USE_DEFAULT_VIEWPORT_HEIGHT
+        this.applyViewport(runtime)
+        return { ok: true, width: runtime.viewportWidth, height: runtime.viewportHeight }
+      },
+      describeApi: () => ['set({ width, height })', 'reset()']
+    }
+  }
+
+  private createVisibilityCapability(runtime: BrowserUseThreadRuntime): Record<string, unknown> {
+    return {
+      get: async () => runtime.browserVisible,
+      set: async (visible: boolean) => {
+        runtime.browserVisible = visible === true
+        for (const tab of runtime.tabs.values()) {
+          this.viewerHost.setVisible?.(tab.owner, { tabId: tab.id, visible: runtime.browserVisible })
+        }
+        return { ok: true, visible: runtime.browserVisible }
+      },
+      describeApi: () => ['get()', 'set(visible)']
+    }
+  }
+
+  private normalizeViewportDimension(value: unknown, name: string): number {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric) || numeric < 200 || numeric > 10_000) {
+      throw new Error(`Invalid browser viewport ${name}: ${value}. Expected a number between 200 and 10000.`)
+    }
+    return Math.round(numeric)
+  }
+
+  private async unsupported(api: string): Promise<never> {
+    throw new Error(`DotCraft embedded browser does not support ${api}.`)
+  }
+
+  private applyViewport(runtime: BrowserUseThreadRuntime): void {
+    for (const tab of runtime.tabs.values()) {
+      this.viewerHost.setBounds?.(tab.owner, {
+        tabId: tab.id,
+        x: 0,
+        y: 0,
+        width: runtime.viewportWidth,
+        height: runtime.viewportHeight
+      })
+    }
+  }
+
+  private async finalizeTabs(
+    runtime: BrowserUseThreadRuntime,
+    options?: { keep?: unknown[] }
+  ): Promise<Record<string, unknown>> {
+    const keep = new Set((options?.keep ?? []).map((item) => this.tabIdFromKeepItem(item)).filter(Boolean))
+    const closed: string[] = []
+    for (const tab of [...runtime.tabs.values()]) {
+      if (tab.adopted || keep.has(tab.id)) continue
+      this.closeTab(tab)
+      closed.push(tab.id)
+    }
+    return { ok: true, closed }
+  }
+
+  private tabIdFromKeepItem(item: unknown): string {
+    if (typeof item === 'string') return item
+    if (item && typeof item === 'object') {
+      const obj = item as Record<string, unknown>
+      if (typeof obj.id === 'string') return obj.id
+      if (typeof obj.tabId === 'string') return obj.tabId
+    }
+    return ''
   }
 
   private async createTab(
@@ -440,12 +603,15 @@ export class BrowserUseManager {
       threadId: runtime.threadId,
       workspacePath: runtime.workspacePath || owner.getTitle(),
       initialUrl: 'about:blank',
-      width: 1280,
-      height: 900,
+      width: runtime.viewportWidth,
+      height: runtime.viewportHeight,
       allowFileScheme: true
     })
 
     const tab = this.registerTab(owner, runtime, id, false)
+    if (!runtime.browserVisible) {
+      this.viewerHost.setVisible?.(owner, { tabId: tab.id, visible: false })
+    }
 
     const focusMode = runtime.hasFocusedFirstTab ? 'none' : 'first-open'
     runtime.hasFocusedFirstTab = true
@@ -881,6 +1047,7 @@ export class BrowserUseManager {
       logs: [],
       adopted,
       snapshotRefs: new Map(),
+      domCuaNodes: new Map(),
       snapshotGeneration: 0
     }
     runtime.tabs.set(id, tab)
@@ -926,16 +1093,44 @@ export class BrowserUseManager {
       consoleLogs: async () => tab.logs.map((entry) => entry.message),
       playwright: this.createPlaywrightApi(tab),
       cua: this.createCuaApi(tab),
+      dom_cua: this.createDomCuaApi(tab),
+      capabilities: {
+        list: async () => [],
+        get: async (id: string) => {
+          throw new Error(`Tab capability not found: ${id}. No tab-scoped capabilities are currently available.`)
+        },
+        describeApi: () => ['list() returns []']
+      },
       dev: {
-        logs: async (options?: { filter?: string; levels?: string[]; limit?: number }) => this.devLogs(tab, options)
+        logs: async (options?: { filter?: string; levels?: string[]; limit?: number }) => this.devLogs(tab, options),
+        describeApi: () => ['logs({ filter?, levels?, limit? })']
       },
       clipboard: {
+        read: async () => this.unsupported('tab.clipboard.read() rich clipboard items'),
         readText: async () => this.executeJavaScript(tab, 'navigator.clipboard.readText()', 'clipboard.readText'),
+        write: async () => this.unsupported('tab.clipboard.write() rich clipboard items'),
         writeText: async (text: string) => this.executeJavaScript(
           tab,
           `navigator.clipboard.writeText(${JSON.stringify(String(text ?? ''))})`,
-          'clipboard.writeText')
-      }
+          'clipboard.writeText'),
+        describeApi: () => ['readText()', 'writeText(text)', 'read() unsupported', 'write(items) unsupported']
+      },
+      describeApi: () => [
+        'goto(url)',
+        'reload()',
+        'back()',
+        'forward()',
+        'close()',
+        'url()',
+        'title()',
+        'domSnapshot()',
+        'screenshot(options?)',
+        'evaluate(expressionOrFunction)',
+        'playwright.*',
+        'cua.*',
+        'dom_cua.*',
+        'capabilities.list() returns []'
+      ]
     }
   }
 
@@ -945,11 +1140,155 @@ export class BrowserUseManager {
       click: async (options: { x: number; y: number; button?: number | string }) => this.cuaClick(tab, options),
       double_click: async (options: { x: number; y: number; button?: number | string }) => this.cuaDoubleClick(tab, options),
       drag: async (options: { path: Array<{ x: number; y: number }> }) => this.cuaDrag(tab, options),
-      scroll: async (options: { x: number; y: number; scrollX: number; scrollY: number }) => this.cuaScroll(tab, options),
-      type: async (options: { text: string }) => this.cuaType(tab, options),
-      keypress: async (options: { keys: string[] }) => this.cuaKeypress(tab, options),
-      get_visible_screenshot: async () => this.screenshot(tab)
+      scroll: async (options: { x: number; y: number; scrollX?: number; scrollY?: number; deltaX?: number; deltaY?: number }) => this.cuaScroll(tab, this.normalizeScrollOptions(options)),
+      type: async (options: { text: string } | string) => this.cuaType(tab, this.normalizeTypeOptions(options)),
+      keypress: async (options: { keys: string[] } | string | string[]) => this.cuaKeypress(tab, this.normalizeKeypressOptions(options)),
+      get_visible_screenshot: async () => this.screenshot(tab),
+      download_media: async () => this.unsupported('tab.cua.download_media()'),
+      describeApi: () => ['move({ x, y })', 'click({ x, y })', 'double_click({ x, y })', 'drag({ path })', 'scroll({ x, y, scrollX?, scrollY?, deltaX?, deltaY? })', 'type(textOrOptions)', 'keypress(keyOrOptions)', 'get_visible_screenshot()', 'download_media() unsupported']
     }
+  }
+
+  private createDomCuaApi(tab: BrowserUseTabRuntime): Record<string, unknown> {
+    return {
+      get_visible_dom: async () => this.domCuaVisibleDom(tab),
+      click: async (options: { node_id?: string }) => this.domCuaClick(tab, options, false),
+      double_click: async (options: { node_id?: string }) => this.domCuaClick(tab, options, true),
+      type: async (options: { node_id?: string; text?: string } | string) => this.domCuaType(tab, options),
+      keypress: async (options: { node_id?: string; key?: string; keys?: string[] } | string | string[]) => this.domCuaKeypress(tab, options),
+      scroll: async (options: { node_id?: string; x?: number; y?: number; scrollX?: number; scrollY?: number; deltaX?: number; deltaY?: number }) => this.domCuaScroll(tab, options),
+      download_media: async () => this.unsupported('tab.dom_cua.download_media()'),
+      describeApi: () => ['get_visible_dom()', 'click({ node_id })', 'double_click({ node_id })', 'type({ node_id?, text })', 'keypress({ node_id?, key|keys })', 'scroll({ node_id?, deltaX?, deltaY? })', 'download_media() unsupported']
+    }
+  }
+
+  private normalizeScrollOptions(options: {
+    x?: number
+    y?: number
+    scrollX?: number
+    scrollY?: number
+    deltaX?: number
+    deltaY?: number
+  } = {}): { x: number; y: number; scrollX: number; scrollY: number } {
+    return {
+      x: Number(options.x ?? 0),
+      y: Number(options.y ?? 0),
+      scrollX: Number(options.scrollX ?? options.deltaX ?? 0),
+      scrollY: Number(options.scrollY ?? options.deltaY ?? 0)
+    }
+  }
+
+  private normalizeTypeOptions(options: { text?: string } | string): { text: string } {
+    return typeof options === 'string'
+      ? { text: options }
+      : { text: String(options?.text ?? '') }
+  }
+
+  private normalizeKeypressOptions(options: { key?: string; keys?: string[] } | string | string[]): { keys: string[] } {
+    if (typeof options === 'string') return { keys: [options] }
+    if (Array.isArray(options)) return { keys: options.map(String) }
+    const keys = Array.isArray(options?.keys)
+      ? options.keys.map(String)
+      : options?.key == null ? [] : [String(options.key)]
+    return { keys }
+  }
+
+  private async domCuaVisibleDom(tab: BrowserUseTabRuntime): Promise<Array<Record<string, unknown>>> {
+    const snapshot = JSON.parse(await this.domSnapshot(tab)) as { elements?: BrowserUseElementMatch[] }
+    tab.domCuaNodes.clear()
+    return (snapshot.elements ?? []).map((element, index) => {
+      const nodeId = element.ref ?? `dom:${index}`
+      tab.domCuaNodes.set(nodeId, element)
+      return {
+        node_id: nodeId,
+        ref: element.ref,
+        tagName: element.tagName || element.tag,
+        role: element.role,
+        name: element.name || element.ariaName,
+        text: element.visibleText || element.text,
+        selector: element.selector,
+        href: element.href,
+        testId: element.testId,
+        visible: element.visible,
+        enabled: element.enabled,
+        boundingBox: element.boundingBox
+      }
+    })
+  }
+
+  private domCuaTarget(tab: BrowserUseTabRuntime, options: { node_id?: string } = {}): BrowserUseElementMatch {
+    const nodeId = String(options.node_id ?? '')
+    if (!nodeId) throw new Error('DOM CUA action requires node_id from get_visible_dom().')
+    const current = tab.snapshotRefs.get(nodeId)
+    if (current) return current
+    const cached = tab.domCuaNodes.get(nodeId)
+    if (cached) return cached
+    const domIndex = /^dom:(\d+)$/.exec(nodeId)
+    if (domIndex) {
+      const index = Number(domIndex[1])
+      const match = [...tab.snapshotRefs.values()].find((item) => item.index === index)
+      if (match) return match
+    }
+    throw new Error(`DOM CUA node is no longer available: ${nodeId}. Take a fresh get_visible_dom() snapshot.`)
+  }
+
+  private domCuaRef(tab: BrowserUseTabRuntime, options: { node_id?: string } = {}): string {
+    const nodeId = String(options.node_id ?? '')
+    if (tab.snapshotRefs.has(nodeId)) return nodeId
+    const target = this.domCuaTarget(tab, options)
+    if (target.ref && tab.snapshotRefs.has(target.ref)) return target.ref
+    throw new Error(`DOM CUA node cannot be resolved to a live ref: ${nodeId}. Take a fresh get_visible_dom() snapshot.`)
+  }
+
+  private async domCuaClick(
+    tab: BrowserUseTabRuntime,
+    options: { node_id?: string },
+    doubleClick: boolean
+  ): Promise<void> {
+    const target = this.domCuaTarget(tab, options)
+    const point = this.actionPoint(target)
+    if (doubleClick) await this.cuaDoubleClick(tab, point)
+    else await this.cuaClick(tab, { ...point, preserveRefs: true })
+  }
+
+  private async domCuaType(
+    tab: BrowserUseTabRuntime,
+    options: { node_id?: string; text?: string } | string
+  ): Promise<void> {
+    if (typeof options === 'string') {
+      await this.cuaType(tab, { text: options })
+      return
+    }
+    if (options.node_id) {
+      const point = this.actionPoint(this.domCuaTarget(tab, options))
+      await this.cuaClick(tab, { ...point, preserveRefs: true })
+    }
+    await this.cuaType(tab, { text: String(options.text ?? '') })
+  }
+
+  private async domCuaKeypress(
+    tab: BrowserUseTabRuntime,
+    options: { node_id?: string; key?: string; keys?: string[] } | string | string[]
+  ): Promise<void> {
+    if (options && typeof options === 'object' && !Array.isArray(options) && options.node_id) {
+      const point = this.actionPoint(this.domCuaTarget(tab, options))
+      await this.cuaClick(tab, { ...point, preserveRefs: true })
+    }
+    await this.cuaKeypress(tab, this.normalizeKeypressOptions(options))
+  }
+
+  private async domCuaScroll(
+    tab: BrowserUseTabRuntime,
+    options: { node_id?: string; x?: number; y?: number; scrollX?: number; scrollY?: number; deltaX?: number; deltaY?: number } = {}
+  ): Promise<void> {
+    const scroll = this.normalizeScrollOptions(options)
+    if (options.node_id) {
+      const target = this.domCuaTarget(tab, options)
+      const point = this.actionPoint(target)
+      await this.cuaScroll(tab, { ...scroll, ...point })
+      return
+    }
+    await this.cuaScroll(tab, scroll)
   }
 
   private createPlaywrightApi(tab: BrowserUseTabRuntime): Record<string, unknown> {
@@ -968,6 +1307,7 @@ export class BrowserUseManager {
         const timeout = options?.timeoutMs ?? options?.timeout ?? 30_000
         return this.waitForUrl(tab, url, timeout)
       },
+      waitForEvent: async (event: string) => this.unsupported(`tab.playwright.waitForEvent("${event}")`),
       expectNavigation: async <T>(action: () => Promise<T>, options?: { timeoutMs?: number; url?: string }) => {
         const result = await action()
         if (options?.url) {
@@ -1005,7 +1345,8 @@ export class BrowserUseManager {
       }),
       frameLocator: () => {
         throw new Error('Browser Use frameLocator is not supported in this Desktop runtime yet.')
-      }
+      },
+      describeApi: () => ['domSnapshot()', 'screenshot(options?)', 'waitForLoadState(stateOrOptions?, timeoutMs?)', 'waitForURL(url, options?)', 'waitForTimeout(ms)', 'expectNavigation(action, options?)', 'locator(selector)', 'getByRole(role, options?)', 'getByText(text, options?)', 'getByLabel(text, options?)', 'getByPlaceholder(text, options?)', 'getByTestId(testId)', 'waitForEvent(event) unsupported', 'frameLocator(selector) unsupported']
     }
   }
 
@@ -1017,6 +1358,11 @@ export class BrowserUseManager {
       fill: async (value: string) => this.locatorFill(tab, descriptor, value),
       type: async (value: string) => this.locatorType(tab, descriptor, value),
       press: async (value: string) => this.locatorPress(tab, descriptor, value),
+      allTextContents: async () => (await this.resolveLocator(tab, descriptor)).map((match) => match.text || match.visibleText),
+      check: async () => this.locatorSetChecked(tab, descriptor, true),
+      uncheck: async () => this.locatorSetChecked(tab, descriptor, false),
+      setChecked: async (checked: boolean) => this.locatorSetChecked(tab, descriptor, checked === true),
+      selectOption: async (value: unknown) => this.locatorSelectOption(tab, descriptor, value),
       innerText: async () => (await this.strictLocator(tab, descriptor)).visibleText,
       textContent: async () => this.locatorEvaluate(tab, descriptor, 'textContent'),
       getAttribute: async (name: string) => this.locatorEvaluate(tab, descriptor, 'getAttribute', name),
@@ -1036,9 +1382,10 @@ export class BrowserUseManager {
       }),
       getByTestId: (testId: string) => this.createLocatorApi(tab, { kind: 'testId', value: String(testId) }),
       locator: (selector: string) => this.createLocatorApi(tab, { kind: 'css', value: String(selector) }),
-      first: () => this.createLocatorApi(tab, descriptor),
-      last: () => this.createLocatorApi(tab, descriptor),
-      nth: () => this.createLocatorApi(tab, descriptor)
+      first: () => this.createLocatorApi(tab, { ...descriptor, index: 0 }),
+      last: () => this.createLocatorApi(tab, { ...descriptor, index: -1 }),
+      nth: (index: number) => this.createLocatorApi(tab, { ...descriptor, index: Math.trunc(Number(index)) }),
+      describeApi: () => ['count()', 'click()', 'dblclick()', 'fill(value)', 'type(value)', 'press(key)', 'innerText()', 'textContent()', 'getAttribute(name)', 'isVisible()', 'isEnabled()', 'waitFor({ state, timeoutMs })', 'allTextContents()', 'check()', 'uncheck()', 'setChecked(checked)', 'selectOption(value)', 'first()', 'last()', 'nth(index)']
     }
   }
 
@@ -1108,8 +1455,11 @@ export class BrowserUseManager {
 
   private closeTab(tab: BrowserUseTabRuntime): void {
     this.markAutomation(tab, 'close')
+    const runtime = this.getRuntimeForTab(tab)
     this.detachDebugger(tab)
     this.viewerHost.destroyTab(tab.owner, tab.id)
+    runtime.tabs.delete(tab.id)
+    if (runtime.selectedTabId === tab.id) runtime.selectedTabId = null
   }
 
   private async navigate(
@@ -1659,6 +2009,113 @@ export class BrowserUseManager {
     await this.cuaKeypress(tab, { keys: [String(value)] })
   }
 
+  private async locatorSetChecked(
+    tab: BrowserUseTabRuntime,
+    descriptor: BrowserUseLocatorDescriptor,
+    checked: boolean
+  ): Promise<void> {
+    const target = await this.waitForActionableLocator(tab, descriptor)
+    const locator = this.selectorForResolvedLocator(tab, descriptor, target)
+    await this.ensurePlaywrightInjected(tab)
+    const script = `
+      ((parsed, snapshotRef, checked) => {
+        const injected = window.__dotcraftPlaywrightInjected;
+        const matchesSnapshotRef = (info) => {
+          if (!snapshotRef) return true;
+          if (snapshotRef.href && info.href !== snapshotRef.href) return false;
+          if (snapshotRef.testId && info.testId !== snapshotRef.testId) return false;
+          if (snapshotRef.role && info.role !== snapshotRef.role) return false;
+          if (snapshotRef.tagName && info.tagName !== snapshotRef.tagName && info.tag !== snapshotRef.tagName) return false;
+          if (snapshotRef.expectedName) {
+            const actualName = info.name || info.text || info.visibleText;
+            if (actualName !== snapshotRef.expectedName) return false;
+          }
+          return true;
+        };
+        const candidates = injected.querySelectorAll(parsed, document).map((el, index) => ({
+          el,
+          info: window.__dotcraftBrowserUseElementInfo(el, index)
+        })).filter((candidate) => matchesSnapshotRef(candidate.info));
+        if (candidates.length !== 1) throw new Error('Locator resolved to ' + candidates.length + ' elements for checkbox state change.');
+        const el = candidates[0].el;
+        if (!('checked' in el)) throw new Error('Locator does not resolve to a checkable control.');
+        if (el.checked !== checked) {
+          el.focus();
+          el.checked = checked;
+          el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return true;
+      })(${JSON.stringify(locator.parsed)}, ${JSON.stringify(locator.snapshotRefFilter)}, ${JSON.stringify(checked)})
+    `
+    await this.executeJavaScript(tab, script, 'locator.setChecked')
+    this.invalidateSnapshotRefs(tab)
+  }
+
+  private async locatorSelectOption(
+    tab: BrowserUseTabRuntime,
+    descriptor: BrowserUseLocatorDescriptor,
+    value: unknown
+  ): Promise<void> {
+    const target = await this.waitForActionableLocator(tab, descriptor)
+    const locator = this.selectorForResolvedLocator(tab, descriptor, target)
+    const values = (Array.isArray(value) ? value : [value]).map((item) => {
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>
+        return {
+          value: obj.value == null ? undefined : String(obj.value),
+          label: obj.label == null ? undefined : String(obj.label),
+          index: typeof obj.index === 'number' ? obj.index : undefined
+        }
+      }
+      return { value: String(item ?? '') }
+    })
+    await this.ensurePlaywrightInjected(tab)
+    const script = `
+      ((parsed, snapshotRef, requested) => {
+        const injected = window.__dotcraftPlaywrightInjected;
+        const matchesSnapshotRef = (info) => {
+          if (!snapshotRef) return true;
+          if (snapshotRef.href && info.href !== snapshotRef.href) return false;
+          if (snapshotRef.testId && info.testId !== snapshotRef.testId) return false;
+          if (snapshotRef.role && info.role !== snapshotRef.role) return false;
+          if (snapshotRef.tagName && info.tagName !== snapshotRef.tagName && info.tag !== snapshotRef.tagName) return false;
+          if (snapshotRef.expectedName) {
+            const actualName = info.name || info.text || info.visibleText;
+            if (actualName !== snapshotRef.expectedName) return false;
+          }
+          return true;
+        };
+        const candidates = injected.querySelectorAll(parsed, document).map((el, index) => ({
+          el,
+          info: window.__dotcraftBrowserUseElementInfo(el, index)
+        })).filter((candidate) => matchesSnapshotRef(candidate.info));
+        if (candidates.length !== 1) throw new Error('Locator resolved to ' + candidates.length + ' elements for selectOption.');
+        const select = candidates[0].el;
+        if (select.tagName?.toLowerCase() !== 'select') throw new Error('selectOption requires a native <select> element.');
+        const options = Array.from(select.options);
+        const selected = [];
+        for (const item of requested) {
+          const match = options.find((option, index) =>
+            (item.index !== undefined && index === item.index) ||
+            (item.value !== undefined && option.value === item.value) ||
+            (item.label !== undefined && option.label === item.label)
+          );
+          if (!match) throw new Error('No matching <option> found for selectOption.');
+          selected.push(match);
+        }
+        if (!select.multiple && selected.length > 1) throw new Error('Cannot select multiple options on a single-select element.');
+        for (const option of options) option.selected = selected.includes(option);
+        select.focus();
+        select.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })(${JSON.stringify(locator.parsed)}, ${JSON.stringify(locator.snapshotRefFilter)}, ${JSON.stringify(values)})
+    `
+    await this.executeJavaScript(tab, script, 'locator.selectOption')
+    this.invalidateSnapshotRefs(tab)
+  }
+
   private async waitForActionableLocator(
     tab: BrowserUseTabRuntime,
     descriptor: BrowserUseLocatorDescriptor
@@ -1748,10 +2205,22 @@ export class BrowserUseManager {
     const normalized = Array.isArray(matches)
       ? matches.map((match, index) => this.normalizeElementMatch(match, index))
       : []
-    if (!snapshotRef) return normalized
-    return normalized
+    const filtered = snapshotRef
+      ? normalized
       .filter((match) => this.matchesSnapshotRef(match, snapshotRef))
       .map((match) => ({ ...match, ref: snapshotRef.ref }))
+      : normalized
+    return this.applyLocatorIndex(filtered, descriptor)
+  }
+
+  private applyLocatorIndex(
+    matches: BrowserUseElementMatch[],
+    descriptor: BrowserUseLocatorDescriptor
+  ): BrowserUseElementMatch[] {
+    if (descriptor.index === undefined) return matches
+    const index = descriptor.index < 0 ? matches.length + descriptor.index : descriptor.index
+    const match = matches[index]
+    return match ? [match] : []
   }
 
   private snapshotRef(tab: BrowserUseTabRuntime, ref: string): BrowserUseElementMatch {
@@ -1951,14 +2420,26 @@ export class BrowserUseManager {
     options?: { state?: string; timeoutMs?: number }
   ): Promise<void> {
     const expected = options?.state ?? 'visible'
+    if (!['attached', 'visible', 'hidden', 'detached'].includes(expected)) {
+      throw new Error(`Unsupported locator.waitFor state: ${expected}. Use attached, visible, hidden, or detached.`)
+    }
     const deadline = Date.now() + Math.max(1_000, Math.min(options?.timeoutMs ?? 30_000, 120_000))
+    let lastMatchCount = 0
+    let lastVisibleCount = 0
     for (;;) {
       const signal = this.getRuntimeForTab(tab).activeAbortSignal
       if (signal?.aborted) throw new Error(`Browser operation 'locator.waitFor' was cancelled for tab ${tab.id}.`)
       const matches = await this.resolveLocator(tab, descriptor)
       const visibleCount = matches.filter((m) => m.visible).length
-      if ((expected === 'hidden') ? visibleCount === 0 : (expected === 'detached') ? matches.length === 0 : visibleCount > 0) return
-      if (Date.now() > deadline) throw new Error(`Timed out waiting for locator ${this.describeLocator(descriptor)} to be ${expected}.`)
+      lastMatchCount = matches.length
+      lastVisibleCount = visibleCount
+      if (expected === 'attached' && matches.length > 0) return
+      if (expected === 'visible' && visibleCount > 0) return
+      if (expected === 'hidden' && visibleCount === 0) return
+      if (expected === 'detached' && matches.length === 0) return
+      if (Date.now() > deadline) {
+        throw new Error(`Timed out waiting for locator ${this.describeLocator(descriptor)} to be ${expected}. matches=${lastMatchCount} visible=${lastVisibleCount}.`)
+      }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
   }
@@ -2046,7 +2527,8 @@ export class BrowserUseManager {
   }
 
   private describeLocator(descriptor: BrowserUseLocatorDescriptor): string {
-    return `${descriptor.kind}=${descriptor.name ?? descriptor.value}`
+    const index = descriptor.index === undefined ? '' : `[${descriptor.index}]`
+    return `${descriptor.kind}=${descriptor.name ?? descriptor.value}${index}`
   }
 
   private normalizeLoadState(state: string): BrowserUseLoadState {

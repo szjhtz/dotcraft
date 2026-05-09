@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using DotCraft.Agents;
 using DotCraft.Configuration;
+using DotCraft.Context;
 using DotCraft.Security;
 
 namespace DotCraft.Skills;
@@ -13,7 +14,8 @@ namespace DotCraft.Skills;
 public sealed class SkillManageTool(
     ISkillMutationApplier mutationApplier,
     AppConfig.SelfLearningConfig config,
-    IApprovalService? approvalService = null)
+    IApprovalService? approvalService = null,
+    IContextPageManager? contextPageManager = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -100,7 +102,7 @@ public sealed class SkillManageTool(
         if (!approved)
             return Error($"Skill create for '{name}' was rejected by user.");
 
-        return Serialize(await mutationApplier.CreateAsync(new SkillCreateRequest(name, content), cancellationToken));
+        return SerializeAndMark(await mutationApplier.CreateAsync(new SkillCreateRequest(name, content), cancellationToken));
     }
 
     private async Task<string> EditAsync(string name, string? content, CancellationToken cancellationToken)
@@ -112,7 +114,7 @@ public sealed class SkillManageTool(
         if (validationError != null)
             return Error(validationError);
 
-        return Serialize(await mutationApplier.EditAsync(new SkillEditRequest(name, content), cancellationToken));
+        return SerializeAndMark(await mutationApplier.EditAsync(new SkillEditRequest(name, content), cancellationToken));
     }
 
     private async Task<string> PatchAsync(
@@ -129,7 +131,7 @@ public sealed class SkillManageTool(
         if (newString == null)
             return Error("newString is required for action 'patch'. Use an empty string to delete matched text.");
 
-        return Serialize(await mutationApplier.PatchAsync(
+        return SerializeAndMark(await mutationApplier.PatchAsync(
             new SkillPatchRequest(
                 name,
                 oldString,
@@ -147,7 +149,7 @@ public sealed class SkillManageTool(
         if (!approved)
             return Error($"Skill delete for '{name}' was rejected by user.");
 
-        return Serialize(await mutationApplier.DeleteAsync(new SkillDeleteRequest(name), cancellationToken));
+        return SerializeAndMark(await mutationApplier.DeleteAsync(new SkillDeleteRequest(name), cancellationToken));
     }
 
     private async Task<string> WriteFileAsync(
@@ -169,7 +171,7 @@ public sealed class SkillManageTool(
         if (byteCount > maxBytes)
             return Error($"File content is {byteCount:N0} bytes (limit: {maxBytes:N0}).");
 
-        return Serialize(await mutationApplier.WriteFileAsync(
+        return SerializeAndMark(await mutationApplier.WriteFileAsync(
             new SkillWriteFileRequest(name, filePath, fileContent),
             cancellationToken));
     }
@@ -179,7 +181,7 @@ public sealed class SkillManageTool(
         if (string.IsNullOrWhiteSpace(filePath))
             return Error("filePath is required for action 'remove_file'.");
 
-        return Serialize(await mutationApplier.RemoveFileAsync(
+        return SerializeAndMark(await mutationApplier.RemoveFileAsync(
             new SkillRemoveFileRequest(name, filePath),
             cancellationToken));
     }
@@ -212,6 +214,13 @@ public sealed class SkillManageTool(
 
     private static string Serialize(SkillMutationResult result) =>
         JsonSerializer.Serialize(result, JsonOptions);
+
+    private string SerializeAndMark(SkillMutationResult result)
+    {
+        if (result.Success)
+            contextPageManager?.MarkDirty(ContextPageKeys.SkillsWildcard());
+        return Serialize(result);
+    }
 
     private static string Error(string message) =>
         Serialize(SkillMutationResult.Fail(message));

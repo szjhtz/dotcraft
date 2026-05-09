@@ -402,6 +402,7 @@ export class WireProtocolClient extends EventEmitter {
           },
           browserUse: {
             backend: 'desktop-iab',
+            backends: ['desktop-iab'],
             protocolVersion: 2,
             supportsCancel: true
           }

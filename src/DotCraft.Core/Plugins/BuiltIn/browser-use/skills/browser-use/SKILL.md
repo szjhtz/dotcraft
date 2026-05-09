@@ -17,14 +17,17 @@ if (!globalThis.agent) {
   const { setupAtlasRuntime } = await import(dotcraft.browserUseClientPath);
   await setupAtlasRuntime({ globals: globalThis, backend: "iab" });
 }
-
-await agent.browser.nameSession("local app check");
-
-if (!globalThis.tab) {
-  globalThis.tab = await agent.browser.tabs.selected();
+if (!globalThis.browser) {
+  globalThis.browser = await agent.browsers.get("iab");
 }
 
-await globalThis.tab.domSnapshot();
+await browser.nameSession("local app check");
+
+if (typeof tab === "undefined") {
+  globalThis.tab = await browser.tabs.selected();
+}
+
+await tab.domSnapshot();
 ```
 
 To open a specific target:
@@ -34,16 +37,20 @@ if (!globalThis.agent) {
   const { setupAtlasRuntime } = await import(dotcraft.browserUseClientPath);
   await setupAtlasRuntime({ globals: globalThis, backend: "iab" });
 }
+if (!globalThis.browser) {
+  globalThis.browser = await agent.browsers.get("iab");
+}
 
-await agent.browser.nameSession("docs smoke test");
-globalThis.tab = await agent.browser.goto("http://localhost:3000");
-await globalThis.tab.waitForLoadState("load");
-await globalThis.tab.domSnapshot();
+await browser.nameSession("docs smoke test");
+globalThis.tab = await browser.goto("http://localhost:3000");
+await tab.waitForLoadState("load");
+await tab.domSnapshot();
 ```
 
 ## Runtime rules
 
 - Reuse `globalThis.tab` for the active browser tab. Use temporary `const`/`let` freely inside one `NodeReplJs` call.
+- Use `agent.browsers.get("iab")` for new code. `agent.browser` remains available as a compatibility alias.
 - Store only cross-call state on `globalThis`, such as `globalThis.tab`, `globalThis.lastSnapshot`, or a current ref chosen from the latest snapshot.
 - Use `console.log(...)` for values you need to inspect, or `display(await globalThis.tab.screenshot())` when visual inspection matters.
 - A single-expression cell can return a result. In multi-statement cells, use explicit `return ...` if you need `resultText`; otherwise rely on `console.log`.
@@ -76,6 +83,7 @@ await globalThis.tab.domSnapshot();
 - Avoid fixed sleeps. Prefer explicit `waitForURL`, `waitForLoadState`, or locator `waitFor` after the action. For SPA navigation, call the click first, then wait for the expected URL or observe again.
 - Do not `goto` the current URL unless a reload is intended. Use `reload()` after local code changes, then observe again.
 - For real pointer behavior, use `tab.cua.move`, `click`, `drag`, or `scroll`; these show the Desktop virtual cursor when the page overlay is available.
+- For node-id interactions, use `tab.dom_cua.get_visible_dom()` and then `tab.dom_cua.click({ node_id })` or related methods.
 
 ## Error recovery
 
@@ -104,15 +112,30 @@ await globalThis.tab.domSnapshot();
 
 Runtime:
 
-- `agent.browser.nameSession(name)`
-- `agent.browser.goto(url)`
-- `agent.browser.tabs.list()`
-- `agent.browser.tabs.new(url?)`
-- `agent.browser.tabs.selected()`
-- `agent.browser.tabs.get(id)`
+- `agent.browsers.list()`
+- `agent.browsers.get("iab")`
+- `browser.describeApi()`
+- `browser.nameSession(name)`
+- `browser.goto(url)`
+- `browser.user.openTabs()`
+- `browser.tabs.list()`
+- `browser.tabs.new(url?)`
+- `browser.tabs.selected()`
+- `browser.tabs.get(id)`
+- `browser.tabs.finalize({ keep })`
+- `browser.capabilities.list()`
+- `browser.capabilities.get("viewport")`
+- `browser.capabilities.get("visibility")`
 - `display(imageLike)`
 
-`tabs.list()` returns metadata snapshots: `{ id, url, title, loading }`. To operate on a listed tab, first call `agent.browser.tabs.get(id)`.
+`agent.browser` is the same browser object as `await agent.browsers.get("iab")`. `tabs.list()` returns metadata snapshots: `{ id, url, title, loading }`. To operate on a listed tab, first call `browser.tabs.get(id)`.
+
+Browser capabilities:
+
+- `viewport.set({ width, height })`
+- `viewport.reset()`
+- `visibility.get()`
+- `visibility.set(visible)`
 
 Tab:
 
@@ -125,6 +148,8 @@ Tab:
 - `tab.clickRef(ref)` / `tab.fillRef(ref, text)` / `tab.pressRef(ref, key)`
 - `tab.waitForLoadState(state?, timeoutMs?)`
 - `tab.consoleLogs()`
+- `tab.capabilities.list()` returns `[]`
+- `tab.describeApi()`
 
 Playwright-like:
 
@@ -132,6 +157,7 @@ Playwright-like:
 - `tab.playwright.screenshot(options?)`
 - `tab.playwright.waitForLoadState(state?, timeoutMs?)`
 - `tab.playwright.waitForURL(urlOrPattern, options?)`
+- `tab.playwright.waitForEvent(event)` exists but file chooser and download events are unsupported in the embedded browser.
 - `tab.playwright.clickRef(ref)` / `tab.playwright.fillRef(ref, text)` / `tab.playwright.pressRef(ref, key)`
 - `tab.playwright.locator(selector)`
 - `tab.playwright.getByRole(role, { name?, exact? })`
@@ -147,7 +173,11 @@ Locator:
 - `locator.fill(value)` / `locator.type(value)` / `locator.press(key)`
 - `locator.innerText()` / `locator.textContent()` / `locator.getAttribute(name)`
 - `locator.isVisible()` / `locator.isEnabled()`
-- `locator.waitFor({ state?, timeoutMs? })`
+- `locator.waitFor({ state?, timeoutMs? })` with `attached`, `visible`, `hidden`, or `detached`
+- `locator.allTextContents()`
+- `locator.check()` / `locator.uncheck()` / `locator.setChecked(checked)`
+- `locator.selectOption(value)`
+- `locator.first()` / `locator.last()` / `locator.nth(index)`
 
 CUA and diagnostics:
 
@@ -155,11 +185,26 @@ CUA and diagnostics:
 - `tab.cua.click({ x, y })`
 - `tab.cua.double_click({ x, y })`
 - `tab.cua.drag({ path })`
-- `tab.cua.scroll({ x, y, scrollX, scrollY })`
-- `tab.cua.type({ text })`
-- `tab.cua.keypress({ keys })`
+- `tab.cua.scroll({ x, y, scrollX?, scrollY?, deltaX?, deltaY? })`
+- `tab.cua.type("text")` / `tab.cua.type({ text })`
+- `tab.cua.keypress("Enter")` / `tab.cua.keypress(["Control", "A"])` / `tab.cua.keypress({ keys })`
 - `tab.cua.get_visible_screenshot()`
+- `tab.dom_cua.get_visible_dom()`
+- `tab.dom_cua.click({ node_id })`
+- `tab.dom_cua.double_click({ node_id })`
+- `tab.dom_cua.type({ node_id?, text })`
+- `tab.dom_cua.keypress({ node_id?, key })`
+- `tab.dom_cua.scroll({ node_id?, deltaX?, deltaY? })`
 - `tab.dev.logs({ filter?, levels?, limit? })`
 - `tab.clipboard.readText()` / `tab.clipboard.writeText(text)`
+
+Unsupported APIs fail with explicit errors:
+
+- `tab.playwright.waitForEvent("download")`
+- `tab.playwright.waitForEvent("filechooser")`
+- `tab.playwright.frameLocator(...)`
+- `tab.cua.download_media()`
+- `tab.dom_cua.download_media()`
+- `tab.clipboard.read()` / `tab.clipboard.write(items)`
 
 Do not assume the full upstream Playwright API exists. Use only the APIs above unless the runtime proves another method is available.
