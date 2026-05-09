@@ -1,6 +1,9 @@
 using DotCraft.Agents;
+using DotCraft.Configuration;
 using DotCraft.Context;
 using DotCraft.Protocol;
+using System.ClientModel.Primitives;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Tests.Agents;
@@ -313,6 +316,46 @@ public sealed partial class StreamingFunctionInvokingChatClientTests
 
         var detailedResult = Assert.Single(detailedInner.Calls[1].SelectMany(message => message.Contents).OfType<FunctionResultContent>());
         Assert.Contains("boom", detailedResult.Result?.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WithDeepSeekThinking_PreservesAssistantReasoningBeforeToolResult()
+    {
+        var inner = new DeepSeekThinkingRoundTripFakeChatClient();
+        var deepSeek = new DeepSeekThinkingChatClient(
+            inner,
+            new AppConfig
+            {
+                EndPoint = "https://api.deepseek.com/v1",
+                Model = "deepseek-reasoner"
+            },
+            "deepseek-reasoner");
+        var tool = AIFunctionFactory.Create(() => "tool ok", name: "GetStatus");
+        var client = new StreamingFunctionInvokingChatClient(deepSeek)
+        {
+            AdditionalTools = [tool]
+        };
+
+        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "start")]))
+        {
+        }
+
+        Assert.Equal(2, inner.Calls.Count);
+        var secondRequest = inner.Calls[1];
+        var assistantIndex = secondRequest.FindIndex(message => message.Role == ChatRole.Assistant);
+        var toolIndex = secondRequest.FindIndex(message => message.Role == ChatRole.Tool);
+        Assert.True(assistantIndex >= 0);
+        Assert.True(toolIndex > assistantIndex);
+
+        var assistant = secondRequest[assistantIndex];
+        Assert.Contains(assistant.Contents, content => content is TextReasoningContent);
+        Assert.Contains(assistant.Contents, content => content is FunctionCallContent);
+        var raw = Assert.IsType<OpenAI.Chat.AssistantChatMessage>(assistant.RawRepresentation);
+        using var document = JsonDocument.Parse(ModelReaderWriter.Write(raw).ToString());
+        var root = document.RootElement;
+        Assert.Equal("need status", root.GetProperty("reasoning_content").GetString());
+        Assert.Equal("Checking.", root.GetProperty("content").GetString());
+        Assert.Equal("call-1", Assert.Single(root.GetProperty("tool_calls").EnumerateArray()).GetProperty("id").GetString());
     }
 
     [Fact]
@@ -655,6 +698,45 @@ public sealed partial class StreamingFunctionInvokingChatClientTests
             {
                 yield return new ChatResponseUpdate(ChatRole.Assistant, [
                     new FunctionCallContent("call-1", "Fail", new Dictionary<string, object?>())
+                ]);
+            }
+            else
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "done");
+            }
+
+            await Task.CompletedTask;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class DeepSeekThinkingRoundTripFakeChatClient : IChatClient
+    {
+        public List<List<ChatMessage>> Calls { get; } = [];
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Calls.Add(chatMessages.ToList());
+            if (Calls.Count == 1)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextReasoningContent("need status")]);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [
+                    new TextContent("Checking."),
+                    new FunctionCallContent("call-1", "GetStatus", new Dictionary<string, object?>())
                 ]);
             }
             else

@@ -74,6 +74,21 @@ DotCraft 内置一份常见模型的上下文窗口映射表，并会在 `Compac
 | `Reasoning.Effort` | 推理深度：`None` / `Low` / `Medium` / `High` / `ExtraHigh` | `Medium` |
 | `Reasoning.Output` | 推理内容是否暴露在响应中：`None` / `Summary` / `Full` | `Full` |
 
+使用 OpenAI-compatible DeepSeek endpoint 时，只要 `EndPoint` host 或 `Model` 包含 `deepseek`，DotCraft 会自动启用 DeepSeek thinking/tool-call 兼容层。工具调用轮次里，上一条 assistant 的 `reasoning_content` 会随 `content` 和 `tool_calls` 一起回传，满足 DeepSeek thinking mode 的要求；不需要新增 `Provider` 配置。
+
+```json
+{
+  "ApiKey": "sk-...",
+  "EndPoint": "https://api.deepseek.com/v1",
+  "Model": "deepseek-reasoner",
+  "Reasoning": {
+    "Enabled": true,
+    "Effort": "Medium",
+    "Output": "Full"
+  }
+}
+```
+
 ## PromptCaching
 
 用于无法修改 LiteLLM proxy 配置时，在 DotCraft 客户端侧为 OpenAI-compatible Claude 请求注入 Anthropic/LiteLLM prompt cache marker。DotCraft 会把 `cache_control` 放到当前请求尾部的最后一个可缓存文本位置上：优先标记最新 user request 或 assistant response，跳过 tool result 以避免改变工具结果的序列化形态。单文本消息会保持原始字符串内容；已有 content-block 数组的消息会在文本 block 上附加 marker。v1 每次只放一个 tail breakpoint；如果单轮产生超过约 20 个 content blocks，后续可能需要更细的多 breakpoint 策略。

@@ -466,10 +466,150 @@ public sealed class ThreadStoreTests : IDisposable
         Assert.Equal(
             [
                 "user:hello",
-                "assistant:before tool",
-                "assistant:function_call:ReadFile:call-1",
+                "assistant:before toolfunction_call:ReadFile:call-1",
                 "tool:function_result:call-1:tool result",
                 "assistant:partial answer"
+            ],
+            FormatHistoryWithContents(session));
+    }
+
+    [Fact]
+    public async Task RebuildAndSaveSessionFromThreadAsync_MergesReasoningTextAndToolCallIntoOneAssistantMessage()
+    {
+        var thread = CreateThread();
+        AddTurnWithMessages(thread, "hello", "I will inspect.");
+        var turn = thread.Turns[0];
+        turn.Items.Insert(1, new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(3),
+            TurnId = turn.Id,
+            Type = ItemType.ReasoningContent,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ReasoningContentPayload { Text = "need file" }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(4),
+            TurnId = turn.Id,
+            Type = ItemType.ToolCall,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolCallPayload
+            {
+                ToolName = "ReadFile",
+                CallId = "call-1",
+                Arguments = new JsonObject { ["path"] = "a.txt" }
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(5),
+            TurnId = turn.Id,
+            Type = ItemType.ToolResult,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolResultPayload
+            {
+                CallId = "call-1",
+                Result = "contents",
+                Success = true
+            }
+        });
+        await _store.SaveThreadAsync(thread);
+
+        var agent = CreateAgent();
+        await _store.RebuildAndSaveSessionFromThreadAsync(agent, thread.Id);
+        var session = await new ThreadStore(_root).LoadOrCreateSessionAsync(agent, thread.Id);
+
+        Assert.Equal(
+            [
+                "user:hello",
+                "assistant:reasoning:need fileI will inspect.function_call:ReadFile:call-1",
+                "tool:function_result:call-1:contents"
+            ],
+            FormatHistoryWithContents(session));
+    }
+
+    [Fact]
+    public async Task LoadOrCreateSessionAsync_MergesMultipleToolCallsAndKeepsToolResultsPaired()
+    {
+        var thread = CreateThread();
+        AddTurnWithMessages(thread, "hello", "Checking tools.");
+        var turn = thread.Turns[0];
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(3),
+            TurnId = turn.Id,
+            Type = ItemType.ToolCall,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolCallPayload
+            {
+                ToolName = "ReadFile",
+                CallId = "call-1",
+                Arguments = new JsonObject { ["path"] = "a.txt" }
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(4),
+            TurnId = turn.Id,
+            Type = ItemType.ToolCall,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolCallPayload
+            {
+                ToolName = "ListFiles",
+                CallId = "call-2",
+                Arguments = new JsonObject()
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(5),
+            TurnId = turn.Id,
+            Type = ItemType.ToolResult,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolResultPayload
+            {
+                CallId = "call-2",
+                Result = "files",
+                Success = true
+            }
+        });
+        turn.Items.Add(new SessionItem
+        {
+            Id = SessionIdGenerator.NewItemId(6),
+            TurnId = turn.Id,
+            Type = ItemType.ToolResult,
+            Status = ItemStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new ToolResultPayload
+            {
+                CallId = "call-1",
+                Result = "contents",
+                Success = true
+            }
+        });
+        await _store.SaveThreadAsync(thread);
+
+        var session = await new ThreadStore(_root).LoadOrCreateSessionAsync(CreateAgent(), thread.Id);
+
+        Assert.Equal(
+            [
+                "user:hello",
+                "assistant:Checking tools.function_call:ReadFile:call-1function_call:ListFiles:call-2",
+                "tool:function_result:call-2:files",
+                "tool:function_result:call-1:contents"
             ],
             FormatHistoryWithContents(session));
     }
@@ -705,6 +845,7 @@ public sealed class ThreadStoreTests : IDisposable
             var text = string.Concat(message.Contents.Select(content => content switch
             {
                 TextContent tc => tc.Text,
+                TextReasoningContent rc => $"reasoning:{rc.Text}",
                 FunctionCallContent fc => $"function_call:{fc.Name}:{fc.CallId}",
                 FunctionResultContent fr => $"function_result:{fr.CallId}:{fr.Result}",
                 _ => content.ToString() ?? string.Empty

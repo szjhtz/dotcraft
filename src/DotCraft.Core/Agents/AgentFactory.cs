@@ -388,6 +388,10 @@ public sealed class AgentFactory : IAsyncDisposable
             ctx.Config.PromptCaching,
             ctx.EffectiveMainModel,
             _traceCollector));
+        chatClientBuilder.Use(innerClient => new DeepSeekThinkingChatClient(
+            innerClient,
+            ctx.Config,
+            ctx.EffectiveMainModel));
         var configuredChatClient = chatClientBuilder.Build();
 
         var options = new ChatClientAgentOptions
@@ -511,6 +515,10 @@ public sealed class AgentFactory : IAsyncDisposable
             _config.PromptCaching,
             _toolProviderContext.EffectiveMainModel,
             _traceCollector));
+        chatClientBuilder.Use(innerClient => new DeepSeekThinkingChatClient(
+            innerClient,
+            _config,
+            _toolProviderContext.EffectiveMainModel));
         return chatClientBuilder.Build();
     }
 

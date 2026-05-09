@@ -74,6 +74,21 @@ Workspace mappings take precedence over global mappings; both override the built
 | `Reasoning.Effort` | Reasoning depth: `None` / `Low` / `Medium` / `High` / `ExtraHigh` | `Medium` |
 | `Reasoning.Output` | Reasoning visibility: `None` / `Summary` / `Full` | `Full` |
 
+For OpenAI-compatible DeepSeek endpoints, DotCraft automatically enables the DeepSeek thinking/tool-call compatibility layer when the `EndPoint` host or `Model` contains `deepseek`. During tool-call rounds, DotCraft sends the previous assistant message's `reasoning_content` back together with `content` and `tool_calls`, as required by DeepSeek thinking mode. No extra `Provider` setting is required.
+
+```json
+{
+  "ApiKey": "sk-...",
+  "EndPoint": "https://api.deepseek.com/v1",
+  "Model": "deepseek-reasoner",
+  "Reasoning": {
+    "Enabled": true,
+    "Effort": "Medium",
+    "Output": "Full"
+  }
+}
+```
+
 ## PromptCaching
 
 Used when you cannot change the LiteLLM proxy configuration and need DotCraft to inject Anthropic/LiteLLM prompt cache markers into OpenAI-compatible Claude requests. DotCraft places `cache_control` on the last cacheable text position at the tail of the current request: it prefers the latest user request or assistant response, and skips tool results to avoid changing their serialized shape. Single-text messages keep their original string content; messages that already use a content-block array receive the marker on the text block. v1 emits one tail breakpoint per request. If a single turn creates more than about 20 content blocks, a future multi-breakpoint strategy may be needed.

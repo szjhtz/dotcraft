@@ -736,6 +736,8 @@ When a channel adapter resumes a Thread that was created by a different channel:
 
 The resumed agent has full context of previous Turns regardless of which channel originated them.
 
+When reconstructing model history, provider reasoning metadata MUST be preserved on assistant messages that contain tool calls. If one sampling segment produced `ReasoningContent`, visible assistant text, and one or more `ToolCall` Items before their matching `ToolResult` Items, the reconstructed history represents them as one assistant `ChatMessage` containing reasoning content, visible text, and all function calls. This preserves OpenAI-compatible providers such as DeepSeek whose thinking mode requires `reasoning_content` to be round-tripped on assistant tool-call messages.
+
 ## 6. Event Model
 
 ### 6.1 Overview

@@ -297,29 +297,40 @@ public sealed class ThreadStore
                 .Where(static item => item.Status == ItemStatus.Completed)
                 .ToList();
             var pairedToolCallIds = CollectPairedToolCallIds(completedItems);
+            var assistantBuilder = new AssistantSamplingSegmentBuilder();
 
             foreach (var item in completedItems)
             {
                 if (item.Type == ItemType.UserMessage && TryBuildUserMessage(item, out var userMessage))
                 {
+                    FlushAssistantSegment(history, assistantBuilder);
                     history.Add(userMessage);
+                }
+                else if (item.Type == ItemType.ReasoningContent &&
+                         item.AsReasoningContent is { Text: { } reasoningText } &&
+                         !string.IsNullOrWhiteSpace(reasoningText))
+                {
+                    assistantBuilder.AddReasoning(reasoningText);
                 }
                 else if (item.Type == ItemType.AgentMessage && item.AsAgentMessage is { Text: { } agentText } &&
                          !string.IsNullOrWhiteSpace(agentText))
                 {
-                    history.Add(new ChatMessage(ChatRole.Assistant, agentText.Trim()));
+                    assistantBuilder.AddText(agentText.Trim());
                 }
                 else if (item.Type == ItemType.ToolCall &&
-                         TryBuildToolCallMessage(item, pairedToolCallIds, out var toolCallMessage))
+                         TryBuildToolCallContent(item, pairedToolCallIds, out var toolCallContent))
                 {
-                    history.Add(toolCallMessage);
+                    assistantBuilder.AddToolCall(toolCallContent);
                 }
                 else if (item.Type == ItemType.ToolResult &&
                          TryBuildToolResultMessage(item, pairedToolCallIds, out var toolResultMessage))
                 {
+                    FlushAssistantSegment(history, assistantBuilder);
                     history.Add(toolResultMessage);
                 }
             }
+
+            FlushAssistantSegment(history, assistantBuilder);
         }
 
         if (history.Count == 0)
@@ -390,12 +401,21 @@ public sealed class ThreadStore
             .ToHashSet(StringComparer.Ordinal);
     }
 
-    private static bool TryBuildToolCallMessage(
+    private static void FlushAssistantSegment(
+        List<ChatMessage> history,
+        AssistantSamplingSegmentBuilder builder)
+    {
+        if (builder.TryBuild(out var message))
+            history.Add(message);
+        builder.Clear();
+    }
+
+    private static bool TryBuildToolCallContent(
         SessionItem item,
         IReadOnlySet<string> pairedToolCallIds,
-        out ChatMessage message)
+        out FunctionCallContent content)
     {
-        message = new ChatMessage(ChatRole.Assistant, string.Empty);
+        content = new FunctionCallContent(string.Empty, string.Empty);
         if (item.Payload is not ToolCallPayload payload ||
             string.IsNullOrWhiteSpace(payload.CallId) ||
             string.IsNullOrWhiteSpace(payload.ToolName) ||
@@ -404,15 +424,10 @@ public sealed class ThreadStore
             return false;
         }
 
-        message = new ChatMessage(
-            ChatRole.Assistant,
-            (IList<AIContent>)
-            [
-                new FunctionCallContent(
-                    payload.CallId,
-                    payload.ToolName,
-                    BuildToolArguments(payload.Arguments))
-            ]);
+        content = new FunctionCallContent(
+            payload.CallId,
+            payload.ToolName,
+            BuildToolArguments(payload.Arguments));
         return true;
     }
 
@@ -443,5 +458,41 @@ public sealed class ThreadStore
         return JsonSerializer.Deserialize<Dictionary<string, object?>>(
             arguments.ToJsonString(),
             SessionPersistenceJsonOptions.Default);
+    }
+
+    private sealed class AssistantSamplingSegmentBuilder
+    {
+        private readonly List<AIContent> _reasoning = [];
+        private readonly List<AIContent> _visible = [];
+        private readonly List<AIContent> _toolCalls = [];
+
+        public void AddReasoning(string text) => _reasoning.Add(new TextReasoningContent(text));
+
+        public void AddText(string text) => _visible.Add(new TextContent(text));
+
+        public void AddToolCall(FunctionCallContent content) => _toolCalls.Add(content);
+
+        public bool TryBuild(out ChatMessage message)
+        {
+            message = new ChatMessage(ChatRole.Assistant, string.Empty);
+            if (_visible.Count == 0 && _toolCalls.Count == 0)
+                return false;
+
+            var contents = new List<AIContent>();
+            if (_toolCalls.Count > 0)
+                contents.AddRange(_reasoning);
+            contents.AddRange(_visible);
+            contents.AddRange(_toolCalls);
+
+            message = new ChatMessage(ChatRole.Assistant, contents);
+            return true;
+        }
+
+        public void Clear()
+        {
+            _reasoning.Clear();
+            _visible.Clear();
+            _toolCalls.Clear();
+        }
     }
 }
