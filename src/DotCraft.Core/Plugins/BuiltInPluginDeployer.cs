@@ -9,6 +9,8 @@ namespace DotCraft.Plugins;
 public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
 {
     private const string ResourcePrefix = "DotCraft.Plugins.BuiltIn.";
+    private static readonly Lock DeploymentLock = new();
+
     public const string MarkerFile = ".builtin";
 
     /// <summary>
@@ -27,6 +29,14 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
         File.Exists(Path.Combine(pluginRoot, MarkerFile));
 
     private IReadOnlyList<PluginDiagnostic> DeployCore(string? targetPluginId, Assembly? resourceAssembly)
+    {
+        lock (DeploymentLock)
+        {
+            return DeployCoreLocked(targetPluginId, resourceAssembly);
+        }
+    }
+
+    private IReadOnlyList<PluginDiagnostic> DeployCoreLocked(string? targetPluginId, Assembly? resourceAssembly)
     {
         var diagnostics = new List<PluginDiagnostic>();
         var assembly = resourceAssembly ?? typeof(BuiltInPluginDeployer).Assembly;
@@ -71,11 +81,10 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
 
                 var targetPath = Path.Combine(pluginDir, relativePath);
                 Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                using var file = File.Create(targetPath);
-                stream.CopyTo(file);
+                WriteResourceAtomically(stream, targetPath);
             }
 
-            File.WriteAllText(markerPath, currentVersion);
+            WriteTextAtomically(currentVersion, markerPath);
             deployed = true;
         }
 
@@ -88,6 +97,41 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
         }
 
         return diagnostics;
+    }
+
+    private static void WriteResourceAtomically(Stream source, string targetPath)
+    {
+        var tempPath = Path.Combine(
+            Path.GetDirectoryName(targetPath)!,
+            $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var file = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                source.CopyTo(file);
+            File.Move(tempPath, targetPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
+
+    private static void WriteTextAtomically(string text, string targetPath)
+    {
+        var tempPath = Path.Combine(
+            Path.GetDirectoryName(targetPath)!,
+            $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(tempPath, text);
+            File.Move(tempPath, targetPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
     }
 
     internal static IReadOnlyList<IGrouping<string, (string PluginId, string FileName, string ResourceName)>>

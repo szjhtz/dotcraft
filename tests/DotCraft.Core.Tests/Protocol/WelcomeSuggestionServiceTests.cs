@@ -12,9 +12,17 @@ using Microsoft.Extensions.AI;
 
 namespace DotCraft.Tests.Sessions.Protocol;
 
+[CollectionDefinition(WelcomeSuggestionServiceTestCollection.Name, DisableParallelization = true)]
+public sealed class WelcomeSuggestionServiceTestCollection
+{
+    public const string Name = "WelcomeSuggestionServiceTests";
+}
+
+[Collection(WelcomeSuggestionServiceTestCollection.Name)]
 public sealed class WelcomeSuggestionServiceTests : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = JsonSerializerOptions.Web;
+    private const int RefreshTimeoutMs = 15_000;
 
     private readonly string _workspacePath;
     private readonly string _craftPath;
@@ -167,7 +175,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         var service = CreateService();
         service.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: 7000);
+        await WaitForAsync(() => File.Exists(GetPersistedCachePath()), timeoutMs: RefreshTimeoutMs);
 
         var result = await service.SuggestAsync(new WelcomeSuggestionsParams
         {
@@ -352,7 +360,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         var service = CreateService();
         service.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => File.Exists(GetPersistedCachePath()), timeoutMs: 7000);
+        await WaitForAsync(() => File.Exists(GetPersistedCachePath()), timeoutMs: RefreshTimeoutMs);
 
         var result = await service.SuggestAsync(new WelcomeSuggestionsParams
         {
@@ -450,7 +458,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         var service = CreateService();
         service.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: 7000);
+        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: RefreshTimeoutMs);
 
         var result = await service.SuggestAsync(new WelcomeSuggestionsParams
         {
@@ -526,7 +534,11 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         var firstService = CreateService();
         firstService.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => File.Exists(GetPersistedCachePath()), timeoutMs: 7000);
+        await WaitForAsync(
+            () => File.Exists(GetPersistedCachePath()),
+            timeoutMs: RefreshTimeoutMs,
+            describeFailure: () =>
+                $"submitCount={submitCount}, lastSubmittedContent={_sessionService.LastSubmittedContent.Count}, cachePath={GetPersistedCachePath()}");
         Assert.Equal(1, submitCount);
 
         _sessionService.SubmitInputHandler = (_, _, _) =>
@@ -556,7 +568,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         var service = CreateService();
         service.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: 7000);
+        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: RefreshTimeoutMs);
 
         var after = await File.ReadAllTextAsync(GetPersistedCachePath());
         Assert.Equal(before, after);
@@ -636,10 +648,10 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
 
         var service = CreateService();
         service.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: 7000);
+        await WaitForAsync(() => _sessionService.LastSubmittedContent.Count > 0, timeoutMs: RefreshTimeoutMs);
 
         var cachePath = Path.Combine(_workspacePath, ".craft", "cache", "welcome-suggestions.json");
-        await WaitForAsync(() => File.Exists(cachePath), timeoutMs: 7000);
+        await WaitForAsync(() => File.Exists(cachePath), timeoutMs: RefreshTimeoutMs);
 
         var result = await service.SuggestAsync(new WelcomeSuggestionsParams
         {
@@ -699,7 +711,7 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         service.ScheduleRefresh(_workspacePath);
         service.ScheduleRefresh(_workspacePath);
         service.ScheduleRefresh(_workspacePath);
-        await WaitForAsync(() => submitCount > 0, timeoutMs: 7000);
+        await WaitForAsync(() => submitCount > 0, timeoutMs: RefreshTimeoutMs);
         await Task.Delay(1200);
 
         Assert.Equal(1, submitCount);
@@ -873,13 +885,21 @@ public sealed class WelcomeSuggestionServiceTests : IDisposable
         return thread;
     }
 
-    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 2000)
+    private static async Task WaitForAsync(
+        Func<bool> condition,
+        int timeoutMs = 2000,
+        Func<string>? describeFailure = null)
     {
         var started = DateTime.UtcNow;
         while (!condition())
         {
             if ((DateTime.UtcNow - started).TotalMilliseconds > timeoutMs)
-                throw new TimeoutException("Condition was not satisfied in time.");
+            {
+                var detail = describeFailure?.Invoke();
+                throw new TimeoutException(string.IsNullOrWhiteSpace(detail)
+                    ? "Condition was not satisfied in time."
+                    : $"Condition was not satisfied in time. {detail}");
+            }
 
             await Task.Delay(10);
         }

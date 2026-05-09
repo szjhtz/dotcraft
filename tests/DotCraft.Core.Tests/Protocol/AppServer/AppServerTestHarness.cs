@@ -453,8 +453,12 @@ internal sealed class AppServerTestHarness : IDisposable
     {
         var root = doc.RootElement;
         Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
-        Assert.True(root.TryGetProperty("result", out _), "Expected 'result' property in success response");
-        Assert.False(root.TryGetProperty("error", out _), "Unexpected 'error' in success response");
+        Assert.True(
+            root.TryGetProperty("result", out _),
+            $"Expected 'result' property in success response. Response: {root.GetRawText()}");
+        Assert.False(
+            root.TryGetProperty("error", out _),
+            $"Unexpected 'error' in success response. Response: {root.GetRawText()}");
     }
 
     public static void AssertIsErrorResponse(JsonDocument doc, int expectedCode)
