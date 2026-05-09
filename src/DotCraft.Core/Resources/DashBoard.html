@@ -6,6 +6,7 @@
 <title>DotCraft DashBoard</title>
 <style>
 :root {
+  color-scheme: dark;
   --bg-primary: #1a1a1a;
   --bg-secondary: #242424;
   --bg-tertiary: #2e2e2e;
@@ -35,15 +36,48 @@
   --radius: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
-  --shadow: 0 2px 12px rgba(0,0,0,0.3);
-  --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
   --surface-2: #3a3a3a;
-  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
-  --font-sans: 'Segoe UI Variable', 'Inter', 'SF Pro Display', 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: "Cascadia Code", ui-monospace, "Fira Code", "JetBrains Mono", "Consolas", "Courier New", monospace;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
   --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
   --transition-slow: 0.35s cubic-bezier(0.4,0,0.2,1);
   /* Accordion panel: matches chevron timing for consistent feel */
   --accordion-transition: 0.22s cubic-bezier(0.4,0,0.2,1);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg-primary: #f7f8fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef2f6;
+  --bg-active: #e2e8f0;
+  --bg-card: #ffffff;
+  --bg-hover: #eef2f6;
+  --border: #d8e0ea;
+  --border-active: #b8c9db;
+  --text-primary: #1e3347;
+  --text-secondary: #5c6b7a;
+  --text-muted: #94a3b8;
+  --accent: #4a7fa5;
+  --accent-light: #5a9bc0;
+  --accent-dim: rgba(74,127,165,0.12);
+  --success: #16a34a;
+  --success-dim: rgba(22,163,74,0.12);
+  --warning: #c9a227;
+  --warning-dim: rgba(201,162,39,0.12);
+  --error: #dc2626;
+  --error-dim: rgba(220,38,38,0.1);
+  --info: #2563eb;
+  --info-dim: rgba(37,99,235,0.1);
+  --cyan: #0e7490;
+  --cyan-dim: rgba(14,116,144,0.1);
+  --thinking: #4a7fa5;
+  --thinking-dim: rgba(74,127,165,0.1);
+  --shadow: 0 1px 2px rgba(15,23,42,0.06);
+  --shadow-lg: 0 8px 24px rgba(15,23,42,0.1);
+  --surface-2: #e2e8f0;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -55,6 +89,8 @@ body {
   line-height: 1.5;
   overflow: hidden;
   height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Scrollbar */
@@ -64,14 +100,15 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: var(--border-active); }
 
 /* Layout */
-.app { display: flex; flex-direction: column; height: 100vh; }
+.app { display: flex; height: 100vh; }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
-  background: var(--bg-secondary);
+  min-height: 56px;
+  padding: 10px 24px;
+  background: color-mix(in srgb, var(--bg-secondary) 90%, var(--bg-primary));
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   z-index: 10;
@@ -84,46 +121,29 @@ body {
 }
 
 .logo {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--accent-light);
-  letter-spacing: -0.5px;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
+  letter-spacing: 0;
 }
 
 .logo-sub {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 400;
-  padding: 2px 8px;
-  background: var(--accent-dim);
-  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
-}
-
-.logout-btn {
-  padding: 4px 14px;
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 12px;
-  font-family: var(--font-sans);
-  cursor: pointer;
-  transition: all var(--transition);
-}
-.logout-btn:hover {
-  color: var(--error);
-  border-color: var(--error);
-  background: var(--error-dim);
+  gap: 10px;
 }
 
 .live-dot {
-  width: 8px; height: 8px;
+  width: 7px; height: 7px;
   border-radius: 50%;
   background: var(--success);
   animation: pulse 2s infinite;
@@ -141,32 +161,100 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
 }
 
 .main-content {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-width: 0;
 }
 
 /* Nav tabs */
 .nav-tabs {
   display: flex;
   flex-direction: column;
-  width: 200px;
-  background: var(--bg-secondary);
+  width: 236px;
+  background: color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-primary));
   border-right: 1px solid var(--border);
-  padding: 12px 8px;
-  gap: 2px;
+  padding: 18px 12px 12px;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  margin-bottom: 22px;
+  padding: 0 8px;
+}
+
+.logo-mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--accent-light);
   flex-shrink: 0;
 }
+
+.logo-mark svg { width: 22px; height: 22px; }
+
+.sidebar-spacer { flex: 1; min-height: 24px; }
+
+.sidebar-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  margin: 14px -12px -12px;
+  padding: 12px;
+}
+
+.sidebar-settings-card {
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.sidebar-card-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.sidebar-card-copy {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+.sidebar-card-btn {
+  width: 100%;
+  min-height: 30px;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.sidebar-settings-nav { margin-top: 0; }
 
 .nav-tab {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
   color: var(--text-secondary);
@@ -174,11 +262,12 @@ body {
   border: none;
   background: none;
   text-align: left;
+  white-space: nowrap;
   width: 100%;
 }
 
 .nav-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
-.nav-tab.active { background: var(--accent-dim); color: var(--accent-light); font-weight: 500; }
+.nav-tab.active { background: var(--accent-dim); color: var(--accent-light); font-weight: 550; }
 
 .nav-tab:disabled {
   opacity: 0.45;
@@ -190,14 +279,15 @@ body {
   color: var(--text-muted);
 }
 
-.nav-tab svg { width: 16px; height: 16px; flex-shrink: 0; }
+.nav-tab svg { width: 15px; height: 15px; flex-shrink: 0; }
 
 .nav-section {
+  display: none;
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
-  padding: 16px 14px 6px;
+  padding: 15px 12px 5px;
 }
 
 /* Content area */
@@ -206,60 +296,93 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
-.panel { display: none; flex-direction: column; height: 100%; overflow: hidden; }
+.workspace-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.top-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .panel.active { display: flex; }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
+  min-height: 56px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  background: color-mix(in srgb, var(--bg-primary) 65%, var(--bg-secondary));
 }
 
 .panel-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
 }
 
 .panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 20px 24px 28px;
 }
 
 /* Stats cards */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
+  gap: 10px;
   margin-bottom: 24px;
 }
 
 .stat-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  transition: border-color var(--transition);
+  border-radius: var(--radius);
+  padding: 14px 15px;
+  transition: border-color var(--transition), background var(--transition);
 }
 
 .stat-card:hover { border-color: var(--border-active); }
 
 .stat-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
+  letter-spacing: 0;
+  margin-bottom: 5px;
 }
 
 .stat-value {
-  font-size: 28px;
-  font-weight: 700;
+  font-size: 24px;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 
@@ -274,8 +397,8 @@ body {
 .session-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 16px 20px;
+  border-radius: var(--radius);
+  padding: 14px 16px;
   cursor: pointer;
   transition: all var(--transition);
   display: flex;
@@ -397,11 +520,18 @@ body {
 }
 
 .trace-icon {
-  font-size: 16px;
-  min-width: 24px;
-  text-align: center;
-  padding-top: 1px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
 }
+.trace-icon svg { width: 14px; height: 14px; stroke-width: 2; }
 
 .trace-body { flex: 1; min-width: 0; }
 
@@ -551,7 +681,17 @@ body {
 
 .tool-card:hover { border-color: var(--border-active); }
 
-.tool-icon { font-size: 22px; }
+.tool-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-light);
+  background: var(--accent-dim);
+  border-radius: 6px;
+}
+.tool-icon svg { width: 16px; height: 16px; }
 
 .tool-name {
   font-family: var(--font-mono);
@@ -604,9 +744,39 @@ body {
   border: 1px solid var(--border);
   background: var(--bg-card);
   color: var(--text-secondary);
+  font-family: var(--font-sans);
 }
 
 .btn:hover { border-color: var(--border-active); color: var(--text-primary); background: var(--bg-hover); }
+
+.icon-btn,
+.logout-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.icon-btn:hover,
+.logout-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+  background: var(--bg-hover);
+}
+.logout-btn:hover {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 50%, var(--border));
+  background: var(--error-dim);
+}
+.icon-btn svg,
+.logout-btn svg { width: 15px; height: 15px; }
 
 .btn-danger { border-color: rgba(248,113,113,0.3); color: var(--error); }
 .btn-danger:hover { background: var(--error-dim); border-color: var(--error); }
@@ -704,11 +874,23 @@ body {
 
 /* Responsive */
 @media (max-width: 768px) {
-  .nav-tabs { width: 56px; padding: 8px 4px; }
+  .header { padding: 8px 12px; }
+  .header-left { gap: 8px; }
+  .top-link,
+  .status-label { display: none; }
+  .logo-sub { display: none; }
+  .nav-tabs { width: 56px; padding: 10px 5px; }
+  .sidebar-brand { justify-content: center; padding: 0; margin-bottom: 14px; }
+  .sidebar-brand .logo,
+  .sidebar-brand .logo-sub,
+  .sidebar-settings-card { display: none !important; }
+  .sidebar-bottom { border-top: 0; margin: auto -5px -5px; padding: 5px; }
+  .nav-tab { justify-content: center; padding: 8px 10px; }
   .nav-tab span { display: none; }
-  .nav-tab { justify-content: center; padding: 10px; }
   .nav-section { display: none; }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .panel-body { padding: 16px 14px 22px; }
+  .panel-header { padding: 10px 14px; }
 }
 
 /* Filter bar */
@@ -1124,8 +1306,8 @@ body {
   line-height: 1.5;
 }
 
-/* Preview and actions */
-.settings-preview-body {
+/* Code display and actions */
+.settings-code-block {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1135,15 +1317,6 @@ body {
   max-height: 160px;
   overflow-y: auto;
 }
-.settings-preview-row {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 2px 0;
-}
-.preview-key { color: var(--accent-light); }
-.preview-val { color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preview-source { color: var(--text-muted); font-size: 11px; }
 
 /* Save bar — always pinned at panel bottom as a flex sibling of panel-body */
 .settings-save-bar {
@@ -1229,6 +1402,7 @@ body {
 .toast-info { border-left: 3px solid var(--info); }
 .toast-warning { border-left: 3px solid var(--warning); }
 .toast-icon { font-size: 16px; flex-shrink: 0; }
+.toast-icon svg { width: 16px; height: 16px; display: block; }
 .toast-msg { flex: 1; color: var(--text-primary); }
 .toast-close {
   background: none; border: none; color: var(--text-muted);
@@ -1345,32 +1519,31 @@ body {
 </div>
 
 <div class="app" id="app">
-  <header class="header">
-    <div class="header-left">
-      <div class="logo">DotCraft</div>
-      <span class="logo-sub">DashBoard</span>
-    </div>
-    <div class="header-right">
-      <span class="status-label"><span class="live-dot" id="liveDot"></span><span id="statusText">Connecting...</span></span>
-      <button class="logout-btn" id="logoutBtn" title="Logout" style="display:none" onclick="doLogout()">Logout</button>
-    </div>
-  </header>
-
   <div class="main-content">
     <nav class="nav-tabs">
-      <div class="nav-section">Overview</div>
+      <div class="sidebar-brand">
+        <span class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <circle cx="24" cy="2.5" r="2.8" fill="currentColor"/>
+            <line x1="24" y1="5.3" x2="24" y2="10.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M5.5 32V22C5.5 13 13.5 10.5 24 10.5C34.5 10.5 42.5 13 42.5 22V32C42.5 39 34.5 41.5 24 41.5C13.5 41.5 5.5 39 5.5 32Z" stroke="currentColor" stroke-width="2.8" stroke-linejoin="round"/>
+            <path d="M15.5 22L22 27L15.5 32" stroke="currentColor" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M26 32H34" stroke="currentColor" stroke-width="3.8" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="logo">DotCraft</div>
+        <span class="logo-sub">DashBoard</span>
+      </div>
       <button class="nav-tab active" data-panel="dashboard" onclick="switchPanel('dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-        <span>Dashboard</span>
+        <span>Overview</span>
       </button>
 
-      <div class="nav-section">Analytics</div>
       <button class="nav-tab" data-panel="token-usage" onclick="switchPanel('token-usage')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
         <span>Token Usage</span>
       </button>
 
-      <div class="nav-section">Debug</div>
       <button class="nav-tab" data-panel="traces" onclick="switchPanel('traces')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
         <span>Traces</span>
@@ -1380,24 +1553,50 @@ body {
         <span>Sessions</span>
       </button>
 
-      <div class="nav-section" id="navSectionAutomations">Automations</div>
       <button type="button" class="nav-tab" data-panel="automations" id="navTabAutomations" disabled onclick="switchPanel('automations')" title="Automations requires Gateway with the Automations module enabled.">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
         <span>Automations</span>
       </button>
-
-      <div class="nav-section">System</div>
-      <button class="nav-tab" data-panel="settings" onclick="switchPanel('settings')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-        <span>Settings</span>
-      </button>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-bottom">
+        <div class="sidebar-settings-card" id="sidebarSettingsCallout" style="display:none">
+          <div class="sidebar-card-title">Settings</div>
+          <div class="sidebar-card-copy">Customize providers, tools, sampling, and workspace behavior.</div>
+          <button type="button" class="btn sidebar-card-btn" onclick="openSettingsFromCallout()">Open Settings</button>
+        </div>
+        <button class="nav-tab sidebar-settings-nav" data-panel="settings" onclick="switchPanel('settings')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+          <span>Settings</span>
+        </button>
+      </div>
     </nav>
 
     <div class="content-area">
+      <header class="header">
+        <div class="header-left">
+          <button class="workspace-switcher" type="button">
+            <span>Workspace</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="header-right">
+          <span class="top-link" title="Docs">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg>
+            Docs
+          </span>
+          <span class="top-link" title="Support">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 1 1 5.8 1c-.5 1.4-1.8 1.9-2.5 2.8-.3.4-.4.7-.4 1.2"/><path d="M12 17h.01"/></svg>
+            Support
+          </span>
+          <span class="status-label"><span class="live-dot" id="liveDot"></span><span id="statusText">Connecting...</span></span>
+          <button class="icon-btn" id="themeToggleBtn" title="Toggle theme" aria-label="Toggle theme" onclick="cycleDashboardTheme()"></button>
+          <button class="logout-btn" id="logoutBtn" title="Logout" aria-label="Logout" style="display:none" onclick="doLogout()"></button>
+        </div>
+      </header>
       <!-- Dashboard Panel -->
       <div class="panel active" id="panel-dashboard">
         <div class="panel-header">
-          <div class="panel-title">Dashboard</div>
+          <div class="panel-title">Overview</div>
           <button class="btn btn-accent" onclick="refreshAll()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
             Refresh
@@ -1540,21 +1739,6 @@ body {
           <div id="settingsGlobalBody" style="display:none">
             <div class="empty-state"><p>Loading...</p></div>
           </div>
-
-          <!-- Merged preview (collapsible accordion) -->
-          <div class="sf-accordion" data-open="false" id="settingsPreviewAccordion" style="margin-top:16px">
-            <button class="sf-accordion-trigger" onclick="sfToggle(this.closest('.sf-accordion'))">
-              <svg class="sf-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-              <span class="sf-section-name" style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em">Effective Config Preview</span>
-            </button>
-            <div class="sf-accordion-body">
-              <div class="sf-accordion-body-inner">
-                <div class="settings-preview-body" id="settingsPreview">
-                  <span class="text-muted">Load settings to see preview...</span>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- Save bar — outside panel-body so it always sits at the panel bottom -->
@@ -1587,9 +1771,93 @@ let eventSource = null;
 let allTraceEvents = [];
 let allSessions = [];
 const traceExpandableText = new Map();
+const DASHBOARD_THEME_KEY = 'dotcraft.dashboard.theme';
+const DASHBOARD_SETTINGS_CALLOUT_KEY = 'dotcraft.dashboard.settingsCalloutSeen';
 
 let automationsAvailable = false;
 let _automationsLastData = null;
+
+function iconSvg(name, size = 16, extra = '') {
+  const icons = {
+    alert: '<path d="M10.3 3.9 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    archive: '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>',
+    barChart: '<path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    chevrons: '<path d="m8 17-5-5 5-5"/><path d="m16 17 5-5-5-5"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff: '<path d="m2 2 20 20"/><path d="M10.6 10.6A3 3 0 0 0 13.4 13.4"/><path d="M9.9 4.2A10.5 10.5 0 0 1 12 4.0c6.5 0 10 8 10 8a18 18 0 0 1-4.1 5.1"/><path d="M6.6 6.6A18 18 0 0 0 2 12s3.5 7 10 7a10.7 10.7 0 0 0 4.2-.9"/>',
+    info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
+    message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    moon: '<path d="M20.9 13.1A8 8 0 1 1 10.9 3.1 6 6 0 0 0 20.9 13.1Z"/>',
+    plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M6 8h12v4a6 6 0 0 1-12 0Z"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
+    sparkles: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/><path d="M5 15l.6 1.4L7 17l-1.4.6L5 19l-.6-1.4L3 17l1.4-.6Z"/>',
+    stop: '<circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    terminal: '<path d="m4 17 6-5-6-5"/><path d="M12 19h8"/>',
+    thinking: '<path d="M9.5 17H8a5 5 0 0 1 0-10h.6A6 6 0 0 1 20 10.2 4.5 4.5 0 0 1 17.5 19H16"/><path d="M12 13v5"/><path d="m9 16 3 3 3-3"/>',
+    tool: '<path d="M14.7 6.3a4 4 0 0 0-5 5L3 18v3h3l6.7-6.7a4 4 0 0 0 5-5l-2.4 2.4-3-3Z"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'
+  };
+  return `<svg class="${extra}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.info}</svg>`;
+}
+
+function resolveDashboardThemeChoice() {
+  const stored = localStorage.getItem(DASHBOARD_THEME_KEY);
+  return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+}
+
+function resolveDashboardTheme(choice = resolveDashboardThemeChoice()) {
+  if (choice === 'light' || choice === 'dark') return choice;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyDashboardTheme(choice = resolveDashboardThemeChoice()) {
+  const resolved = resolveDashboardTheme(choice);
+  document.documentElement.dataset.theme = resolved;
+  const btn = document.getElementById('themeToggleBtn');
+  if (btn) {
+    btn.innerHTML = iconSvg(resolved === 'dark' ? 'moon' : 'sun', 15);
+    btn.title = choice === 'system'
+      ? `Theme: system (${resolved}). Click to use ${resolved === 'dark' ? 'light' : 'dark'}.`
+      : `Theme: ${choice}. Click to change.`;
+  }
+}
+
+function cycleDashboardTheme() {
+  const current = resolveDashboardThemeChoice();
+  const next = current === 'system' ? (resolveDashboardTheme() === 'dark' ? 'light' : 'dark') : (current === 'dark' ? 'light' : 'system');
+  localStorage.setItem(DASHBOARD_THEME_KEY, next);
+  applyDashboardTheme(next);
+}
+
+function initSettingsCallout() {
+  const callout = document.getElementById('sidebarSettingsCallout');
+  if (!callout) return;
+
+  if (localStorage.getItem(DASHBOARD_SETTINGS_CALLOUT_KEY) === 'seen') {
+    callout.style.display = 'none';
+    return;
+  }
+
+  callout.style.display = '';
+  localStorage.setItem(DASHBOARD_SETTINGS_CALLOUT_KEY, 'seen');
+}
+
+function openSettingsFromCallout() {
+  localStorage.setItem(DASHBOARD_SETTINGS_CALLOUT_KEY, 'seen');
+  const callout = document.getElementById('sidebarSettingsCallout');
+  if (callout) callout.style.display = 'none';
+  switchPanel('settings');
+}
+
+applyDashboardTheme();
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (resolveDashboardThemeChoice() === 'system') applyDashboardTheme('system');
+  });
+}
 
 function switchPanel(panel) {
   if (panel === 'automations' && !automationsAvailable) {
@@ -1671,14 +1939,14 @@ function pascalToHuman(key) {
 }
 
 // ─── Toast notifications ──────────────────────────────────────────────────────
-const TOAST_ICONS = { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' };
+const TOAST_ICON_NAMES = { success: 'check', error: 'x', warning: 'alert', info: 'info' };
 function showToast(message, type = 'info', duration = 4000) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<span class="toast-icon">${TOAST_ICONS[type] || 'ℹ'}</span>
+  toast.innerHTML = `<span class="toast-icon">${iconSvg(TOAST_ICON_NAMES[type] || 'info', 16)}</span>
     <span class="toast-msg">${escapeHtml(message)}</span>
-    <button class="toast-close" onclick="this.closest('.toast').remove()">×</button>`;
+    <button class="toast-close" title="Dismiss" aria-label="Dismiss" onclick="this.closest('.toast').remove()">${iconSvg('x', 14)}</button>`;
   container.appendChild(toast);
   if (duration > 0) {
     setTimeout(() => {
@@ -1850,7 +2118,7 @@ function renderFinishReasonBadge(reason) {
   else if (lc === 'toolcalls' || lc === 'tool_calls') cls = 'badge-info';
   else if (lc === 'contentfilter' || lc === 'content_filter') cls = 'badge-accent';
   else cls = 'badge-info';
-  return `<span class="badge ${cls}" title="Finish reason">⏹ ${escapeHtml(reason)}</span>`;
+  return `<span class="badge ${cls}" title="Finish reason">${iconSvg('stop', 11)} ${escapeHtml(reason)}</span>`;
 }
 
 function renderToolBadges(toolNames) {
@@ -2193,7 +2461,7 @@ function renderTraceEvent(e) {
     case 'PromptCacheDiagnostic':
       return `<div class="trace-event type-ToolInjection">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">⚠️</div>
+        <div class="trace-icon">${iconSvg('alert', 14)}</div>
         <div class="trace-body">
           ${promptCacheDiagnostics}
         </div></div>`;
@@ -2201,7 +2469,7 @@ function renderTraceEvent(e) {
     case 'Request':
       return `<div class="trace-event type-Request">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">💬</div>
+        <div class="trace-icon">${iconSvg('message', 14)}</div>
         <div class="trace-body">
           <div class="trace-label request">Request${e.sessionKey && !selectedSession ? ' <span class="badge badge-info">' + escapeHtml(e.sessionKey) + '</span>' : ''}</div>
           ${renderExpandableTraceText(evtId, e.content, 500)}
@@ -2211,7 +2479,7 @@ function renderTraceEvent(e) {
     case 'Response':
       return `<div class="trace-event type-Response">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">✨</div>
+        <div class="trace-icon">${iconSvg('sparkles', 14)}</div>
         <div class="trace-body">
           ${promptCacheDiagnostics}
           <div class="trace-label response">Response${e.sessionKey && !selectedSession ? ' <span class="badge badge-success">' + escapeHtml(e.sessionKey) + '</span>' : ''}</div>
@@ -2223,7 +2491,7 @@ function renderTraceEvent(e) {
     case 'ToolCallStarted':
       return `<div class="trace-event type-ToolCallStarted">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">${e.toolIcon || '🔧'}</div>
+        <div class="trace-icon">${iconSvg('tool', 14)}</div>
         <div class="trace-body">
           ${promptCacheDiagnostics}
           <div class="trace-label tool-start">${escapeHtml(e.toolName || 'Tool')} <span class="badge badge-warning">started</span></div>
@@ -2235,7 +2503,7 @@ function renderTraceEvent(e) {
       const dur = e.durationMs != null ? `<div class="trace-duration">${e.durationMs.toFixed(0)}ms</div>` : '';
       return `<div class="trace-event type-ToolCallCompleted">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">${e.toolIcon || '✅'}</div>
+        <div class="trace-icon">${iconSvg('check', 14)}</div>
         <div class="trace-body">
           <div class="trace-label tool-complete">${escapeHtml(e.toolName || 'Tool')} <span class="badge badge-accent">completed</span></div>
           ${dur}
@@ -2246,7 +2514,7 @@ function renderTraceEvent(e) {
     case 'ToolInjection':
       return `<div class="trace-event type-ToolInjection">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">${e.toolIcon || '🔌'}</div>
+        <div class="trace-icon">${iconSvg('plug', 14)}</div>
         <div class="trace-body">
           <div class="trace-label">${escapeHtml(e.toolName || 'Tools injected')} <span class="badge badge-info">injected</span></div>
           ${renderExpandableTraceText(evtId, e.content, 500)}
@@ -2255,7 +2523,7 @@ function renderTraceEvent(e) {
     case 'TokenUsage':
       return `<div class="trace-event type-TokenUsage">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">📊</div>
+        <div class="trace-icon">${iconSvg('barChart', 14)}</div>
         <div class="trace-body">
           <div class="trace-label token">Token Usage</div>
           <div class="trace-tokens-inline">
@@ -2272,7 +2540,7 @@ function renderTraceEvent(e) {
     case 'Error':
       return `<div class="trace-event type-Error">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">❌</div>
+        <div class="trace-icon">${iconSvg('x', 14)}</div>
         <div class="trace-body">
           <div class="trace-label error">Error</div>
           ${renderExpandableTraceText(evtId, e.content, 500, { tone: 'error' })}
@@ -2281,7 +2549,7 @@ function renderTraceEvent(e) {
     case 'ContextCompaction':
       return `<div class="trace-event type-ContextCompaction">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">🗜️</div>
+        <div class="trace-icon">${iconSvg('archive', 14)}</div>
         <div class="trace-body">
           <div class="trace-label compaction">Context Compaction</div>
           ${renderExpandableTraceText(evtId, e.content, 500)}
@@ -2290,7 +2558,7 @@ function renderTraceEvent(e) {
     case 'Thinking':
       return `<div class="trace-event type-Thinking">
         <div class="trace-time">${time}</div>
-        <div class="trace-icon">💭</div>
+        <div class="trace-icon">${iconSvg('thinking', 14)}</div>
         <div class="trace-body">
           ${promptCacheDiagnostics}
           <div class="trace-label thinking">Thinking${e.sessionKey && !selectedSession ? ' <span class="badge badge-info">' + escapeHtml(e.sessionKey) + '</span>' : ''}</div>
@@ -2892,7 +3160,7 @@ function renderObjectListRawToggle(sectionIdx, scope, arr) {
   const tid = `ol-raw-${scope}-${sectionIdx}`;
   return `<div class="ol-raw-section">
     <button type="button" class="ol-raw-toggle" onclick="document.getElementById('${tid}').classList.toggle('open')">Raw JSON (advanced)</button>
-    <div id="${tid}" class="ol-raw-block"><pre class="settings-preview-body" style="white-space:pre-wrap;margin:0;max-height:200px;overflow:auto">${escapeHtml(json)}</pre></div>
+    <div id="${tid}" class="ol-raw-block"><pre class="settings-code-block" style="white-space:pre-wrap;margin:0;max-height:200px;overflow:auto">${escapeHtml(json)}</pre></div>
   </div>`;
 }
 
@@ -3005,7 +3273,7 @@ function renderObjectListField(section, sectionIdx, itemIdx, field, item, scope,
     return `<div class="settings-field" data-field-key="${escapeHtml(field.key)}">${headerHtml}
       <div class="settings-input-wrap">
         <input class="settings-input" type="password" id="${id}" value="${escapeHtml(val)}" autocomplete="off">
-        <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('${id}',this)" title="Show/hide">&#128065;</button>
+        <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('${id}',this)" title="Show password" aria-label="Show password">${iconSvg('eye', 14)}</button>
       </div>${hint}</div>`;
   }
 
@@ -3258,7 +3526,6 @@ function renderEditableForm(containerId, formData, scope) {
 
 function onSettingsFieldChange() {
   markSettingsDirty();
-  updateSettingsPreview();
 }
 
 function markSettingsDirty() {
@@ -3280,6 +3547,42 @@ function clearSettingsDirty() {
   document.getElementById('settingsUnsavedMsg').style.display = 'none';
   const dot = document.querySelector('[data-panel="settings"] .unsaved-dot');
   if (dot) dot.remove();
+}
+
+function normalizeBoolState(value) {
+  if (value === true || value === 'true') return 'true';
+  if (value === false || value === 'false') return 'false';
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'true') return 'true';
+    if (lower === 'false') return 'false';
+  }
+  return '';
+}
+
+function boolOnOffLabel(value) {
+  const state = normalizeBoolState(value);
+  if (state === 'true') return 'On';
+  if (state === 'false') return 'Off';
+  return '';
+}
+
+function inheritedBoolLabel(field, section, scope) {
+  if (scope === 'global') {
+    const defaultLabel = boolOnOffLabel(field.defaultValue);
+    return defaultLabel ? `Default: ${defaultLabel}` : 'Default';
+  }
+
+  const globalVal = (settingsGlobalConfig && section)
+    ? schemaGetValue(settingsGlobalConfig, section, field.key)
+    : undefined;
+  const globalLabel = boolOnOffLabel(globalVal);
+  if (globalLabel) return `Inherit: ${globalLabel}`;
+
+  const defaultLabel = boolOnOffLabel(field.defaultValue);
+  if (defaultLabel) return `Default: ${defaultLabel}`;
+
+  return 'Inherit';
 }
 
 function renderFormField(id, field, rawVal, scope, section, sourceBadge = '') {
@@ -3336,10 +3639,8 @@ function renderFormField(id, field, rawVal, scope, section, sourceBadge = '') {
   }
 
   if (field.type === 'bool') {
-    let state = '';
-    if (rawVal === true || rawVal === 'true') state = 'true';
-    else if (rawVal === false || rawVal === 'false') state = 'false';
-    const inheritLabel = isGlobalScope ? 'Default' : 'Inherit';
+    const state = normalizeBoolState(rawVal);
+    const inheritLabel = inheritedBoolLabel(field, section, scope);
     return `<div class="settings-field" data-field-key="${escapeHtml(field.key)}">
       ${headerHtml}
       <div class="sf-tristate" id="${id}" data-value="${state}">
@@ -3370,7 +3671,7 @@ function renderFormField(id, field, rawVal, scope, section, sourceBadge = '') {
         <input class="settings-input" type="password" id="${id}" value="${escapeHtml(val)}"
           placeholder="${escapeHtml(emptyText)}" autocomplete="off">
         <button type="button" class="password-toggle-btn"
-          onclick="togglePasswordVisibility('${id}',this)" title="Show/hide">&#128065;</button>
+          onclick="togglePasswordVisibility('${id}',this)" title="Show password" aria-label="Show password">${iconSvg('eye', 14)}</button>
       </div>${hint}
     </div>`;
   }
@@ -3667,108 +3968,6 @@ function setNestedValue(result, section, fieldKey, value) {
   obj[fieldKey] = value;
 }
 
-// ─── SETTINGS PREVIEW ────────────────────────────────────────────────────────
-function updateSettingsPreview() {
-  if (!settingsGlobalConfig) return;
-
-  const workspacePartial = collectForm('workspace');
-  const globalPartial = settingsSetupMode ? collectForm('global') : settingsGlobalConfig;
-  if (!workspacePartial || !globalPartial) {
-    document.getElementById('settingsPreview').innerHTML =
-      '<span style="color:var(--error)">Fix JSON errors before preview updates.</span>';
-    return;
-  }
-
-  const effectiveGlobal = settingsSetupMode ? mergeConfig(globalPartial, {}) : settingsGlobalConfig;
-  const effectiveMerged = mergeConfig(effectiveGlobal, workspacePartial);
-
-  // Build a flat list of changed / notable fields for display
-  let rows = [];
-
-  CONFIG_SCHEMA.forEach(section => {
-    if (isObjectListSection(section) && section.rootKey) {
-      const rk = section.rootKey;
-      const globalArr = getObjectListArray(effectiveGlobal, section);
-      const workspaceArr = getObjectListArray(workspacePartial, section);
-      const effectiveArr = getObjectListArray(effectiveMerged, section);
-      if (!globalArr.length && !workspaceArr.length && !effectiveArr.length) return;
-
-      const summarize = arr => arr.length
-        ? arr.map(it => {
-            const n = String(ciGet(it, 'Name') || '(unnamed)');
-            const t = String(ciGet(it, 'Transport') || '?');
-            return `${n} (${t})`;
-          }).join(', ')
-        : '(none)';
-
-      const display = `${effectiveArr.length} entr${effectiveArr.length === 1 ? 'y' : 'ies'}: ${summarize(effectiveArr)}`;
-      const workspaceOverridesRoot = ciGet(workspacePartial, rk) !== undefined;
-      let source = '<span class="preview-source">\u2190 global</span>';
-      if (workspaceOverridesRoot) source = '<span class="preview-source">\u2190 workspace</span>';
-      else if (settingsSetupMode && globalArr.length) source = '<span class="preview-source">\u2190 global (edited)</span>';
-
-      rows.push(`<div class="settings-preview-row">
-        <span class="preview-key">${escapeHtml(rk)}:</span>
-        <span class="preview-val">${escapeHtml(display)}</span>${source}
-      </div>`);
-      return;
-    }
-
-    for (const field of section.fields) {
-      const globalVal = schemaGetValue(effectiveGlobal, section, field.key);
-      const workspaceVal = schemaGetValue(workspacePartial, section, field.key);
-      const effectiveVal = schemaGetValue(effectiveMerged, section, field.key);
-      if (effectiveVal === undefined) continue;
-
-      const label = section.path
-        ? section.path.join('.') + '.' + field.key
-        : (section.rootKey || field.key);
-      const display = typeof effectiveVal === 'object'
-        ? JSON.stringify(effectiveVal) : String(effectiveVal);
-      let source = '<span class="preview-source">\u2190 global</span>';
-      if (workspaceVal !== undefined) source = '<span class="preview-source">\u2190 workspace</span>';
-      else if (settingsSetupMode && globalVal !== undefined) source = '<span class="preview-source">\u2190 global (edited)</span>';
-
-      rows.push(`<div class="settings-preview-row">
-        <span class="preview-key">${escapeHtml(label)}:</span>
-        <span class="preview-val">${escapeHtml(display)}</span>${source}
-      </div>`);
-    }
-  });
-
-  document.getElementById('settingsPreview').innerHTML =
-    rows.length ? rows.join('') : '<span style="color:var(--text-muted)">No values configured.</span>';
-}
-
-function mergeConfig(base, override) {
-  if (override == null) return deepClone(base ?? {});
-  if (Array.isArray(base) || Array.isArray(override) || typeof base !== 'object' || typeof override !== 'object') {
-    return deepClone(override);
-  }
-
-  const result = deepClone(base ?? {});
-  for (const [key, value] of Object.entries(override)) {
-    if (value && typeof value === 'object' && !Array.isArray(value) && result[key] && typeof result[key] === 'object' && !Array.isArray(result[key])) {
-      result[key] = mergeConfig(result[key], value);
-    } else {
-      result[key] = deepClone(value);
-    }
-  }
-  return result;
-}
-
-function deepClone(value) {
-  if (Array.isArray(value)) return value.map(deepClone);
-  if (value && typeof value === 'object') {
-    const result = {};
-    Object.entries(value).forEach(([key, child]) => {
-      result[key] = deepClone(child);
-    });
-    return result;
-  }
-  return value;
-}
-
 // Stored paths for the tab switcher display
 let settingsGlobalPath = '';
 let settingsWorkspacePath = '';
@@ -3823,7 +4022,6 @@ async function refreshSettings() {
     document.getElementById('settingsFormContainer').style.display = '';
   }
   renderEditableForm('settingsFormContainer', settingsWorkspaceConfig, 'workspace');
-  updateSettingsPreview();
   clearSettingsDirty();
   applySetupModeUi();
   return data;
@@ -3887,7 +4085,6 @@ function cancelSettings() {
   }
   if (settingsWorkspaceConfig !== null) {
     renderEditableForm('settingsFormContainer', settingsWorkspaceConfig, 'workspace');
-    updateSettingsPreview();
   }
   clearSettingsDirty();
 }
@@ -3916,10 +4113,14 @@ function togglePasswordVisibility(inputId, btn) {
   if (!input) return;
   if (input.type === 'password') {
     input.type = 'text';
-    btn.textContent = '\uD83D\uDE48';
+    btn.innerHTML = iconSvg('eyeOff', 14);
+    btn.title = 'Hide password';
+    btn.setAttribute('aria-label', 'Hide password');
   } else {
     input.type = 'password';
-    btn.textContent = '\uD83D\uDC41';
+    btn.innerHTML = iconSvg('eye', 14);
+    btn.title = 'Show password';
+    btn.setAttribute('aria-label', 'Show password');
   }
 }
 
@@ -4098,6 +4299,10 @@ function openSession(sessionKey) {
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
+  applyDashboardTheme();
+  initSettingsCallout();
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) logoutBtn.innerHTML = iconSvg('logout', 15);
   installSessionCardDelegation();
   await loadConfigSchema();
   const settingsData = await refreshSettings();
