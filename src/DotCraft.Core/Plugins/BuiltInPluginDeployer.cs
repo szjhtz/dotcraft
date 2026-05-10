@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace DotCraft.Plugins;
@@ -48,6 +50,7 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
         foreach (var group in groups)
         {
             var pluginId = ReadBuiltInPluginId(assembly, group) ?? group.Key;
+            var markerText = BuildMarkerText(assembly, group, currentVersion);
             if (!string.IsNullOrWhiteSpace(targetPluginId)
                 && !PluginIds.EqualsCanonical(pluginId, targetPluginId))
                 continue;
@@ -65,7 +68,7 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
             }
 
             if (File.Exists(markerPath)
-                && string.Equals(File.ReadAllText(markerPath).Trim(), currentVersion, StringComparison.Ordinal))
+                && string.Equals(File.ReadAllText(markerPath).Trim(), markerText, StringComparison.Ordinal))
             {
                 deployed = true;
                 continue;
@@ -84,7 +87,7 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
                 WriteResourceAtomically(stream, targetPath);
             }
 
-            WriteTextAtomically(currentVersion, markerPath);
+            WriteTextAtomically(markerText, markerPath);
             deployed = true;
         }
 
@@ -134,7 +137,7 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
         }
     }
 
-    internal static IReadOnlyList<IGrouping<string, (string PluginId, string FileName, string ResourceName)>>
+    private static IReadOnlyList<IGrouping<string, (string PluginId, string FileName, string ResourceName)>>
         GetResourceGroups(Assembly assembly) =>
         assembly
             .GetManifestResourceNames()
@@ -177,11 +180,7 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
             var dotIndex = remainder.IndexOf('.');
             if (dotIndex > 0)
             {
-                var skillName = remainder[..dotIndex] switch
-                {
-                    "browser_use" => "browser-use",
-                    var name => name
-                };
+                var skillName = remainder[..dotIndex].Replace('_', '-');
                 var skillFileName = remainder[(dotIndex + 1)..];
                 if (skillFileName.StartsWith("agents.", StringComparison.Ordinal))
                     return Path.Combine("skills", skillName, "agents", skillFileName["agents.".Length..]);
@@ -207,7 +206,34 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
         return fileName;
     }
 
-    internal static string? ReadBuiltInPluginId(
+    private static string BuildMarkerText(
+        Assembly assembly,
+        IGrouping<string, (string PluginId, string FileName, string ResourceName)> resources,
+        string version)
+    {
+        using var hash = SHA256.Create();
+        foreach (var resource in resources.OrderBy(resource => resource.ResourceName, StringComparer.Ordinal))
+        {
+            AddHashBytes(hash, Encoding.UTF8.GetBytes(resource.ResourceName));
+            using var stream = assembly.GetManifestResourceStream(resource.ResourceName);
+            if (stream == null)
+                continue;
+
+            stream.CopyTo(new HashStream(hash));
+        }
+
+        hash.TransformFinalBlock([], 0, 0);
+        var digest = Convert.ToHexString(hash.Hash ?? []);
+        return $"{version};sha256:{digest}";
+    }
+
+    private static void AddHashBytes(HashAlgorithm hash, byte[] bytes)
+    {
+        hash.TransformBlock(bytes, 0, bytes.Length, null, 0);
+        hash.TransformBlock([0], 0, 1, null, 0);
+    }
+
+    private static string? ReadBuiltInPluginId(
         Assembly assembly,
         IEnumerable<(string PluginId, string FileName, string ResourceName)> resources)
     {
@@ -233,6 +259,23 @@ public sealed class BuiltInPluginDeployer(string workspacePluginsPath)
         catch
         {
             return null;
+        }
+    }
+
+    private sealed class HashStream(HashAlgorithm hash) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            hash.TransformBlock(buffer, offset, count, null, 0);
         }
     }
 }

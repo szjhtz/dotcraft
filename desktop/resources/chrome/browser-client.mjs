@@ -21,6 +21,9 @@ function tabReference(tab) {
   if (!tab || typeof tab !== "object") {
     return tab;
   }
+  if (tab.info && typeof tab.info === "object") {
+    return tabReference(tab.info);
+  }
   return {
     id: tab.id,
     tabId: tab.tabId ?? tab.id,
@@ -30,6 +33,23 @@ function tabReference(tab) {
     active: tab.active,
     index: tab.index,
     claimed: tab.claimed === true,
+    loading: tab.loading === true,
+  };
+}
+
+function normalizeFinalizeOptions(options = {}) {
+  const keep = options.keep ?? [];
+  if (!Array.isArray(keep)) {
+    throw new Error("browser.tabs.finalize({ keep }) requires keep must be an array of tabs or tab ids.");
+  }
+  return {
+    ...options,
+    keep: keep.map((item) => {
+      if (typeof item === "number" || typeof item === "string") {
+        return item;
+      }
+      return tabReference(item);
+    }),
   };
 }
 
@@ -554,6 +574,10 @@ class ChromePlaywrightApi {
     return await this.tab.domSnapshot(options);
   }
 
+  async observe(options = {}) {
+    return await this.tab.observe(options);
+  }
+
   async innerText(selector, options = {}) {
     return await this.locator(selector, options).innerText();
   }
@@ -595,6 +619,27 @@ class ChromePlaywrightApi {
     });
   }
 
+  async expectNavigation(action, options = {}) {
+    if (typeof action !== "function") {
+      throw new Error("tab.playwright.expectNavigation(action, options) requires an async action function.");
+    }
+    const previousUrl = await this.tab.url();
+    const result = await action();
+    if (options.url) {
+      await this.waitForURL(options.url, options);
+    } else {
+      await this.tab.client.request("tab.waitForNavigation", {
+        tab: tabReference(this.tab.info),
+        previousUrl,
+        options,
+      });
+    }
+    if (options.waitUntil === "load") {
+      await this.waitForLoadState("load", options);
+    }
+    return result;
+  }
+
   async waitForEvent(event, options = {}) {
     if (event !== "filechooser") {
       unsupportedApi(`playwright.waitForEvent("${event}")`);
@@ -620,9 +665,11 @@ class ChromePlaywrightApi {
       "getByTestId(testId)",
       "screenshot(options)",
       "domSnapshot(options)",
+      "observe(options)",
       "waitForLoadState({ state, timeoutMs })",
       "waitForTimeout(ms)",
       "waitForURL(url)",
+      "expectNavigation(action, options)",
       "waitForEvent(\"filechooser\", options)",
       "frameLocator(selector) unsupported",
       "innerText(selector)",
@@ -698,6 +745,32 @@ class ChromeTab {
     return await this.client.request("tab.domSnapshot", { tab: tabReference(this.info), options });
   }
 
+  async observe(options = {}) {
+    const current = await this.client.request("tabs.get", { tab: tabReference(this.info) });
+    this.info = tabReference(current || this.info);
+    const observation = {
+      tab: tabReference(this.info),
+      url: this.info.url || "",
+      title: this.info.title || "",
+      loading: this.info.loading === true,
+    };
+    if (options.domSnapshot !== false) {
+      try {
+        observation.domSnapshot = await this.domSnapshot(options.domSnapshotOptions ?? {});
+      } catch (error) {
+        observation.domError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (options.screenshot === true) {
+      try {
+        observation.screenshot = await this.screenshot(options.screenshotOptions ?? {});
+      } catch (error) {
+        observation.screenshotError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return observation;
+  }
+
   locator(selector, options = {}) {
     return new ChromeLocator(this, selector, options);
   }
@@ -734,6 +807,7 @@ class ChromeTab {
       "screenshot(options)",
       "evaluate(fn, arg)",
       "domSnapshot(options)",
+      "observe(options)",
       "locator(selector)",
       "content.text(options)",
       "content.html(options)",
@@ -785,7 +859,7 @@ class ChromeTabsApi {
   }
 
   async finalize(options = {}) {
-    return await this.browser.client.request("tabs.finalize", options);
+    return await this.browser.client.request("tabs.finalize", normalizeFinalizeOptions(options));
   }
 
   describeApi() {
@@ -852,18 +926,42 @@ export async function setupAtlasRuntime(options = {}) {
 
   const bridgeOptions = options.chromeBridge || {};
   globals.agent = globals.agent || {};
+  const existingBrowsers = globals.agent.browsers;
+  const existingList = typeof existingBrowsers?.list === "function"
+    ? existingBrowsers.list.bind(existingBrowsers)
+    : null;
+  const existingGet = typeof existingBrowsers?.get === "function"
+    ? existingBrowsers.get.bind(existingBrowsers)
+    : null;
+  const existingDescribeApi = typeof existingBrowsers?.describeApi === "function"
+    ? existingBrowsers.describeApi.bind(existingBrowsers)
+    : null;
+
   globals.agent.browsers = {
     async list() {
-      return [{ id: "extension", name: "DotCraft Chrome", type: "extension" }];
+      const existing = existingList ? await existingList() : [];
+      const items = Array.isArray(existing) ? [...existing] : [];
+      if (!items.some((item) => item?.id === "extension")) {
+        items.push({ id: "extension", name: "DotCraft Chrome", type: "extension" });
+      }
+      return items;
     },
     async get(name = "extension") {
-      if (name !== "extension" && name !== "chrome") {
-        throw new Error(`Unsupported browser backend: ${name}`);
+      if (name === "extension" || name === "chrome") {
+        const client = new ChromeBridgeClient(bridgeOptions);
+        await client.ensureConnected();
+        return new ChromeBrowser(client);
       }
-      const client = new ChromeBridgeClient(bridgeOptions);
-      await client.ensureConnected();
-      return new ChromeBrowser(client);
+      if (existingGet) {
+        return await existingGet(name);
+      }
+      throw new Error(`Unsupported browser backend: ${name}`);
     },
+    describeApi: () => [
+      ...(existingDescribeApi ? existingDescribeApi() : []),
+      'get("extension")',
+      'get("chrome")',
+    ],
   };
 
   return globals.agent;

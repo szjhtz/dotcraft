@@ -194,7 +194,7 @@ Hosts integrate modules through a stable module contract rather than package-int
 
 The module contract defines:
 
-- **Module identity**: stable `moduleId`, channel family, display metadata, variant semantics, and capability summary.
+- **Module identity**: stable `moduleId`, channel family, display metadata, optional UI interface metadata, variant semantics, and capability summary.
 - **Manifest carrier**: a module-root SDK export that exposes host-readable module metadata.
 - **Entry contract**: a documented startup entry that receives workspace context and returns a structured startup outcome.
 - **Workspace context**: workspace path, `.craft` path, config path, state path, temp path, and AppServer connection information.
@@ -204,6 +204,14 @@ The module contract defines:
 - **Capability and tool registration**: manifest-level capability summaries plus runtime channel tool descriptors declared during AppServer `initialize`.
 
 Desktop may expose discoverable channel modules in the Channels workflow, but listing modules must not require executing module business logic. Bundled and user-installed modules can coexist; user-installed content wins when both provide the same `moduleId`.
+
+Module manifests may include an optional `interface` object for host-rendered discovery and detail surfaces. It is display-only metadata and must not affect runtime startup. The recognized fields are:
+
+- `shortDescription` / `localizedShortDescription`: compact list subtitle and brief detail subtitle.
+- `longDescription` / `localizedLongDescription`: richer detail-page description.
+- `previewPrompt` / `localizedPreviewPrompt`: short sample prompt or collaboration phrase for visual previews.
+
+Localized `interface` maps use the same locale keys as other module display metadata: `en` and `zh-Hans`.
 
 ---
 

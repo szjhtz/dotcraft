@@ -96,6 +96,12 @@ describe('chrome browser-client', () => {
           return [{ tab, title: tab.title, url: tab.url, content: '<main>hello world</main>' }]
         case 'tab.domSnapshot':
           return [{ tagName: 'button', name: 'Save' }]
+        case 'tab.goto':
+          return { ...tab, url: String(request.params.url), title: 'Next', loading: false }
+        case 'tab.url':
+          return tab.url
+        case 'tab.title':
+          return tab.title
         case 'locator.action':
           if (request.params.action === 'innerText') return 'Save'
           if (request.params.action === 'getAttribute') return 'button'
@@ -110,6 +116,8 @@ describe('chrome browser-client', () => {
           return { ok: true, state: request.params.state }
         case 'tab.waitForURL':
           return { ok: true }
+        case 'tab.waitForNavigation':
+          return { ok: true, url: 'https://example.test/next' }
         case 'tab.screenshot':
           return { mediaType: 'image/png', dataBase64: 'AQID' }
         case 'tab.waitForFileChooser':
@@ -166,6 +174,27 @@ describe('chrome browser-client', () => {
     await claimed.playwright.waitForLoadState({ state: 'domcontentloaded', timeoutMs: 1234 })
     await claimed.playwright.waitForLoadState('load', { timeoutMs: 2345 })
     await claimed.playwright.waitForURL('https://example.test/next', { timeoutMs: 3456 })
+    await expect(claimed.goto('https://example.test/next')).resolves.toBe(claimed)
+    await expect(claimed.observe({ screenshot: true })).resolves.toMatchObject({
+      tab: { id: 7, tabId: 7, url: 'https://example.test/' },
+      url: 'https://example.test/',
+      title: 'Example',
+      loading: false,
+      domSnapshot: [{ tagName: 'button', name: 'Save' }],
+      screenshot: { mediaType: 'image/png', dataBase64: 'AQID' }
+    })
+    await expect(claimed.playwright.observe()).resolves.toMatchObject({
+      url: 'https://example.test/',
+      domSnapshot: [{ tagName: 'button', name: 'Save' }]
+    })
+    await expect(claimed.playwright.expectNavigation(
+      () => claimed.playwright.locator('a').click(),
+      { timeoutMs: 4567, waitUntil: 'load' }
+    )).resolves.toEqual({ ok: true })
+    await expect(claimed.playwright.expectNavigation(
+      () => claimed.playwright.locator('a').click(),
+      { url: 'https://example.test/target', timeoutMs: 5678 }
+    )).resolves.toEqual({ ok: true })
     expect(await claimed.capabilities.list()).toEqual([])
     expect(await browser.capabilities.list()).toEqual([])
     const chooser = await claimed.playwright.waitForEvent('filechooser', { timeoutMs: 4567 })
@@ -181,7 +210,9 @@ describe('chrome browser-client', () => {
     await expect(claimed.dom_cua.click({ node_id: 'dom:0' })).resolves.toEqual({ ok: true, action: 'click' })
     await expect(claimed.playwright.waitForEvent('download')).rejects.toThrow('does not support')
     await expect(claimed.clipboard.readText()).rejects.toThrow('does not support')
-    await browser.tabs.finalize({ keep: [claimed.info] })
+    await browser.tabs.finalize({ keep: [claimed] })
+    await browser.tabs.finalize({ keep: [claimed.info, 8, 'chrome:9'] })
+    await expect(browser.tabs.finalize({ keep: true })).rejects.toThrow('keep must be an array')
 
     expect(bridge.requests.map((request) => request.method)).toContain('tabs.finalize')
     expect(bridge.requests.find((request) => request.method === 'tab.contentText')?.params).toMatchObject({
@@ -198,6 +229,28 @@ describe('chrome browser-client', () => {
     expect(bridge.requests.find((request) => request.method === 'tab.waitForURL')?.params).toMatchObject({
       url: 'https://example.test/next',
       options: { timeoutMs: 3456 }
+    })
+    expect(bridge.requests.find((request) => request.method === 'tab.goto')?.params).toMatchObject({
+      url: 'https://example.test/next',
+      options: {}
+    })
+    expect(bridge.requests.find((request) => request.method === 'tab.waitForNavigation')?.params).toMatchObject({
+      previousUrl: 'https://example.test/',
+      options: { timeoutMs: 4567, waitUntil: 'load' }
+    })
+    expect(bridge.requests.filter((request) => request.method === 'tab.waitForURL')[1]?.params).toMatchObject({
+      url: 'https://example.test/target',
+      options: { url: 'https://example.test/target', timeoutMs: 5678 }
+    })
+    expect(bridge.requests.filter((request) => request.method === 'tabs.finalize')[0]?.params).toEqual({
+      keep: [{ id: 7, tabId: 7, windowId: 1, title: 'Example', url: 'https://example.test/', active: true, index: 0, claimed: false, loading: false }]
+    })
+    expect(bridge.requests.filter((request) => request.method === 'tabs.finalize')[1]?.params).toEqual({
+      keep: [
+        { id: 7, tabId: 7, windowId: 1, title: 'Example', url: 'https://example.test/', active: true, index: 0, claimed: false, loading: false },
+        8,
+        'chrome:9'
+      ]
     })
     expect(bridge.requests.find((request) => request.method === 'tab.waitForFileChooser')?.params).toMatchObject({
       options: { timeoutMs: 4567 }
@@ -227,5 +280,35 @@ describe('chrome browser-client', () => {
     await expect((globals.agent as any).browsers.get('extension')).rejects.toThrow(
       'Chrome extension bridge is not connected'
     )
+  })
+
+  it('merges the Chrome backend with an existing IAB browser registry', async () => {
+    const bridge = createMockBridge(() => [])
+    bridges.push(bridge)
+    const port = await bridge.listen()
+    const { setupAtlasRuntime } = await importChromeClient()
+    const iabBrowser = { kind: 'iab' }
+    const globals: Record<string, any> = {
+      agent: {
+        browsers: {
+          list: async () => [{ id: 'iab', name: 'DotCraft Browser', type: 'iab' }],
+          get: async (id: string) => {
+            if (id === 'iab') return iabBrowser
+            throw new Error(`Browser not found: ${id}. Available browser id: iab.`)
+          },
+          describeApi: () => ['get("iab")']
+        }
+      }
+    }
+
+    await setupAtlasRuntime({ globals, backend: 'extension', chromeBridge: { port } })
+
+    expect(await globals.agent.browsers.list()).toEqual([
+      { id: 'iab', name: 'DotCraft Browser', type: 'iab' },
+      { id: 'extension', name: 'DotCraft Chrome', type: 'extension' }
+    ])
+    expect(await globals.agent.browsers.get('iab')).toBe(iabBrowser)
+    await expect(globals.agent.browsers.get('extension')).resolves.toBeTruthy()
+    await expect(globals.agent.browsers.get('chrome')).resolves.toBeTruthy()
   })
 })

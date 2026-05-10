@@ -54,6 +54,7 @@ public sealed class PluginDiscoveryService(string? userGlobalPluginsPath = null)
     public PluginDiscoveryResult DiscoverAll(AppConfig config, string workspacePath, string botPath)
     {
         var diagnostics = new List<PluginDiagnostic>();
+        RefreshManagedBuiltInPlugins(Path.Combine(botPath, "plugins"), diagnostics);
         var candidates = EnumerateCandidates(config, workspacePath, botPath, diagnostics);
         var discovered = new List<DiscoveredPlugin>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -120,6 +121,25 @@ public sealed class PluginDiscoveryService(string? userGlobalPluginsPath = null)
         }
 
         return new PluginDiscoveryResult(discovered, diagnostics);
+    }
+
+    private static void RefreshManagedBuiltInPlugins(string workspacePluginsRoot, List<PluginDiagnostic> diagnostics)
+    {
+        if (!Directory.Exists(workspacePluginsRoot))
+            return;
+
+        foreach (var pluginRoot in Directory.GetDirectories(workspacePluginsRoot))
+        {
+            if (!BuiltInPluginDeployer.IsManagedBuiltInPluginRoot(pluginRoot))
+                continue;
+
+            var parse = PluginManifestParser.Load(pluginRoot);
+            diagnostics.AddRange(parse.Diagnostics);
+            if (parse.Manifest == null)
+                continue;
+
+            diagnostics.AddRange(new BuiltInPluginDeployer(workspacePluginsRoot).DeployPlugin(parse.Manifest.Id));
+        }
     }
 
     private IReadOnlyList<PluginCandidate> EnumerateCandidates(

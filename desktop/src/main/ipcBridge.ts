@@ -38,6 +38,12 @@ import { partitionForWorkspace, viewerBrowserManager } from './viewerBrowser'
 import { viewerTerminalManager } from './viewerTerminal'
 import { browserUseManager, type BrowserUseApprovalResponsePayload } from './browserUseManager'
 import {
+  checkChromeSetup,
+  installChromeNativeHost,
+  openChromeWindow,
+  type ChromeOpenRequest
+} from './chromeSetup'
+import {
   scanModules,
   groupModulesByChannel,
   type DiscoveredModule
@@ -1433,6 +1439,20 @@ export function registerIpcHandlers(
     viewerTerminalManager.destroyTab(win, params.tabId)
   })
 
+  // ─── Chrome Setup ─────────────────────────────────────────────────────────
+
+  handleSafe('chrome:check-setup', async () => {
+    return checkChromeSetup(workspacePath)
+  })
+
+  handleSafe('chrome:install-native-host', async () => {
+    return installChromeNativeHost(workspacePath)
+  })
+
+  handleSafe('chrome:open', async (_event, params?: ChromeOpenRequest) => {
+    return openChromeWindow(workspacePath, params)
+  })
+
   // ─── Settings ──────────────────────────────────────────────────────────────
 
   // Renderer -> Main: get current settings
@@ -1867,6 +1887,9 @@ export function unregisterIpcHandlers(): void {
   ipcMain.removeHandler('viewer:terminal:write')
   ipcMain.removeHandler('viewer:terminal:resize')
   ipcMain.removeHandler('viewer:terminal:dispose')
+  ipcMain.removeHandler('chrome:check-setup')
+  ipcMain.removeHandler('chrome:install-native-host')
+  ipcMain.removeHandler('chrome:open')
   ipcMain.removeHandler('settings:get')
   ipcMain.removeHandler('settings:set')
   ipcMain.removeHandler('modules:list')

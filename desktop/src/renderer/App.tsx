@@ -255,6 +255,7 @@ export function App(): JSX.Element {
   const capabilities = useConnectionStore((s) => s.capabilities)
   const showSlowConnectingHint = useSlowConnectingHint(status, workspacePath)
   const [browserUseApprovalRequests, setBrowserUseApprovalRequests] = useState<BrowserUseApprovalRequestPayload[]>([])
+  const [chromeSettingsOpenSeq, setChromeSettingsOpenSeq] = useState(0)
   const activeMainView = useUIStore((s) => s.activeMainView)
   const activeDetailTab = useUIStore((s) => s.activeDetailTab)
   const detailPanelVisible = useUIStore((s) => s.detailPanelVisible)
@@ -336,6 +337,13 @@ export function App(): JSX.Element {
       )
     }
   }, [workspacePath, workspaceName, locale])
+
+  useEffect(() => {
+    return window.api.window.onOpenChromeSettings(() => {
+      useUIStore.getState().setActiveMainView('settings')
+      setChromeSettingsOpenSeq((current) => current + 1)
+    })
+  }, [])
 
   useEffect(() => {
     window.api.settings
@@ -1772,6 +1780,7 @@ export function App(): JSX.Element {
                 }}
                 workspaceConfigChange={workspaceConfigChange}
                 workspaceConfigChangeSeq={workspaceConfigChangeSeq}
+                openChromeSettingsSeq={chromeSettingsOpenSeq}
               />
             ) : activeMainView === 'channels' ? (
               <ChannelsView />

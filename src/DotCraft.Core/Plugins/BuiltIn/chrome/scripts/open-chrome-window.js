@@ -6,7 +6,7 @@ const os = require('os');
 
 const asJson = process.argv.includes('--json');
 const dryRun = process.argv.includes('--dry-run') || process.argv.includes('--check');
-const urlArg = process.argv.find((arg) => /^https?:\/\//i.test(arg) || arg === 'about:blank');
+const urlArg = process.argv.find((arg) => /^https?:\/\//i.test(arg) || /^chrome:\/\/extensions(?:\/|\?|$)/i.test(arg) || arg === 'about:blank');
 const targetUrl = urlArg || 'about:blank';
 
 function exists(file) {

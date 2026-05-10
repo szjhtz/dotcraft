@@ -119,6 +119,14 @@ export interface ProxyAuthFileSummary {
   name: string
 }
 
+export interface ChromeSetupStatus {
+  extension: unknown
+  nativeHost: unknown
+  chromeRunning: unknown
+  installedBrowsers: unknown
+  bridge: unknown
+}
+
 export type ConfigReloadBehavior = 'processRestart' | 'subsystemRestart' | 'hot' | string
 
 export interface WorkspaceConfigSchemaField {
@@ -203,14 +211,26 @@ export interface ConfigDescriptorWire {
   enumValues?: string[]
 }
 
+export interface ModuleInterfaceWire {
+  shortDescription?: string
+  localizedShortDescription?: Partial<Record<'en' | 'zh-Hans', string>>
+  longDescription?: string
+  localizedLongDescription?: Partial<Record<'en' | 'zh-Hans', string>>
+  previewPrompt?: string
+  localizedPreviewPrompt?: Partial<Record<'en' | 'zh-Hans', string>>
+}
+
 export interface DiscoveredModule {
   moduleId: string
   channelName: string
   displayName: string
+  localizedDisplayName?: Partial<Record<'en' | 'zh-Hans', string>>
+  interface?: ModuleInterfaceWire
   packageName: string
   configFileName: string
   supportedTransports: string[]
   requiresInteractiveSetup: boolean
+  capabilitySummary?: Record<string, unknown>
   variant: string
   source: 'bundled' | 'user'
   absolutePath: string
@@ -322,6 +342,12 @@ ipcRenderer.on(
     activeModuleRescanSummaryCallback?.(payload)
   }
 )
+
+let openChromeSettingsToken = 0
+let activeOpenChromeSettingsCallback: (() => void) | null = null
+ipcRenderer.on('app:open-chrome-settings', () => {
+  activeOpenChromeSettingsCallback?.()
+})
 
 /**
  * Typed API exposed to the Renderer via contextBridge.
@@ -544,6 +570,16 @@ const api = {
      */
     getWorkspacePath(): Promise<string> {
       return ipcRenderer.invoke('window:get-workspace-path')
+    },
+
+    onOpenChromeSettings(callback: () => void): () => void {
+      const token = ++openChromeSettingsToken
+      activeOpenChromeSettingsCallback = callback
+      return () => {
+        if (openChromeSettingsToken === token) {
+          activeOpenChromeSettingsCallback = null
+        }
+      }
     }
   },
 
@@ -572,6 +608,20 @@ const api = {
 
     showItemInFolder(path: string): Promise<void> {
       return ipcRenderer.invoke('shell:show-item-in-folder', path)
+    }
+  },
+
+  chrome: {
+    checkSetup(): Promise<ChromeSetupStatus> {
+      return ipcRenderer.invoke('chrome:check-setup')
+    },
+
+    installNativeHost(): Promise<unknown> {
+      return ipcRenderer.invoke('chrome:install-native-host')
+    },
+
+    openChrome(params?: { url?: string }): Promise<unknown> {
+      return ipcRenderer.invoke('chrome:open', params)
     }
   },
 

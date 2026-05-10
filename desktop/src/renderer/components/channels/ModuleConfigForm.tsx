@@ -28,6 +28,7 @@ interface ModuleConfigFormProps {
   moduleLogLines: string[]
   logsLoading: boolean
   onLoadLogs: () => void
+  hideHeader?: boolean
 }
 
 function toText(value: unknown): string {
@@ -146,7 +147,8 @@ export function ModuleConfigForm({
   qrPhase,
   moduleLogLines,
   logsLoading,
-  onLoadLogs
+  onLoadLogs,
+  hideHeader = false
 }: ModuleConfigFormProps): JSX.Element {
   const locale = useLocale()
   const t = useT()
@@ -420,61 +422,63 @@ export function ModuleConfigForm({
 
   return (
     <div style={{ maxWidth: '720px' }}>
-      <div style={formStyles.header}>
-        {logoPath ? (
-          <img
-            src={logoPath}
-            alt={moduleDisplayName}
-            width={44}
-            height={44}
-            style={formStyles.headerLogo}
-          />
-        ) : (
-          <div
-            aria-hidden
-            style={{
-              ...formStyles.headerLogo,
-              width: 44,
-              height: 44,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-secondary)',
-              fontSize: '18px',
-              fontWeight: 700
-            }}
-          >
-            {moduleDisplayName.slice(0, 1).toUpperCase()}
-          </div>
-        )}
-
-        <div style={{ minWidth: 0 }}>
-          <div style={formStyles.headerTitle}>{moduleDisplayName}</div>
-          <div
-            style={{
-              marginTop: '4px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}
-          >
-            <span
+      {!hideHeader && (
+        <div style={formStyles.header}>
+          {logoPath ? (
+            <img
+              src={logoPath}
+              alt={moduleDisplayName}
+              width={44}
+              height={44}
+              style={formStyles.headerLogo}
+            />
+          ) : (
+            <div
+              aria-hidden
               style={{
-                fontSize: '11px',
-                color: 'var(--text-dimmed)',
-                border: '1px solid var(--border-default)',
-                borderRadius: '999px',
-                padding: '2px 8px'
+                ...formStyles.headerLogo,
+                width: 44,
+                height: 44,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-secondary)',
+                fontSize: '18px',
+                fontWeight: 700
               }}
             >
-              {module.source === 'bundled'
-                ? t('channels.modules.source.bundled')
-                : t('channels.modules.source.user')}
-            </span>
-            <StatusPill status={pill.status} label={pill.label} />
+              {moduleDisplayName.slice(0, 1).toUpperCase()}
+            </div>
+          )}
+
+          <div style={{ minWidth: 0 }}>
+            <div style={formStyles.headerTitle}>{moduleDisplayName}</div>
+            <div
+              style={{
+                marginTop: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--text-dimmed)',
+                  border: '1px solid var(--border-default)',
+                  borderRadius: '999px',
+                  padding: '2px 8px'
+                }}
+              >
+                {module.source === 'bundled'
+                  ? t('channels.modules.source.bundled')
+                  : t('channels.modules.source.user')}
+              </span>
+              <StatusPill status={pill.status} label={pill.label} />
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {hasVariants && (
         <FieldCard>

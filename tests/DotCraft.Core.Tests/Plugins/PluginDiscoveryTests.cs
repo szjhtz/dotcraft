@@ -615,6 +615,47 @@ public sealed class PluginDiscoveryTests
     }
 
     [Fact]
+    public void BuiltInPluginCatalog_DefaultCacheRootUsesGlobalCraftCache()
+    {
+        var root = BuiltInPluginCatalog.GetDefaultCacheRoot();
+        var expectedPrefix = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".craft",
+            "cache",
+            "builtin-plugins");
+
+        Assert.StartsWith(expectedPrefix, root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuiltInPluginDeployer_MarkerIncludesResourceFingerprint()
+    {
+        var root = NewTempDir();
+
+        new BuiltInPluginDeployer(root).Deploy();
+
+        var marker = File.ReadAllText(Path.Combine(root, "browser-use", ".builtin"));
+        Assert.Contains(";sha256:", marker);
+    }
+
+    [Fact]
+    public void Discovery_RefreshesInstalledManagedBuiltInPlugins()
+    {
+        var root = NewTempDir();
+        var workspace = Path.Combine(root, "workspace");
+        var botPath = Path.Combine(workspace, ".craft");
+        var pluginRoot = Path.Combine(botPath, "plugins", "chrome");
+        WriteInterfaceOnlyPlugin(pluginRoot, id: "chrome", displayName: "Stale Chrome");
+        File.WriteAllText(Path.Combine(pluginRoot, BuiltInPluginDeployer.MarkerFile), "0.0.0.0");
+
+        var result = new PluginDiscoveryService(Path.Combine(root, "global")).DiscoverAll(new AppConfig(), workspace, botPath);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == PluginDiagnosticSeverity.Error);
+        Assert.True(File.Exists(Path.Combine(pluginRoot, "scripts", "extension-id.json")));
+        Assert.Contains(";sha256:", File.ReadAllText(Path.Combine(pluginRoot, BuiltInPluginDeployer.MarkerFile)));
+    }
+
+    [Fact]
     public void BuiltInPluginDeployer_DoesNotOverwriteUserOwnedPlugin()
     {
         var root = NewTempDir();

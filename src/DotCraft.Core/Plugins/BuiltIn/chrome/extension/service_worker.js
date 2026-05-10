@@ -2,6 +2,13 @@ const HOST_NAME = 'com.dotcraft.chromeextension';
 
 let nativePort = null;
 let sessionName = 'Chrome';
+let nativeStatus = {
+  connected: false,
+  bridgeReady: false,
+  error: null,
+  port: null,
+  updatedAt: 0
+};
 const claimedTabs = new Set();
 const createdTabs = new Set();
 const debuggerQueues = new Map();
@@ -12,17 +19,76 @@ function delay(ms) {
 
 function connectNative() {
   if (nativePort) return nativePort;
-  nativePort = chrome.runtime.connectNative(HOST_NAME);
+  try {
+    nativePort = chrome.runtime.connectNative(HOST_NAME);
+  } catch (error) {
+    nativeStatus = {
+      connected: false,
+      bridgeReady: false,
+      error: error instanceof Error ? error.message : String(error),
+      port: null,
+      updatedAt: Date.now()
+    };
+    throw error;
+  }
+  nativeStatus = {
+    connected: true,
+    bridgeReady: false,
+    error: null,
+    port: null,
+    updatedAt: Date.now()
+  };
   nativePort.onMessage.addListener((message) => {
+    if (message?.type === 'dotcraft-host-ready') {
+      nativeStatus = {
+        connected: true,
+        bridgeReady: true,
+        error: null,
+        port: message.port ?? null,
+        updatedAt: Date.now()
+      };
+      return;
+    }
+    if (message?.type === 'dotcraft-host-error') {
+      nativeStatus = {
+        connected: true,
+        bridgeReady: false,
+        error: message.error || 'Native host error.',
+        port: null,
+        updatedAt: Date.now()
+      };
+      return;
+    }
     if (message?.type === 'dotcraft-request') {
       void handleRequest(message);
     }
   });
   nativePort.onDisconnect.addListener(() => {
-    if (chrome.runtime.lastError) console.warn(chrome.runtime.lastError.message);
+    const error = chrome.runtime.lastError?.message || null;
+    if (error) console.warn(error);
+    nativeStatus = {
+      connected: false,
+      bridgeReady: false,
+      error,
+      port: null,
+      updatedAt: Date.now()
+    };
     nativePort = null;
   });
   return nativePort;
+}
+
+function popupStatus() {
+  const manifest = chrome.runtime.getManifest();
+  return {
+    connected: nativeStatus.connected === true && nativeStatus.bridgeReady === true,
+    nativeConnected: nativeStatus.connected,
+    bridgeReady: nativeStatus.bridgeReady,
+    error: nativeStatus.error,
+    port: nativeStatus.port,
+    updatedAt: nativeStatus.updatedAt,
+    version: manifest.version
+  };
 }
 
 function sendResponse(id, ok, result, error) {
@@ -57,6 +123,7 @@ function publicTab(tab) {
     title: tab.title ?? '',
     url: tab.url ?? '',
     active: Boolean(tab.active),
+    loading: tab.status === 'loading',
     pinned: Boolean(tab.pinned),
     audible: Boolean(tab.audible),
     groupId: tab.groupId,
@@ -97,6 +164,40 @@ function truncateContent(value, maxLength) {
 function timeoutMs(params, fallback = 10000) {
   const candidate = params?.timeoutMs ?? params?.options?.timeoutMs;
   return typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0 ? candidate : fallback;
+}
+
+function waitUntil(params) {
+  const candidate = String(params?.waitUntil ?? params?.options?.waitUntil ?? 'commit').toLowerCase();
+  return candidate === 'load' ? 'load' : 'commit';
+}
+
+function committedUrl(tab, expectedUrl, previousUrl) {
+  const actual = tab.url ?? '';
+  if (!actual) return false;
+  if (expectedUrl && (actual === expectedUrl || actual.includes(expectedUrl))) return true;
+  if (previousUrl && actual !== previousUrl && actual !== 'about:blank') return true;
+  return !previousUrl && actual !== 'about:blank';
+}
+
+async function waitForNavigation(params) {
+  const tabId = tabIdFromParams(params);
+  const expectedUrl = String(params.url ?? params.options?.url ?? '');
+  const previousUrl = String(params.previousUrl ?? params.options?.previousUrl ?? '');
+  const timeout = timeoutMs(params, 10000);
+  const wantedState = waitUntil(params);
+  const start = Date.now();
+  let current = await getTab(tabId);
+  while (Date.now() - start <= timeout) {
+    current = await getTab(tabId);
+    if (committedUrl(current, expectedUrl, previousUrl)) {
+      if (wantedState !== 'load' || current.status === 'complete') {
+        return { ok: true, url: current.url ?? '', status: current.status ?? '' };
+      }
+    }
+    await delay(100);
+  }
+  const pending = current.pendingUrl ? `; pending URL is "${current.pendingUrl}"` : '';
+  throw new Error(`Timed out waiting for navigation after ${timeout}ms; current URL is "${current.url ?? ''}"${pending}.`);
 }
 
 function normalizeDebuggerError(error) {
@@ -669,7 +770,15 @@ async function dispatchCommand(method, params) {
     case 'tabs.new': {
       const tab = await chrome.tabs.create({ url: params.url || 'about:blank', active: params.active !== false });
       createdTabs.add(tab.id);
-      return publicTab(tab);
+      if (params.url) {
+        await waitForNavigation({
+          tab: publicTab(tab),
+          url: String(params.url),
+          previousUrl: tab.url ?? 'about:blank',
+          options: params.options ?? params
+        });
+      }
+      return publicTab(await getTab(tab.id));
     }
     case 'tabs.finalize': {
       const keep = new Set((params.keep ?? []).map((item) => Number(String(item?.tabId ?? item?.id ?? item).replace(/^chrome:/, ''))));
@@ -687,8 +796,16 @@ async function dispatchCommand(method, params) {
       return { ok: true };
     }
     case 'tab.goto': {
-      const tab = await chrome.tabs.update(tabIdFromParams(params), { url: String(params.url), active: true });
-      return publicTab(tab);
+      const tabId = tabIdFromParams(params);
+      const previous = await getTab(tabId);
+      await chrome.tabs.update(tabId, { url: String(params.url), active: true });
+      await waitForNavigation({
+        tab: { id: tabId },
+        url: String(params.url),
+        previousUrl: previous.url ?? '',
+        options: params.options ?? params
+      });
+      return publicTab(await getTab(tabId));
     }
     case 'tab.reload':
       await chrome.tabs.reload(tabIdFromParams(params));
@@ -747,6 +864,8 @@ return Array.from(document.querySelectorAll('a,button,input,textarea,select,[rol
       return waitForLoadState(params);
     case 'tab.waitForURL':
       return waitForURL(params);
+    case 'tab.waitForNavigation':
+      return waitForNavigation(params);
     case 'cua.action':
       return cuaAction(params);
     case 'domCua.visibleDom':
@@ -804,4 +923,30 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.action.onClicked.addListener(() => {
   connectNative();
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'dotcraft-popup-status') {
+    try {
+      connectNative();
+    } catch {
+      // Status has already been captured.
+    }
+    sendResponse({ ok: true, status: popupStatus() });
+    return true;
+  }
+  if (message?.type === 'dotcraft-popup-open-settings') {
+    try {
+      connectNative().postMessage({ type: 'dotcraft-open-settings' });
+      sendResponse({ ok: true, status: popupStatus() });
+    } catch (error) {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        status: popupStatus()
+      });
+    }
+    return true;
+  }
+  return false;
 });

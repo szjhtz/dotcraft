@@ -15,6 +15,7 @@ import { join, basename, resolve as resolvePath } from 'path'
 import { existsSync } from 'fs'
 import { promises as fs } from 'fs'
 import { spawn } from 'child_process'
+import net from 'net'
 import { resolveProxyBinaryLocation } from './ProxyProcessManager'
 import { WireProtocolClient, type InitializeResult } from './WireProtocolClient'
 import { HubClient, type HubApiProxySidecarRequest, type HubAppServerResponse, type HubEvent } from './HubClient'
@@ -125,7 +126,10 @@ let finalQuitCleanupRunning = false
 let proxyStatus: ProxyStatusPayload = { status: 'stopped' }
 let pendingProxyOverrideCleanup: Promise<void> = Promise.resolve()
 let hubEventAbortController: AbortController | null = null
+let pendingChromeSettingsDeepLink = process.argv.some(isChromeSettingsDeepLink)
+let chromeSettingsDeepLinkServer: net.Server | null = null
 const isTrayMode = process.argv.includes('--tray')
+const CHROME_SETTINGS_DEEP_LINK_PORT = Number.parseInt(process.env.DOTCRAFT_DESKTOP_DEEPLINK_PORT || '32178', 10)
 
 configureAppIdentity()
 
@@ -495,6 +499,97 @@ function showWindowSafely(win: BrowserWindow): void {
     win.show()
   }
   win.focus()
+}
+
+function isChromeSettingsDeepLink(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return (
+      parsed.protocol === 'dotcraft:' &&
+      parsed.hostname === 'settings' &&
+      parsed.pathname.replace(/\/+$/, '') === '/computer-control/chrome'
+    )
+  } catch {
+    return false
+  }
+}
+
+function sendOpenChromeSettings(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  const send = (): void => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('app:open-chrome-settings')
+    }
+  }
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send)
+  } else {
+    send()
+  }
+}
+
+function openChromeSettingsFromDeepLink(): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) {
+    pendingChromeSettingsDeepLink = true
+    return
+  }
+  pendingChromeSettingsDeepLink = false
+  showWindowSafely(win)
+  sendOpenChromeSettings(win)
+}
+
+function startChromeSettingsDeepLinkServer(): void {
+  if (chromeSettingsDeepLinkServer || !Number.isFinite(CHROME_SETTINGS_DEEP_LINK_PORT) || CHROME_SETTINGS_DEEP_LINK_PORT <= 0) {
+    return
+  }
+
+  const server = net.createServer((socket) => {
+    socket.setEncoding('utf8')
+    let buffer = ''
+    socket.on('data', (chunk) => {
+      buffer += chunk
+      let newline = buffer.indexOf('\n')
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        if (line) {
+          try {
+            const message = JSON.parse(line) as { type?: unknown }
+            if (message.type !== 'openChromeSettings') {
+              throw new Error('Unsupported deep link request.')
+            }
+            openChromeSettingsFromDeepLink()
+            socket.write(JSON.stringify({ ok: true }) + '\n', 'utf8')
+          } catch (error) {
+            socket.write(
+              JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }) + '\n',
+              'utf8'
+            )
+          }
+        }
+        newline = buffer.indexOf('\n')
+      }
+    })
+    socket.on('error', () => {
+      socket.destroy()
+    })
+  })
+
+  server.on('error', (error) => {
+    console.warn('[desktop] failed to start Chrome settings deep link server', error)
+    if (chromeSettingsDeepLinkServer === server) {
+      chromeSettingsDeepLinkServer = null
+    }
+  })
+  server.listen(CHROME_SETTINGS_DEEP_LINK_PORT, '127.0.0.1')
+  chromeSettingsDeepLinkServer = server
+}
+
+function stopChromeSettingsDeepLinkServer(): void {
+  const server = chromeSettingsDeepLinkServer
+  chromeSettingsDeepLinkServer = null
+  server?.close()
 }
 
 // ─── Window creation ──────────────────────────────────────────────────────────
@@ -1178,6 +1273,14 @@ function registerMenuPopupIpc(): void {
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
+app.on('open-url', (event, url) => {
+  if (!isChromeSettingsDeepLink(url)) {
+    return
+  }
+  event.preventDefault()
+  openChromeSettingsFromDeepLink()
+})
+
 app.whenReady().then(() => {
   isAppQuitting = false
   if (isTrayMode) {
@@ -1188,6 +1291,13 @@ app.whenReady().then(() => {
     })
     return
   }
+
+  try {
+    app.setAsDefaultProtocolClient('dotcraft')
+  } catch (error) {
+    console.warn('[desktop] failed to register dotcraft protocol handler', error)
+  }
+  startChromeSettingsDeepLinkServer()
 
   installViewerProtocolHandler()
   registerMenuPopupIpc()
@@ -1248,6 +1358,9 @@ app.whenReady().then(() => {
   win.webContents.once('did-finish-load', () => {
     emitWorkspaceStatus(win, initialWorkspaceStatus)
     scheduleAddTabPopupWarmup(win, resolveInitialTheme(sharedSettings))
+    if (pendingChromeSettingsDeepLink) {
+      openChromeSettingsFromDeepLink()
+    }
     if (workspacePath && initialWorkspaceStatus.status === 'ready') {
       void connectToAppServer(workspacePath)
     } else {
@@ -1290,6 +1403,9 @@ app.whenReady().then(() => {
       newWin.webContents.once('did-finish-load', () => {
         emitWorkspaceStatus(newWin, workspaceStatus)
         scheduleAddTabPopupWarmup(newWin, resolveInitialTheme(sharedSettings))
+        if (pendingChromeSettingsDeepLink) {
+          openChromeSettingsFromDeepLink()
+        }
         if (wsPath && workspaceStatus.status === 'ready') {
           void connectToAppServer(wsPath)
         } else {
@@ -1327,6 +1443,7 @@ app.on('before-quit', (event) => {
   }
 
   isAppQuitting = true
+  stopChromeSettingsDeepLinkServer()
   if (mainWindow && !mainWindow.isDestroyed()) {
     viewerBrowserManager.destroyAllTabs(mainWindow)
   }

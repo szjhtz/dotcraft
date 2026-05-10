@@ -1,12 +1,10 @@
 <div align="center">
 
-# DotCraft
+![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
 [English](./README.md) · [官方文档](https://dotharness.github.io/dotcraft/) · [快速开始](https://dotharness.github.io/dotcraft/getting-started) · [下载 Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
 
 最适合您项目的 AI Agent, 你想要的所有功能尽在工作区内。
-
-![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
 </div>
 

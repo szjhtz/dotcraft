@@ -21,6 +21,7 @@ interface ExternalChannelConfigFormProps {
   isNew: boolean
   logoPath?: string
   headerTitle?: string
+  hideHeader?: boolean
   status: ChannelConnectionState
   statusLabel: string
   onChange: (next: ExternalChannelConfigWire) => void
@@ -59,6 +60,7 @@ export function ExternalChannelConfigForm({
   isNew,
   logoPath,
   headerTitle,
+  hideHeader = false,
   status,
   statusLabel,
   onChange,
@@ -72,39 +74,41 @@ export function ExternalChannelConfigForm({
 
   return (
     <div>
-      <div style={formStyles.header}>
-        {logoPath ? (
-          <img
-            src={logoPath}
-            alt={title}
-            width={32}
-            height={32}
-            style={formStyles.headerLogo}
-          />
-        ) : (
-          <div
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-secondary)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 14,
-              fontWeight: 700,
-              flexShrink: 0
-            }}
-          >
-            {value.name.trim().slice(0, 1).toUpperCase() || 'E'}
+      {!hideHeader && (
+        <div style={formStyles.header}>
+          {logoPath ? (
+            <img
+              src={logoPath}
+              alt={title}
+              width={32}
+              height={32}
+              style={formStyles.headerLogo}
+            />
+          ) : (
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                backgroundColor: 'var(--bg-secondary)',
+                color: 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
+                fontWeight: 700,
+                flexShrink: 0
+              }}
+            >
+              {value.name.trim().slice(0, 1).toUpperCase() || 'E'}
+            </div>
+          )}
+          <div>
+            <div style={formStyles.headerTitle}>{title}</div>
+            <StatusPill status={status} label={statusLabel} />
           </div>
-        )}
-        <div>
-          <div style={formStyles.headerTitle}>{title}</div>
-          <StatusPill status={status} label={statusLabel} />
         </div>
-      </div>
+      )}
 
       <FieldCard>
         <div style={formStyles.fieldGroup}>

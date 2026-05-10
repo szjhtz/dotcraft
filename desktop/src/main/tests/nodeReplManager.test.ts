@@ -178,6 +178,36 @@ describe('NodeReplManager', () => {
     manager.reset('thread-1')
   })
 
+  it('registers the Chrome extension backend when IAB globals already exist', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    const result = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      code: `
+        let chromeBackendReady = false
+        try {
+          chromeBackendReady = (await agent.browsers.list()).some((item) => item?.id === "extension")
+        } catch {
+          chromeBackendReady = false
+        }
+        if (!chromeBackendReady) {
+          const { setupAtlasRuntime } = await import(dotcraft.chromeBrowserClientPath)
+          await setupAtlasRuntime({ globals: globalThis, backend: "extension" })
+        }
+        return JSON.stringify(await agent.browsers.list())
+      `
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(JSON.parse(result.resultText ?? '[]')).toEqual([
+      { id: 'iab', name: 'DotCraft Browser', type: 'iab' },
+      { id: 'extension', name: 'DotCraft Chrome', type: 'extension' }
+    ])
+    manager.reset('thread-1')
+  })
+
   it('exposes safe DotCraft Chrome paths without exposing process or require', async () => {
     const browserManager = createFakeBrowserManager()
     const manager = createManager(browserManager)

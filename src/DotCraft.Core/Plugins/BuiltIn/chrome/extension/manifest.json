@@ -19,6 +19,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "DotCraft Chrome"
+    "default_title": "DotCraft Chrome",
+    "default_popup": "popup.html"
   }
 }

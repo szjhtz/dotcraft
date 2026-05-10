@@ -1,12 +1,10 @@
 <div align="center">
 
-# DotCraft
+![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
 [中文](./README_ZH.md) · [Documentation](https://dotharness.github.io/dotcraft/en/) · [Getting Started](https://dotharness.github.io/dotcraft/en/getting-started) · [Download Release](https://github.com/DotHarness/dotcraft/releases) · [DeepWiki](https://deepwiki.com/DotHarness/dotcraft) · [License](./LICENSE)
 
 AI Agent lives in your project. All in one workspace.
-
-![intro](https://github.com/DotHarness/resources/raw/master/dotcraft/intro.png)
 
 </div>
 

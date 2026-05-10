@@ -22,6 +22,22 @@ type ModuleExports = {
   configDescriptors?: ConfigDescriptor[];
 };
 
+function assertLocalizedStringMap(value: unknown, name: string): void {
+  if (value === undefined) return;
+  assert.equal(typeof value, "object", `${name} must be an object when present`);
+  assert.notEqual(value, null, `${name} must not be null`);
+  assert.equal(Array.isArray(value), false, `${name} must not be an array`);
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    assert.ok(key === "en" || key === "zh-Hans", `${name} has unsupported locale '${key}'`);
+    assert.equal(typeof item, "string", `${name}.${key} must be a string`);
+  }
+}
+
+function assertOptionalString(value: unknown, name: string): void {
+  if (value === undefined) return;
+  assert.equal(typeof value, "string", `${name} must be a string when present`);
+}
+
 export function runModuleConformanceSuite(
   packageName: string,
   importModule: () => Promise<ModuleExports>,
@@ -44,6 +60,26 @@ export function runModuleConformanceSuite(
     assert.equal(mod.manifest.launcher.supportsWorkspaceFlag, true);
     assert.equal(typeof mod.manifest.capabilitySummary, "object");
     assert.notEqual(mod.manifest.capabilitySummary, null);
+    if (mod.manifest.interface !== undefined) {
+      assert.equal(typeof mod.manifest.interface, "object");
+      assert.notEqual(mod.manifest.interface, null);
+      assert.equal(Array.isArray(mod.manifest.interface), false);
+      assertOptionalString(mod.manifest.interface.shortDescription, "manifest.interface.shortDescription");
+      assertOptionalString(mod.manifest.interface.longDescription, "manifest.interface.longDescription");
+      assertOptionalString(mod.manifest.interface.previewPrompt, "manifest.interface.previewPrompt");
+      assertLocalizedStringMap(
+        mod.manifest.interface.localizedShortDescription,
+        "manifest.interface.localizedShortDescription",
+      );
+      assertLocalizedStringMap(
+        mod.manifest.interface.localizedLongDescription,
+        "manifest.interface.localizedLongDescription",
+      );
+      assertLocalizedStringMap(
+        mod.manifest.interface.localizedPreviewPrompt,
+        "manifest.interface.localizedPreviewPrompt",
+      );
+    }
   });
 
   test(`${packageName} module entry conformance`, async () => {

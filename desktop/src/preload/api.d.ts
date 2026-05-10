@@ -227,15 +227,26 @@ export interface ConfigDescriptorWire {
   enumValues?: string[]
 }
 
+export interface ModuleInterfaceWire {
+  shortDescription?: string
+  localizedShortDescription?: Partial<Record<'en' | 'zh-Hans', string>>
+  longDescription?: string
+  localizedLongDescription?: Partial<Record<'en' | 'zh-Hans', string>>
+  previewPrompt?: string
+  localizedPreviewPrompt?: Partial<Record<'en' | 'zh-Hans', string>>
+}
+
 export interface DiscoveredModule {
   moduleId: string
   channelName: string
   displayName: string
   localizedDisplayName?: Partial<Record<'en' | 'zh-Hans', string>>
+  interface?: ModuleInterfaceWire
   packageName: string
   configFileName: string
   supportedTransports: string[]
   requiresInteractiveSetup: boolean
+  capabilitySummary?: Record<string, unknown>
   variant: string
   source: 'bundled' | 'user'
   absolutePath: string
@@ -394,6 +405,7 @@ declare global {
         setTitle(title: string): void
         setTitleBarOverlayTheme(theme: 'dark' | 'light'): Promise<void>
         getWorkspacePath(): Promise<string>
+        onOpenChromeSettings(callback: () => void): () => void
       }
       shell: {
         openPath(path: string): Promise<string>
@@ -402,6 +414,17 @@ declare global {
         listEditors(): Promise<EditorInfo[]>
         launchEditor(id: EditorId, targetPath: string): Promise<void>
         showItemInFolder(path: string): Promise<void>
+      }
+      chrome: {
+        checkSetup(): Promise<{
+          extension: unknown
+          nativeHost: unknown
+          chromeRunning: unknown
+          installedBrowsers: unknown
+          bridge: unknown
+        }>
+        installNativeHost(): Promise<unknown>
+        openChrome(params?: { url?: string }): Promise<unknown>
       }
       file: {
         writeFile(absPath: string, content: string): Promise<void>

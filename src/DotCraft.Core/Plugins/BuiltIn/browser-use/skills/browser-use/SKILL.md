@@ -58,6 +58,7 @@ await tab.domSnapshot();
 ## Observation loop
 
 - After every navigation, reload, modal open, significant click, or UI state change, observe again with `domSnapshot()` or screenshot.
+- For actions that should navigate, prefer `tab.playwright.expectNavigation(() => action(), { timeoutMs })`, then take a fresh `domSnapshot()`.
 - Prefer `domSnapshot()` for choosing locators. Use screenshots for visual layout, canvas, hover, cursor, drag, animation, or rendering issues.
 - `domSnapshot()` returns an accessibility-style snapshot plus element entries. Interactive elements have short refs such as `e1`, plus role/name/text/href/selector/bounds.
 - Prefer snapshot refs for immediate interactions on the current page: `await globalThis.tab.playwright.clickRef("e1")`. Refs are only valid for the current observed page state.
@@ -78,7 +79,7 @@ await tab.domSnapshot();
 - Before clicking or typing, confirm the element exists, is visible, and is enabled when the state is uncertain.
 - `tab.click(...)` and `locator.click()` mean the input action was sent; they do not prove navigation or SPA state completed.
 - `clickRef(...)`, `fillRef(...)`, and `pressRef(...)` also only prove the input action was sent. Re-observe or wait for the result after using them.
-- After click or submit actions, wait for a concrete result: `waitForURL(...)`, text appears, dialog opens, network-driven state completes, or a fresh `domSnapshot()`.
+- After click or submit actions, wait for a concrete result: `expectNavigation(...)`, `waitForURL(...)`, text appears, dialog opens, network-driven state completes, or a fresh `domSnapshot()`.
 - Use `waitForLoadState("networkidle", timeoutMs)` when SPA work depends on network quietness. If it times out, observe the page and explain the visible state instead of looping.
 - Avoid fixed sleeps. Prefer explicit `waitForURL`, `waitForLoadState`, or locator `waitFor` after the action. For SPA navigation, call the click first, then wait for the expected URL or observe again.
 - Do not `goto` the current URL unless a reload is intended. Use `reload()` after local code changes, then observe again.
@@ -157,6 +158,7 @@ Playwright-like:
 - `tab.playwright.screenshot(options?)`
 - `tab.playwright.waitForLoadState(state?, timeoutMs?)`
 - `tab.playwright.waitForURL(urlOrPattern, options?)`
+- `tab.playwright.expectNavigation(action, options?)`
 - `tab.playwright.waitForEvent(event)` exists but file chooser and download events are unsupported in the embedded browser.
 - `tab.playwright.clickRef(ref)` / `tab.playwright.fillRef(ref, text)` / `tab.playwright.pressRef(ref, key)`
 - `tab.playwright.locator(selector)`

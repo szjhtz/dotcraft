@@ -15,7 +15,13 @@ Chrome is the user's real browser profile. Treat browser contents as sensitive.
 Start with this guarded cell. It avoids redeclaring `const tab` across REPL calls and works when the cell is rerun:
 
 ```js
-if (!globalThis.agent?.browsers) {
+let chromeBackendReady = false;
+try {
+  chromeBackendReady = (await agent.browsers.list()).some((item) => item?.id === "extension");
+} catch {
+  chromeBackendReady = false;
+}
+if (!chromeBackendReady) {
   const { setupAtlasRuntime } = await import(dotcraft.chromeBrowserClientPath);
   await setupAtlasRuntime({ globals: globalThis, backend: "extension" });
 }
@@ -43,6 +49,28 @@ If retry still fails with a bridge connection error, use `await dotcraft.chrome.
 - Checks pass but bridge is disconnected: ask the user to click the DotCraft Chrome extension icon once, then retry.
 
 Do not quote raw `ECONNREFUSED` output as the final answer.
+
+## Observe After Actions
+
+Navigation and clicks can take a moment to become visible to the bridge. After opening a page or changing app state, observe the current tab before deciding the action failed:
+
+```js
+await tab.goto("https://example.com");
+globalThis.lastObservation = await tab.observe();
+console.log(lastObservation.url, lastObservation.title);
+```
+
+For clicks or submits that should navigate, wrap the action:
+
+```js
+await tab.playwright.expectNavigation(
+  () => tab.playwright.getByText("Open").click(),
+  { timeoutMs: 10000 }
+);
+globalThis.lastObservation = await tab.observe();
+```
+
+If the URL or title looks stale, wait or observe once before creating a new tab. Do not open a replacement tab just because the immediate return value looked unchanged.
 
 ## REPL Sandbox Rules
 
@@ -93,6 +121,7 @@ Use these Chrome APIs. Do not invent alternatives unless you have checked `descr
 - `tab.content.read(options)`
 - `tab.content.get(options)`
 - `tab.domSnapshot(options)`
+- `tab.observe(options)`
 - `tab.evaluate(fn, arg)`
 - `tab.screenshot(options)`
 
@@ -116,7 +145,7 @@ The `tab.playwright` compatibility subset supports:
 - `locator(selector).setChecked(checked)`
 - `locator(selector).selectOption(value)`
 - `getByText`, `getByRole`, `getByLabel`, `getByPlaceholder`, `getByTestId`
-- `domSnapshot(options)`, `screenshot(options)`, `waitForLoadState({ state, timeoutMs })`, `waitForTimeout(ms)`, `waitForURL(url, options)`
+- `domSnapshot(options)`, `observe(options)`, `screenshot(options)`, `waitForLoadState({ state, timeoutMs })`, `waitForTimeout(ms)`, `waitForURL(url, options)`, `expectNavigation(action, options)`
 - `waitForEvent("filechooser", { timeoutMs })`
 
 File chooser objects support:
@@ -190,12 +219,12 @@ Use `open-chrome-window.js` without `--dry-run` only after the user agrees. Do n
 - Claim an existing tab only by passing the exact returned tab object to `browser.user.claimTab(tab)`.
 - Do not guess tab IDs.
 - Prefer reusing an already selected or claimed tab over creating new tabs.
-- Before finishing, call `browser.tabs.finalize({ keep })` exactly once as the final Chrome browser action of the turn.
+- Before finishing, call `browser.tabs.finalize({ keep: [tab] })` exactly once as the final Chrome browser action of the turn. Use `keep: []` when no agent-created tabs should remain. Do not use `keep: true`.
 - Keep only tabs that are deliverables or explicit handoffs.
 
 ## Playwright Discipline
 
-Use stable locators first: role, label, placeholder, test id, then CSS. Keep actions small and verify page state with `domSnapshot()` or targeted content reads. If an action fails because the bridge is disconnected, retry once, then use the recovery flow above.
+Use stable locators first: role, label, placeholder, test id, then CSS. Keep actions small and verify page state with `observe()`, `domSnapshot()`, or targeted content reads. If an action fails because the bridge is disconnected, retry once, then use the recovery flow above.
 
 ## Safety
 

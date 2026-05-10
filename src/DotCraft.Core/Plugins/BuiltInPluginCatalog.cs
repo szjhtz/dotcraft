@@ -7,11 +7,18 @@ namespace DotCraft.Plugins;
 /// </summary>
 public sealed class BuiltInPluginCatalog(string? cacheRoot = null)
 {
-    private readonly string _cacheRoot = cacheRoot
-        ?? Path.Combine(
-            Path.GetTempPath(),
-            "dotcraft-builtin-plugins",
-            typeof(BuiltInPluginCatalog).Assembly.GetName().Version?.ToString() ?? "0.0.0.0");
+    private readonly string _cacheRoot = cacheRoot ?? GetDefaultCacheRoot();
+
+    public static string GetDefaultCacheRoot(Assembly? resourceAssembly = null)
+    {
+        var assembly = resourceAssembly ?? typeof(BuiltInPluginCatalog).Assembly;
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".craft",
+            "cache",
+            "builtin-plugins",
+            assembly.GetName().Version?.ToString() ?? "0.0.0.0");
+    }
 
     public PluginDiscoveryResult Discover(Assembly? resourceAssembly = null)
     {

@@ -23,11 +23,21 @@ export interface WorkspaceContext {
   configOverridePath?: string;
 }
 
+export interface ModuleInterfaceDescriptor {
+  shortDescription?: string;
+  localizedShortDescription?: Partial<Record<"en" | "zh-Hans", string>>;
+  longDescription?: string;
+  localizedLongDescription?: Partial<Record<"en" | "zh-Hans", string>>;
+  previewPrompt?: string;
+  localizedPreviewPrompt?: Partial<Record<"en" | "zh-Hans", string>>;
+}
+
 export interface ModuleManifest {
   moduleId: string;
   channelName: string;
   displayName: string;
   localizedDisplayName?: Partial<Record<"en" | "zh-Hans", string>>;
+  interface?: ModuleInterfaceDescriptor;
   packageName: string;
   configFileName: string;
   supportedTransports: ModuleTransport[];

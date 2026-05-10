@@ -8,6 +8,7 @@ const {
   detectEditorsMock,
   launchEditorMock,
   execFileMock,
+  existsSyncMock,
   listWorkspaceFilesMock,
   notificationShowMock
 } = vi.hoisted(() => ({
@@ -16,11 +17,13 @@ const {
   detectEditorsMock: vi.fn(),
   launchEditorMock: vi.fn(),
   execFileMock: vi.fn(),
+  existsSyncMock: vi.fn(),
   listWorkspaceFilesMock: vi.fn(),
   notificationShowMock: vi.fn()
 }))
 
 vi.mock('fs', () => ({
+  existsSync: existsSyncMock,
   promises: {
     readFile: vi.fn(),
     writeFile: vi.fn(),
@@ -45,7 +48,8 @@ vi.mock('electron', () => {
   return {
   app: {
     isPackaged: true,
-    getPath: vi.fn(() => 'C:\\Users\\tester')
+    getPath: vi.fn(() => 'C:\\Users\\tester'),
+    getAppPath: vi.fn(() => 'F:\\dotcraft\\desktop')
   },
   ipcMain: {
     handle: vi.fn(),
@@ -298,6 +302,7 @@ describe('registerIpcHandlers', () => {
       indexedCount: 0,
       stale: false
     })
+    existsSyncMock.mockReturnValue(true)
   })
 
   it('git:commit filters missing and ignored paths before staging and committing', async () => {
@@ -409,6 +414,79 @@ describe('registerIpcHandlers', () => {
       stale: false
     })
     expect(listWorkspaceFilesMock).not.toHaveBeenCalled()
+  })
+
+  it('chrome:check-setup runs the fixed Chrome setup checks', async () => {
+    execFileMock.mockImplementation((_command, args, _options, callback: ExecFileCallback) => {
+      const script = String((args as string[])[0])
+      if (script.endsWith('check-extension-installed.js')) callback(null, '{"ok":true,"extensionId":"abc"}', '')
+      else if (script.endsWith('check-native-host-manifest.js')) callback(null, '{"ok":true,"manifestPath":"host.json"}', '')
+      else if (script.endsWith('chrome-is-running.js')) callback(null, '{"ok":true,"processCount":1}', '')
+      else if (script.endsWith('installed-browsers.js')) callback(null, '{"ok":true,"browsers":[]}', '')
+      else callback(new Error(`Unexpected script: ${script}`), '', '')
+      return null
+    })
+    const handlers = registerHandlersForTest()
+    const checkSetup = handlers.get('chrome:check-setup')!
+    const previousBridgePort = process.env.DOTCRAFT_CHROME_BRIDGE_PORT
+    process.env.DOTCRAFT_CHROME_BRIDGE_PORT = '-1'
+
+    const result = await checkSetup({})
+    if (previousBridgePort == null) delete process.env.DOTCRAFT_CHROME_BRIDGE_PORT
+    else process.env.DOTCRAFT_CHROME_BRIDGE_PORT = previousBridgePort
+
+    expect(result).toEqual({
+      extension: { ok: true, extensionId: 'abc' },
+      nativeHost: { ok: true, manifestPath: 'host.json' },
+      chromeRunning: { ok: true, processCount: 1 },
+      installedBrowsers: { ok: true, browsers: [] },
+      bridge: { ok: false, error: 'Invalid Chrome bridge port.' }
+    })
+    const scripts = execFileMock.mock.calls.map(([, args]) => String((args as string[])[0]).split(/[\\/]/).at(-1))
+    expect(scripts).toEqual([
+      'check-extension-installed.js',
+      'check-native-host-manifest.js',
+      'chrome-is-running.js',
+      'installed-browsers.js'
+    ])
+    const [command, , options] = execFileMock.mock.calls[0]!
+    expect(command).toBe(process.execPath)
+    expect((options as { env?: NodeJS.ProcessEnv }).env?.ELECTRON_RUN_AS_NODE).toBe('1')
+  })
+
+  it('chrome:install-native-host runs only the bundled installer script', async () => {
+    execFileMock.mockImplementation((_command, args, _options, callback: ExecFileCallback) => {
+      callback(null, '{"ok":true,"manifestPath":"host.json"}', '')
+      return null
+    })
+    const handlers = registerHandlersForTest()
+    const installNativeHost = handlers.get('chrome:install-native-host')!
+
+    const result = await installNativeHost({})
+
+    expect(result).toEqual({ ok: true, manifestPath: 'host.json' })
+    expect(execFileMock).toHaveBeenCalledOnce()
+    const args = execFileMock.mock.calls[0]![1] as string[]
+    expect(args[0]).toMatch(/installManifest\.mjs$/)
+    expect(args.slice(1)).toEqual([])
+  })
+
+  it('chrome:open only forwards normalized Chrome launch targets', async () => {
+    execFileMock.mockImplementation((_command, _args, _options, callback: ExecFileCallback) => {
+      callback(null, '{"ok":true,"opened":true}', '')
+      return null
+    })
+    const handlers = registerHandlersForTest()
+    const openChrome = handlers.get('chrome:open')!
+
+    await openChrome({}, { url: 'chrome://extensions/?id=abc' })
+    await openChrome({}, { url: 'file:///C:/secret.txt' })
+
+    expect(execFileMock).toHaveBeenCalledTimes(2)
+    const firstArgs = execFileMock.mock.calls[0]![1] as string[]
+    const secondArgs = execFileMock.mock.calls[1]![1] as string[]
+    expect(firstArgs.at(-1)).toBe('chrome://extensions/?id=abc')
+    expect(secondArgs.at(-1)).toBe('about:blank')
   })
 
   it('registers editors:list and returns detected editor entries', async () => {

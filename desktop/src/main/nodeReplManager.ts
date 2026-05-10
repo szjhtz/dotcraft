@@ -1,10 +1,10 @@
 import { BrowserWindow, app } from 'electron'
-import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL, URL as NodeUrl } from 'url'
 import { createContext, Script, type Context } from 'vm'
 import { browserUseManager, type BrowserUseImageResult, type BrowserUseManager } from './browserUseManager'
+import { checkChromeSetup, resolveChromePluginRoot, runChromeSetupScript } from './chromeSetup'
 
 export interface NodeReplEvaluateParams {
   threadId: string
@@ -74,75 +74,19 @@ function resolveChromeBrowserClientPath(): string {
   return pathToFileURL(dev).href
 }
 
-function resolveChromePluginRoot(workspacePath?: string): string {
-  const workspace = workspacePath?.trim()
-  if (workspace) {
-    const installed = join(workspace, '.craft', 'plugins', 'chrome')
-    if (existsSync(installed)) return installed
-
-    const source = join(workspace, 'src', 'DotCraft.Core', 'Plugins', 'BuiltIn', 'chrome')
-    if (existsSync(source)) return source
-
-    return installed
-  }
-
-  const appPath = app.getAppPath()
-  const source = join(appPath, '..', 'src', 'DotCraft.Core', 'Plugins', 'BuiltIn', 'chrome')
-  return source
-}
-
-function runChromeSetupScript(scriptPath: string, args: string[]): Promise<unknown> {
-  return new Promise((resolve) => {
-    if (!existsSync(scriptPath)) {
-      resolve({ ok: false, script: scriptPath, error: 'Script not found.' })
-      return
-    }
-
-    execFile(process.execPath, [scriptPath, ...args], { timeout: 10_000 }, (error, stdout, stderr) => {
-      const text = String(stdout || '').trim()
-      let parsed: unknown = text
-      if (text) {
-        try {
-          parsed = JSON.parse(text)
-        } catch {
-          parsed = text
-        }
-      }
-      if (error) {
-        resolve({
-          ok: false,
-          script: scriptPath,
-          error: error.message,
-          stderr: String(stderr || '').trim(),
-          result: parsed
-        })
-        return
-      }
-      resolve(parsed || { ok: true, script: scriptPath })
-    })
-  })
-}
-
 function createChromeSetupApi(workspacePath?: string): Record<string, unknown> {
   const pluginRoot = resolveChromePluginRoot(workspacePath)
   const scriptsPath = join(pluginRoot, 'scripts')
-  const script = (name: string) => join(scriptsPath, name)
 
   return Object.freeze({
     async checkSetup() {
-      const [extension, nativeHost, chromeRunning, installedBrowsers] = await Promise.all([
-        runChromeSetupScript(script('check-extension-installed.js'), ['--json']),
-        runChromeSetupScript(script('check-native-host-manifest.js'), ['--json']),
-        runChromeSetupScript(script('chrome-is-running.js'), ['--check', '--json']),
-        runChromeSetupScript(script('installed-browsers.js'), ['--check', '--json'])
-      ])
-      return { extension, nativeHost, chromeRunning, installedBrowsers }
+      return await checkChromeSetup(workspacePath)
     },
     async checkExtension() {
-      return await runChromeSetupScript(script('check-extension-installed.js'), ['--json'])
+      return await runChromeSetupScript(workspacePath, 'check-extension-installed.js', ['--json'])
     },
     async checkNativeHost() {
-      return await runChromeSetupScript(script('check-native-host-manifest.js'), ['--json'])
+      return await runChromeSetupScript(workspacePath, 'check-native-host-manifest.js', ['--json'])
     }
   })
 }

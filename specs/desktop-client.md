@@ -410,6 +410,11 @@ This section defines the user-visible workflow for Desktop-managed TypeScript ch
 - Desktop may load modules from bundled and user-installed locations; if both provide the same `moduleId`, user-installed content overrides bundled content.
 - Module identity is canonicalized by `moduleId` rather than folder name.
 - Invalid or incomplete module metadata must not break the full modules list; invalid entries are skipped while valid modules remain available.
+- Desktop may render Channels browse and detail surfaces from optional module `interface` metadata:
+  - list subtitles prefer `interface.shortDescription` and fall back to package/source identity when absent.
+  - detail pages prefer `interface.longDescription` for body copy and `interface.previewPrompt` for the preview phrase.
+  - package name, source, variant, transport, and capability summary are treated as technical information and belong in the detail information area rather than the browse subtitle.
+- Desktop must localize module `interface` metadata with the same locale fallback rules used for module display names.
 
 #### 6.8.2 Configuration Workflow
 

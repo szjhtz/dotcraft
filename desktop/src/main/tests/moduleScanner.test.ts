@@ -36,10 +36,31 @@ describe('scanModules', () => {
             en: 'Feishu',
             'zh-Hans': '飞书'
           },
+          interface: {
+            shortDescription: 'Connect DotCraft to Feishu chats.',
+            localizedShortDescription: {
+              en: 'Connect DotCraft to Feishu chats.',
+              'zh-Hans': '让 DotCraft 接入飞书会话。'
+            },
+            longDescription: 'Route Feishu messages through DotCraft.',
+            localizedLongDescription: {
+              en: 'Route Feishu messages through DotCraft.',
+              'zh-Hans': '通过 DotCraft 处理飞书消息。'
+            },
+            previewPrompt: 'Summarize this Feishu thread.',
+            localizedPreviewPrompt: {
+              en: 'Summarize this Feishu thread.',
+              'zh-Hans': '总结这段飞书讨论。'
+            }
+          },
           packageName: '@dotcraft/channel-feishu',
           configFileName: 'feishu.json',
           supportedTransports: ['websocket'],
           requiresInteractiveSetup: false,
+          capabilitySummary: {
+            hasChannelTools: true,
+            hasStructuredDelivery: true
+          },
           variant: 'standard',
           configDescriptors: [
             {
@@ -74,6 +95,27 @@ describe('scanModules', () => {
     expect(module?.localizedDisplayName).toEqual({
       en: 'Feishu',
       'zh-Hans': '飞书'
+    })
+    expect(module?.interface).toEqual({
+      shortDescription: 'Connect DotCraft to Feishu chats.',
+      localizedShortDescription: {
+        en: 'Connect DotCraft to Feishu chats.',
+        'zh-Hans': '让 DotCraft 接入飞书会话。'
+      },
+      longDescription: 'Route Feishu messages through DotCraft.',
+      localizedLongDescription: {
+        en: 'Route Feishu messages through DotCraft.',
+        'zh-Hans': '通过 DotCraft 处理飞书消息。'
+      },
+      previewPrompt: 'Summarize this Feishu thread.',
+      localizedPreviewPrompt: {
+        en: 'Summarize this Feishu thread.',
+        'zh-Hans': '总结这段飞书讨论。'
+      }
+    })
+    expect(module?.capabilitySummary).toEqual({
+      hasChannelTools: true,
+      hasStructuredDelivery: true
     })
     expect(module?.configDescriptors).toEqual([
       expect.objectContaining({

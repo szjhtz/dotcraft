@@ -18,15 +18,26 @@ export interface ConfigDescriptorWire {
   enumValues?: string[]
 }
 
+export interface ModuleInterfaceWire {
+  shortDescription?: string
+  localizedShortDescription?: Partial<Record<'en' | 'zh-Hans', string>>
+  longDescription?: string
+  localizedLongDescription?: Partial<Record<'en' | 'zh-Hans', string>>
+  previewPrompt?: string
+  localizedPreviewPrompt?: Partial<Record<'en' | 'zh-Hans', string>>
+}
+
 export interface DiscoveredModule {
   moduleId: string
   channelName: string
   displayName: string
   localizedDisplayName?: Partial<Record<'en' | 'zh-Hans', string>>
+  interface?: ModuleInterfaceWire
   packageName: string
   configFileName: string
   supportedTransports: string[]
   requiresInteractiveSetup: boolean
+  capabilitySummary?: Record<string, unknown>
   variant: string
   source: 'bundled' | 'user'
   absolutePath: string
@@ -44,10 +55,12 @@ interface ManifestWire {
   channelName: unknown
   displayName: unknown
   localizedDisplayName?: unknown
+  interface?: unknown
   packageName: unknown
   configFileName: unknown
   supportedTransports: unknown
   requiresInteractiveSetup: unknown
+  capabilitySummary?: unknown
   variant: unknown
   configDescriptors: unknown
 }
@@ -75,6 +88,49 @@ function asLocalizedStringMap(
     localized[key] = item
   }
   return localized
+}
+
+function asOptionalString(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined
+  return typeof value === 'string' ? value : null
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | null {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function parseModuleInterface(value: unknown): ModuleInterfaceWire | undefined | null {
+  if (value === undefined) return undefined
+  const item = asPlainObject(value)
+  if (item === null) return null
+  const shortDescription = asOptionalString(item.shortDescription)
+  const longDescription = asOptionalString(item.longDescription)
+  const previewPrompt = asOptionalString(item.previewPrompt)
+  const localizedShortDescription =
+    item.localizedShortDescription == null ? undefined : asLocalizedStringMap(item.localizedShortDescription)
+  const localizedLongDescription =
+    item.localizedLongDescription == null ? undefined : asLocalizedStringMap(item.localizedLongDescription)
+  const localizedPreviewPrompt =
+    item.localizedPreviewPrompt == null ? undefined : asLocalizedStringMap(item.localizedPreviewPrompt)
+  if (
+    shortDescription === null ||
+    longDescription === null ||
+    previewPrompt === null ||
+    localizedShortDescription === null ||
+    localizedLongDescription === null ||
+    localizedPreviewPrompt === null
+  ) {
+    return null
+  }
+  const parsed: ModuleInterfaceWire = {}
+  if (shortDescription !== undefined) parsed.shortDescription = shortDescription
+  if (localizedShortDescription !== undefined) parsed.localizedShortDescription = localizedShortDescription
+  if (longDescription !== undefined) parsed.longDescription = longDescription
+  if (localizedLongDescription !== undefined) parsed.localizedLongDescription = localizedLongDescription
+  if (previewPrompt !== undefined) parsed.previewPrompt = previewPrompt
+  if (localizedPreviewPrompt !== undefined) parsed.localizedPreviewPrompt = localizedPreviewPrompt
+  return parsed
 }
 
 function parseConfigDescriptor(value: unknown): ConfigDescriptorWire | null {
@@ -128,19 +184,24 @@ function parseManifest(
   const displayName = asNonEmptyString(manifest.displayName)
   const localizedDisplayName =
     manifest.localizedDisplayName == null ? undefined : asLocalizedStringMap(manifest.localizedDisplayName)
+  const moduleInterface = parseModuleInterface(manifest.interface)
   const packageName = asNonEmptyString(manifest.packageName)
   const configFileName = asNonEmptyString(manifest.configFileName)
   const supportedTransports = asStringArray(manifest.supportedTransports)
   const variant = asNonEmptyString(manifest.variant)
+  const capabilitySummary =
+    manifest.capabilitySummary === undefined ? undefined : asPlainObject(manifest.capabilitySummary)
   const descriptorsRaw = manifest.configDescriptors
   if (
     moduleId === null ||
     channelName === null ||
     displayName === null ||
     localizedDisplayName === null ||
+    moduleInterface === null ||
     packageName === null ||
     configFileName === null ||
     supportedTransports === null ||
+    capabilitySummary === null ||
     variant === null ||
     typeof manifest.requiresInteractiveSetup !== 'boolean' ||
     !Array.isArray(descriptorsRaw)
@@ -155,7 +216,7 @@ function parseManifest(
     descriptors.push(descriptor)
   }
 
-  return {
+  const parsed: DiscoveredModule = {
     moduleId,
     channelName,
     displayName,
@@ -169,6 +230,9 @@ function parseManifest(
     absolutePath: modulePath,
     configDescriptors: descriptors
   }
+  if (moduleInterface !== undefined) parsed.interface = moduleInterface
+  if (capabilitySummary !== undefined) parsed.capabilitySummary = capabilitySummary
+  return parsed
 }
 
 function bundledModulesDir(isDev: boolean): string {

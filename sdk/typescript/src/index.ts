@@ -58,6 +58,7 @@ export {
 } from "./moduleAdapter.js";
 export type {
   ModuleFactory,
+  ModuleInterfaceDescriptor,
   ModuleInstance,
   ModuleManifest,
   ModuleTransport,

@@ -1,16 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { ChevronLeft, Ellipsis, Plus } from 'lucide-react'
 import { addToast } from '../../stores/toastStore'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { useConnectionStore } from '../../stores/connectionStore'
 import { FolderIcon, RefreshIcon } from '../ui/AppIcons'
-import { IconButton } from '../ui/IconButton'
-import { BackToAppButton } from '../ui/BackToAppButton'
-import { ChannelCard, type ChannelConnectionState } from './ChannelCard'
+import type { ChannelConnectionState } from './ChannelCard'
 import { ModuleConfigForm } from './ModuleConfigForm'
 import {
   ExternalChannelConfigForm,
   type ExternalChannelConfigWire
 } from './ExternalChannelConfigForm'
+import {
+  CatalogCompactGrid,
+  CatalogSearchBox,
+  CatalogSection,
+  styles as catalogStyles
+} from '../catalog/CatalogSurface'
+import { ActionTooltip } from '../ui/ActionTooltip'
+import { ContextMenu, type ContextMenuPosition } from '../ui/ContextMenu'
+import { StatusPill } from './FormShared'
 import type {
   ConnectionMode,
   DiscoveredModule,
@@ -136,6 +144,13 @@ function moduleStatusLabelKey(status: ChannelConnectionState): string {
   return statusLabelKey(status)
 }
 
+function stateColor(status: ChannelConnectionState): string {
+  if (status === 'connected') return 'var(--success)'
+  if (status === 'enabledNotConnected' || status === 'connecting') return 'var(--warning)'
+  if (status === 'error') return 'var(--error, #ff453a)'
+  return 'var(--text-dimmed)'
+}
+
 function deriveModuleStatus(
   moduleId: string,
   statusMap: ModuleStatusMap,
@@ -245,6 +260,47 @@ function resolveModuleDisplayName(
   return module.localizedDisplayName?.[locale] ?? module.displayName
 }
 
+function resolveLocalizedText(
+  localized: Partial<Record<'en' | 'zh-Hans', string>> | undefined,
+  fallback: string | undefined,
+  locale: 'en' | 'zh-Hans'
+): string | undefined {
+  const localizedValue = localized?.[locale]?.trim()
+  if (localizedValue) return localizedValue
+  const fallbackValue = fallback?.trim()
+  return fallbackValue || undefined
+}
+
+function moduleShortDescription(module: DiscoveredModule, locale: 'en' | 'zh-Hans'): string {
+  return (
+    resolveLocalizedText(
+      module.interface?.localizedShortDescription,
+      module.interface?.shortDescription,
+      locale
+    ) ?? module.packageName
+  )
+}
+
+function moduleLongDescription(module: DiscoveredModule, locale: 'en' | 'zh-Hans'): string {
+  return (
+    resolveLocalizedText(
+      module.interface?.localizedLongDescription,
+      module.interface?.longDescription,
+      locale
+    ) ?? moduleShortDescription(module, locale)
+  )
+}
+
+function modulePreviewPrompt(module: DiscoveredModule, locale: 'en' | 'zh-Hans'): string {
+  return (
+    resolveLocalizedText(
+      module.interface?.localizedPreviewPrompt,
+      module.interface?.previewPrompt,
+      locale
+    ) ?? moduleShortDescription(module, locale)
+  )
+}
+
 export function ChannelsView(): JSX.Element {
   const locale = useLocale()
   const t = useT()
@@ -272,6 +328,8 @@ export function ChannelsView(): JSX.Element {
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('local')
   const [moduleLogsById, setModuleLogsById] = useState<Record<string, string[]>>({})
   const [loadingLogsModuleId, setLoadingLogsModuleId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [menuPosition, setMenuPosition] = useState<ContextMenuPosition | null>(null)
   const moduleConnectedSnapshotRef = useRef<Record<string, boolean>>({})
   const selectedModuleId = selectedChannelKey?.startsWith('module:')
     ? selectedChannelKey.slice('module:'.length)
@@ -824,13 +882,6 @@ export function ChannelsView(): JSX.Element {
     selectedModule && selectedModule.channelName
       ? moduleLogoPath(selectedModule.channelName)
       : undefined
-  const fallbackChannelKey = useMemo<SelectedChannelKey>(() => {
-    const firstModuleId = moduleGroups[0]?.activeModuleId
-    if (firstModuleId) return `module:${firstModuleId}`
-    const firstExternalName = externalChannelCards[0]?.name
-    return firstExternalName ? `external:${firstExternalName}` : null
-  }, [moduleGroups, externalChannelCards])
-
   useEffect(() => {
     if (selectedModuleId && !selectedModule) {
       setSelectedChannelKey(null)
@@ -838,20 +889,15 @@ export function ChannelsView(): JSX.Element {
   }, [selectedModuleId, selectedModule])
 
   useEffect(() => {
-    if (selectedChannelKey !== null || fallbackChannelKey === null) return
-    setSelectedChannelKey(fallbackChannelKey)
-    if (fallbackChannelKey.startsWith('module:')) {
-      const moduleId = fallbackChannelKey.slice('module:'.length)
-      const module = moduleById.get(moduleId)
-      if (module) void loadModuleConfig(module)
-      return
+    if (!selectedExternalName || selectedExternalName === '__new__') return
+    const selected = externalChannelCards.find(
+      (item) => item.name.toLowerCase() === selectedExternalName.toLowerCase()
+    )
+    if (!selected) {
+      setSelectedChannelKey(null)
+      setExternalDraft(createEmptyExternalChannel())
     }
-    if (fallbackChannelKey.startsWith('external:')) {
-      const name = fallbackChannelKey.slice('external:'.length)
-      const channel = externalChannelCards.find((item) => item.name === name)
-      if (channel) setExternalDraft(cloneExternalChannel(channel.draft))
-    }
-  }, [selectedChannelKey, fallbackChannelKey, moduleById, externalChannelCards])
+  }, [selectedExternalName, externalChannelCards])
 
   const selectedModuleQrPhase: ModuleQrPhase = useMemo(() => {
     if (!selectedModule || !selectedModule.requiresInteractiveSetup) return 'idle'
@@ -924,283 +970,741 @@ export function ChannelsView(): JSX.Element {
     }
   }
 
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        minHeight: 0,
-        backgroundColor: 'var(--bg-primary)'
-      }}
-    >
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          padding: '16px 20px',
-          borderBottom: '1px solid var(--border-default)',
-          flexShrink: 0
+  function handleOpenModulesFolder(): void {
+    void window.api.modules.openFolder().then((result) => {
+      if (!result.ok) {
+        addToast(
+          t('channels.saveFailed', {
+            error: result.error ?? 'Failed to open modules folder'
+          }),
+          'error'
+        )
+      }
+    })
+  }
+
+  function openNewExternalChannel(): void {
+    setExternalDraft(createEmptyExternalChannel())
+    setSelectedChannelKey('external:__new__')
+  }
+
+  function closeDetail(): void {
+    setSelectedChannelKey(null)
+  }
+
+  const normalizedQuery = query.trim().toLowerCase()
+  const moduleItems = moduleGroups
+    .map((group) => {
+      const module = moduleById.get(group.activeModuleId)
+      if (!module) return null
+      const persistedEnabled =
+        persistedModuleEnabledByChannelName.get(module.channelName.toLowerCase()) === true
+      const status = deriveModuleStatus(module.moduleId, moduleStatusMap, persistedEnabled)
+      const title = resolveModuleDisplayName(module, locale)
+      const subtitle = moduleShortDescription(module, locale)
+      const longDescription = moduleLongDescription(module, locale)
+      const previewPrompt = modulePreviewPrompt(module, locale)
+      const searchable =
+        `${title} ${subtitle} ${longDescription} ${previewPrompt} ${module.channelName} ${module.packageName} ${module.variant}`.toLowerCase()
+      if (normalizedQuery && !searchable.includes(normalizedQuery)) return null
+      return {
+        key: `module:${module.moduleId}`,
+        logoPath: moduleLogoPath(module.channelName),
+        title,
+        subtitle,
+        badgeText: group.modules.length > 1 ? `${group.modules.length}` : undefined,
+        status,
+        statusLabel: t(moduleStatusLabelKey(status)),
+        active: selectedChannelKey === `module:${module.moduleId}`,
+        onOpen: () => {
+          setSelectedChannelKey(`module:${module.moduleId}`)
+          void loadModuleConfig(module)
+        }
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+
+  const externalItems = externalChannelCards
+    .map((channel) => {
+      const status = externalStatusByName.get(channel.name.toLowerCase()) ?? 'notConfigured'
+      const subtitle = `${t('channels.external.title')} · ${channel.draft.transport === 'websocket' ? 'WebSocket' : 'Subprocess'}`
+      const searchable = `${channel.name} ${channel.draft.transport}`.toLowerCase()
+      if (normalizedQuery && !searchable.includes(normalizedQuery)) return null
+      return {
+        key: `external:${channel.name}`,
+        title: channel.name,
+        subtitle,
+        status,
+        statusLabel: t(statusLabelKey(status)),
+        active: selectedChannelKey === `external:${channel.name}`,
+        onOpen: () => {
+          setExternalDraft(cloneExternalChannel(channel.draft))
+          setSelectedChannelKey(`external:${channel.name}`)
+        }
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+
+  const externalDetailStatus =
+    selectedExternalName === '__new__'
+      ? deriveExternalStatus('__new__', externalDraft.enabled, false, channelStatusMap, fallbackConnected)
+      : selectedExternalName
+        ? externalStatusByName.get(selectedExternalName.toLowerCase()) ?? 'notConfigured'
+        : null
+
+  const detailContent =
+    selectedModuleId && selectedModule ? (
+      <ModuleConfigForm
+        module={selectedModule}
+        variantModules={selectedModuleVariants}
+        onVariantChange={(nextModuleId) => {
+          if (!selectedModule) return
+          void handleSetActiveVariant(selectedModule.channelName, nextModuleId)
         }}
+        variantSwitching={
+          selectedModule
+            ? variantSwitchingChannel === normalizeChannelName(selectedModule.channelName)
+            : false
+        }
+        config={moduleConfig}
+        onChange={setModuleConfig}
+        onSave={() => void handleSaveModule(selectedModule)}
+        saving={savingModule}
+        logoPath={selectedModuleLogoPath}
+        moduleStatus={selectedModuleStatus as ModuleStatusEntry | undefined}
+        persistedEnabled={
+          persistedModuleEnabledByChannelName.get(selectedModule.channelName.toLowerCase()) === true
+        }
+        wsAvailable={isModuleWsAvailable(connectionMode)}
+        onStart={() => {
+          void handleStartModule(selectedModule.moduleId)
+        }}
+        onStop={() => {
+          void handleStopModule(selectedModule.moduleId)
+        }}
+        starting={togglingModuleId === selectedModule.moduleId}
+        qrDataUrl={selectedModuleQrState?.qrDataUrl ?? null}
+        qrPhase={selectedModuleQrPhase}
+        moduleLogLines={moduleLogsById[selectedModule.moduleId] ?? []}
+        logsLoading={loadingLogsModuleId === selectedModule.moduleId}
+        onLoadLogs={() => {
+          void handleLoadModuleLogs(selectedModule.moduleId)
+        }}
+        hideHeader
+      />
+    ) : selectedExternalName ? (
+      !externalManagementEnabled ? (
+        <div style={emptyText}>{t('channels.external.unavailable')}</div>
+      ) : externalDetailStatus ? (
+        <ExternalChannelConfigForm
+          value={externalDraft}
+          saving={savingExternal}
+          deleting={deletingExternal}
+          isNew={selectedExternalName === '__new__'}
+          status={externalDetailStatus}
+          statusLabel={t(statusLabelKey(externalDetailStatus))}
+          onChange={setExternalDraft}
+          onSave={() => void handleSaveExternal()}
+          onDelete={
+            selectedExternalName === '__new__'
+              ? undefined
+              : () => {
+                  void handleDeleteExternal()
+                }
+          }
+          hideHeader
+        />
+      ) : null
+    ) : null
+
+  if (detailContent && selectedModule) {
+    const title = resolveModuleDisplayName(selectedModule, locale)
+    const persistedEnabled =
+      persistedModuleEnabledByChannelName.get(selectedModule.channelName.toLowerCase()) === true
+    const status = deriveModuleStatus(selectedModule.moduleId, moduleStatusMap, persistedEnabled)
+    const infoItems = [
+      { label: t('channels.detail.package'), value: selectedModule.packageName },
+      {
+        label: t('channels.detail.source'),
+        value:
+          selectedModule.source === 'bundled'
+            ? t('channels.modules.source.bundled')
+            : t('channels.modules.source.user')
+      },
+      { label: t('channels.detail.variant'), value: selectedModule.variant },
+      { label: t('channels.detail.transports'), value: selectedModule.supportedTransports.join(', ') },
+      {
+        label: t('channels.detail.capabilities'),
+        value: formatCapabilitySummary(selectedModule.capabilitySummary)
+      }
+    ]
+
+    return (
+      <ChannelDetailPage
+        title={title}
+        subtitle={moduleShortDescription(selectedModule, locale)}
+        logoPath={selectedModuleLogoPath}
+        status={status}
+        statusLabel={t(moduleStatusLabelKey(status))}
+        previewPrompt={modulePreviewPrompt(selectedModule, locale)}
+        description={moduleLongDescription(selectedModule, locale)}
+        onBack={closeDetail}
       >
-        <BackToAppButton />
-        <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)' }}>
-          {t('channels.title')}
-        </h1>
+        <section style={detailSection}>
+          <h2 style={detailSectionTitle}>{t('channels.detail.configuration')}</h2>
+          {detailContent}
+        </section>
+        <ChannelInfoGrid items={infoItems} />
+      </ChannelDetailPage>
+    )
+  }
+
+  if (detailContent && selectedExternalName) {
+    const title =
+      selectedExternalName === '__new__'
+        ? t('channels.external.new')
+        : externalDraft.name || t('channels.external.title')
+    const transportLabel = externalDraft.transport === 'websocket' ? 'WebSocket' : 'Subprocess'
+    return (
+      <ChannelDetailPage
+        title={title}
+        subtitle={t('channels.external.detailShort')}
+        status={externalDetailStatus ?? 'notConfigured'}
+        statusLabel={externalDetailStatus ? t(statusLabelKey(externalDetailStatus)) : t('channels.status.notConfigured')}
+        previewPrompt={t('channels.external.previewPrompt')}
+        description={t('channels.external.detailLong')}
+        onBack={closeDetail}
+      >
+        <section style={detailSection}>
+          <h2 style={detailSectionTitle}>{t('channels.detail.configuration')}</h2>
+          {detailContent}
+        </section>
+        <ChannelInfoGrid
+          items={[
+            { label: t('channels.detail.source'), value: t('channels.external.title') },
+            { label: t('channels.detail.transports'), value: transportLabel }
+          ]}
+        />
+      </ChannelDetailPage>
+    )
+  }
+
+  return (
+    <div style={page}>
+      <header style={browseHeader}>
+        <div style={topActions}>
+          {externalManagementEnabled && (
+            <button
+              type="button"
+              aria-label={t('channels.external.add')}
+              onClick={openNewExternalChannel}
+              style={primaryAddButton}
+            >
+              <Plus size={14} aria-hidden />
+              {t('channels.external.add')}
+            </button>
+          )}
+          <ActionTooltip label={t('channels.moreActions')} placement="bottom">
+            <button
+              type="button"
+              aria-label={t('channels.moreActions')}
+              onClick={(event) => setMenuPosition({ x: event.clientX, y: event.clientY })}
+              style={iconButton}
+            >
+              <Ellipsis size={16} aria-hidden />
+            </button>
+          </ActionTooltip>
+        </div>
+        <h1 style={heroTitle}>{t('channels.heroTitle')}</h1>
+        <div style={searchRow}>
+          <CatalogSearchBox
+            value={query}
+            placeholder={t('channels.searchPlaceholder')}
+            onChange={setQuery}
+          />
+        </div>
       </header>
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <aside
-          style={{
-            width: '220px',
-            borderRight: '1px solid var(--border-default)',
-            backgroundColor: 'var(--bg-secondary)',
-            padding: '12px',
-            flexShrink: 0,
-            overflowY: 'auto'
-          }}
-        >
-          <div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: 8
-              }}
-            >
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                {t('channels.modules.group')}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <IconButton
-                  icon={<RefreshIcon size={16} />}
-                  label={t('channels.modules.refresh')}
-                  onClick={() => {
-                    void reloadModules(true)
-                  }}
-                  size={30}
-                />
-                <IconButton
-                  icon={<FolderIcon size={16} />}
-                  label={t('channels.modules.openFolder')}
-                  onClick={() => {
-                    void window.api.modules.openFolder().then((result) => {
-                      if (!result.ok) {
-                        addToast(
-                          t('channels.saveFailed', {
-                            error: result.error ?? 'Failed to open modules folder'
-                          }),
-                          'error'
-                        )
-                      }
-                    })
-                  }}
-                  size={30}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {moduleGroups.map((group) => {
-                const module = moduleById.get(group.activeModuleId)
-                if (!module) return null
-                const persistedEnabled =
-                  persistedModuleEnabledByChannelName.get(module.channelName.toLowerCase()) === true
-                const status = deriveModuleStatus(module.moduleId, moduleStatusMap, persistedEnabled)
-                return (
-                  <ChannelCard
-                    key={group.channelName}
-                    logoPath={moduleLogoPath(module.channelName)}
-                    label={resolveModuleDisplayName(module, locale)}
-                    badgeText={group.modules.length > 1 ? `${group.modules.length}` : undefined}
-                    status={status}
-                    statusLabel={t(moduleStatusLabelKey(status))}
-                    active={selectedChannelKey === `module:${module.moduleId}`}
-                    onClick={() => {
-                      setSelectedChannelKey(`module:${module.moduleId}`)
-                      void loadModuleConfig(module)
-                    }}
-                  />
-                )
-              })}
-            </div>
-            {!modulesLoading && modules.length === 0 && (
-              <div style={{ marginTop: 10, fontSize: '12px', color: 'var(--text-dimmed)' }}>
-                {t('channels.modules.empty')}
-              </div>
+      <div style={contentShell}>
+        <div style={contentPane}>
+          <main style={browseMain}>
+            {modulesLoading && selectedChannelKey === null && (
+              <p style={emptyText}>{t('channels.loading')}</p>
             )}
-          </div>
 
-          <div style={{ marginTop: 18 }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: 8
-              }}
-            >
-              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                {t('channels.external.group')}
-              </div>
-              {externalManagementEnabled && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setExternalDraft(createEmptyExternalChannel())
-                    setSelectedChannelKey('external:__new__')
-                  }}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--accent)',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    padding: 0
-                  }}
-                >
-                  {t('channels.external.add')}
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {externalChannelCards.map((channel) => {
-                const status = externalStatusByName.get(channel.name.toLowerCase()) ?? 'notConfigured'
-                return (
-                  <ChannelCard
-                    key={channel.name}
-                    label={channel.name}
-                    status={status}
-                    statusLabel={t(statusLabelKey(status))}
-                    active={selectedChannelKey === `external:${channel.name}`}
-                    onClick={() => {
-                      setExternalDraft(cloneExternalChannel(channel.draft))
-                      setSelectedChannelKey(`external:${channel.name}`)
-                    }}
-                  />
-                )
-              })}
-            </div>
-
-            {!externalLoading && externalManagementEnabled && externalChannelCards.length === 0 && (
-              <div style={{ marginTop: 10, fontSize: '12px', color: 'var(--text-dimmed)' }}>
-                {t('channels.external.empty')}
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <main style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '20px' }}>
-          {modulesLoading && selectedChannelKey === null && (
-            <div style={{ fontSize: '13px', color: 'var(--text-dimmed)' }}>{t('channels.loading')}</div>
-          )}
-
-          {selectedModuleId && selectedModule && (
-            <ModuleConfigForm
-              module={selectedModule}
-              variantModules={selectedModuleVariants}
-              onVariantChange={(nextModuleId) => {
-                if (!selectedModule) return
-                void handleSetActiveVariant(selectedModule.channelName, nextModuleId)
-              }}
-              variantSwitching={
-                selectedModule
-                  ? variantSwitchingChannel === normalizeChannelName(selectedModule.channelName)
-                  : false
-              }
-              config={moduleConfig}
-              onChange={setModuleConfig}
-              onSave={() => void handleSaveModule(selectedModule)}
-              saving={savingModule}
-              logoPath={selectedModuleLogoPath}
-              moduleStatus={selectedModuleStatus as ModuleStatusEntry | undefined}
-              persistedEnabled={
-                persistedModuleEnabledByChannelName.get(selectedModule.channelName.toLowerCase()) === true
-              }
-              wsAvailable={isModuleWsAvailable(connectionMode)}
-              onStart={() => {
-                void handleStartModule(selectedModule.moduleId)
-              }}
-              onStop={() => {
-                void handleStopModule(selectedModule.moduleId)
-              }}
-              starting={togglingModuleId === selectedModule.moduleId}
-              qrDataUrl={selectedModuleQrState?.qrDataUrl ?? null}
-              qrPhase={selectedModuleQrPhase}
-              moduleLogLines={moduleLogsById[selectedModule.moduleId] ?? []}
-              logsLoading={loadingLogsModuleId === selectedModule.moduleId}
-              onLoadLogs={() => {
-                void handleLoadModuleLogs(selectedModule.moduleId)
-              }}
-            />
-          )}
-
-          {selectedExternalName && (
-            <div style={{ maxWidth: '640px' }}>
-              {!externalManagementEnabled ? (
-                <div style={{ fontSize: '13px', color: 'var(--text-dimmed)' }}>
-                  {t('channels.external.unavailable')}
-                </div>
+            <CatalogSection title={t('channels.modules.group')}>
+              {moduleItems.length > 0 ? (
+                <CatalogCompactGrid>
+                  {moduleItems.map(({ key, ...item }) => (
+                    <ChannelCatalogItem key={key} {...item} />
+                  ))}
+                </CatalogCompactGrid>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <ExternalChannelConfigForm
-                    value={externalDraft}
-                    saving={savingExternal}
-                    deleting={deletingExternal}
-                    isNew={selectedExternalName === '__new__'}
-                    status={
-                      selectedExternalName === '__new__'
-                        ? deriveExternalStatus(
-                            '__new__',
-                            externalDraft.enabled,
-                            false,
-                            channelStatusMap,
-                            fallbackConnected
-                          )
-                        : externalStatusByName.get(selectedExternalName.toLowerCase()) ?? 'notConfigured'
-                    }
-                    statusLabel={t(
-                      statusLabelKey(
-                        selectedExternalName === '__new__'
-                          ? deriveExternalStatus(
-                              '__new__',
-                              externalDraft.enabled,
-                              false,
-                              channelStatusMap,
-                              fallbackConnected
-                            )
-                          : externalStatusByName.get(selectedExternalName.toLowerCase()) ?? 'notConfigured'
-                      )
-                    )}
-                    onChange={setExternalDraft}
-                    onSave={() => void handleSaveExternal()}
-                    onDelete={
-                      selectedExternalName === '__new__'
-                        ? undefined
-                        : () => {
-                            void handleDeleteExternal()
-                          }
-                    }
-                  />
-                </div>
+                <p style={emptyText}>{modulesLoading ? t('channels.loading') : t('channels.modules.empty')}</p>
               )}
-            </div>
-          )}
+            </CatalogSection>
 
-          {(statusError || externalError || modulesError) && (
-            <div style={{ marginTop: '16px', fontSize: '12px', color: 'var(--text-dimmed)' }}>
-              {modulesError
+            <CatalogSection title={t('channels.external.group')}>
+              {externalItems.length > 0 ? (
+                <CatalogCompactGrid>
+                  {externalItems.map(({ key, ...item }) => (
+                    <ChannelCatalogItem key={key} {...item} />
+                  ))}
+                </CatalogCompactGrid>
+              ) : (
+                <p style={emptyText}>
+                  {externalLoading
+                    ? t('channels.loading')
+                    : externalManagementEnabled
+                      ? t('channels.external.empty')
+                      : t('channels.external.unavailable')}
+                </p>
+              )}
+            </CatalogSection>
+
+            {(statusError || externalError || modulesError) && (
+              <div style={diagnosticsPanel} role="status">
+                {modulesError
                   ? t('channels.loadFailed', { error: modulesError })
-                : externalError
-                  ? t('channels.loadFailed', { error: externalError })
-                  : t('channels.statusUnavailable')}
-            </div>
-          )}
-        </main>
+                  : externalError
+                    ? t('channels.loadFailed', { error: externalError })
+                    : t('channels.statusUnavailable')}
+              </div>
+            )}
+          </main>
+        </div>
       </div>
+
+      {menuPosition && (
+        <ContextMenu
+          position={menuPosition}
+          onClose={() => setMenuPosition(null)}
+          items={[
+            {
+              label: t('channels.modules.refresh'),
+              icon: <RefreshIcon size={14} />,
+              onClick: () => void reloadModules(true)
+            },
+            {
+              label: t('channels.modules.openFolder'),
+              icon: <FolderIcon size={14} />,
+              onClick: handleOpenModulesFolder
+            }
+          ]}
+        />
+      )}
     </div>
   )
+}
+
+function ChannelCatalogItem({
+  logoPath,
+  title,
+  subtitle,
+  badgeText,
+  status,
+  statusLabel,
+  active,
+  onOpen
+}: {
+  logoPath?: string
+  title: string
+  subtitle: string
+  badgeText?: string
+  status: ChannelConnectionState
+  statusLabel: string
+  active: boolean
+  onOpen: () => void
+}): JSX.Element {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        onOpen()
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      style={{
+        ...compactItem,
+        backgroundColor: active ? 'var(--bg-tertiary)' : hovered ? 'var(--bg-secondary)' : 'transparent'
+      }}
+    >
+      <ChannelIcon logoPath={logoPath} title={title} />
+      <span style={channelText}>
+        <span style={rowTitleLine}>
+          <strong style={rowTitle}>{title}</strong>
+          {badgeText && <span style={variantBadge}>{badgeText}</span>}
+        </span>
+        <span style={rowDesc}>{subtitle}</span>
+      </span>
+      <span style={channelStatus}>
+        <span
+          aria-hidden
+          style={{
+            ...statusDot,
+            backgroundColor: stateColor(status)
+          }}
+        />
+        <span style={statusLabelStyle}>{statusLabel}</span>
+      </span>
+    </div>
+  )
+}
+
+function ChannelIcon({ logoPath, title }: { logoPath?: string; title: string }): JSX.Element {
+  if (logoPath) {
+    return <img src={logoPath} alt="" width={40} height={40} style={channelIcon} />
+  }
+  return (
+    <span aria-hidden style={fallbackIcon}>
+      {title.slice(0, 1).toUpperCase()}
+    </span>
+  )
+}
+
+function formatCapabilitySummary(summary: Record<string, unknown> | undefined): string {
+  if (!summary || Object.keys(summary).length === 0) return '-'
+  const enabledCapabilities = Object.entries(summary)
+    .filter(([, value]) => value === true)
+    .map(([key]) => key)
+  return enabledCapabilities.length > 0 ? enabledCapabilities.join(', ') : '-'
+}
+
+function ChannelDetailPage({
+  title,
+  subtitle,
+  logoPath,
+  status,
+  statusLabel,
+  previewPrompt,
+  description,
+  onBack,
+  children,
+}: {
+  title: string
+  subtitle: string
+  logoPath?: string
+  status: ChannelConnectionState
+  statusLabel: string
+  previewPrompt: string
+  description: string
+  onBack: () => void
+  children: ReactNode
+}): JSX.Element {
+  const t = useT()
+  return (
+    <div style={detailPage}>
+      <main style={detailMain}>
+        <button type="button" onClick={onBack} style={backButton}>
+          <ChevronLeft size={15} aria-hidden />
+          {t('channels.title')}
+        </button>
+
+        <header style={detailHeader}>
+          <div style={detailIdentity}>
+            <ChannelIcon logoPath={logoPath} title={title} />
+            <div style={{ minWidth: 0 }}>
+              <h1 style={detailTitle}>{title}</h1>
+              <p style={detailSubtitle}>{subtitle}</p>
+            </div>
+          </div>
+          <StatusPill status={status} label={statusLabel} />
+        </header>
+
+        <div style={previewCard}>
+          <div style={previewBubble}>
+            <ChannelIcon logoPath={logoPath} title={title} />
+            <strong style={previewName}>{title}</strong>
+            <span style={previewText}>{previewPrompt}</span>
+          </div>
+        </div>
+
+        <p style={detailDescription}>{description}</p>
+
+        {children}
+      </main>
+    </div>
+  )
+}
+
+function ChannelInfoGrid({
+  items
+}: {
+  items: Array<{ label: string; value: string }>
+}): JSX.Element {
+  const t = useT()
+  return (
+    <section style={detailSection}>
+      <h2 style={detailSectionTitle}>{t('channels.detail.info')}</h2>
+      <dl style={infoGrid}>
+        {items.map((item) => (
+          <div key={item.label} style={infoRow}>
+            <dt style={infoLabel}>{item.label}</dt>
+            <dd style={infoValue}>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+const page: CSSProperties = catalogStyles.page
+const browseHeader: CSSProperties = catalogStyles.browseHeader
+const topActions: CSSProperties = catalogStyles.topActions
+const heroTitle: CSSProperties = catalogStyles.heroTitle
+const searchRow: CSSProperties = catalogStyles.searchRow
+const browseMain: CSSProperties = catalogStyles.browseMain
+const compactItem: CSSProperties = catalogStyles.compactItem
+const rowTitle: CSSProperties = catalogStyles.rowTitle
+const rowTitleLine: CSSProperties = catalogStyles.rowTitleLine
+const rowDesc: CSSProperties = catalogStyles.rowDesc
+const iconButton: CSSProperties = catalogStyles.iconButton
+const emptyText: CSSProperties = catalogStyles.emptyText
+
+const primaryAddButton: CSSProperties = {
+  ...catalogStyles.manageButton,
+  borderColor: 'var(--text-primary)',
+  backgroundColor: 'var(--text-primary)',
+  color: 'var(--bg-primary)',
+  fontWeight: 600
+}
+
+const contentShell: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  minWidth: 0,
+  display: 'flex',
+  position: 'relative'
+}
+
+const contentPane: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column'
+}
+
+const channelText: CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column'
+}
+
+const channelIcon: CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 8,
+  flexShrink: 0,
+  backgroundColor: 'var(--bg-secondary)'
+}
+
+const fallbackIcon: CSSProperties = {
+  ...channelIcon,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: 'var(--text-secondary)',
+  fontSize: 15,
+  fontWeight: 700
+}
+
+const variantBadge: CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  height: 18,
+  padding: '0 6px',
+  borderRadius: 999,
+  border: '1px solid var(--border-default)',
+  color: 'var(--text-secondary)',
+  fontSize: 10,
+  fontWeight: 600
+}
+
+const channelStatus: CSSProperties = {
+  minWidth: 112,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 6,
+  color: 'var(--text-secondary)'
+}
+
+const statusDot: CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: '50%',
+  flexShrink: 0
+}
+
+const statusLabelStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontSize: 11
+}
+
+const detailPage: CSSProperties = {
+  ...catalogStyles.page,
+  overflow: 'auto'
+}
+
+const detailMain: CSSProperties = {
+  width: 'min(760px, calc(100vw - 56px))',
+  margin: '0 auto',
+  padding: '58px 0 56px'
+}
+
+const backButton: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  height: 30,
+  padding: '0 8px 0 2px',
+  marginBottom: 24,
+  border: 0,
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 13,
+  cursor: 'pointer'
+}
+
+const detailHeader: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 16,
+  marginBottom: 28
+}
+
+const detailIdentity: CSSProperties = {
+  minWidth: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14
+}
+
+const detailTitle: CSSProperties = {
+  margin: 0,
+  color: 'var(--text-primary)',
+  fontSize: 25,
+  lineHeight: 1.18,
+  fontWeight: 700,
+  letterSpacing: 0
+}
+
+const detailSubtitle: CSSProperties = {
+  margin: '6px 0 0',
+  color: 'var(--text-secondary)',
+  fontSize: 14,
+  lineHeight: 1.45
+}
+
+const previewCard: CSSProperties = {
+  minHeight: 132,
+  borderRadius: 8,
+  background:
+    'linear-gradient(135deg, color-mix(in srgb, #9bc2ff 78%, white 8%), color-mix(in srgb, #eadcff 86%, white 5%))',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 18,
+  marginBottom: 34
+}
+
+const previewBubble: CSSProperties = {
+  maxWidth: 'min(520px, 100%)',
+  minHeight: 38,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 9,
+  padding: '8px 13px',
+  borderRadius: 8,
+  backgroundColor: 'color-mix(in srgb, white 88%, transparent)',
+  color: '#101216',
+  fontSize: 13,
+  boxShadow: '0 6px 20px color-mix(in srgb, #5f6f90 14%, transparent)'
+}
+
+const previewName: CSSProperties = {
+  flexShrink: 0,
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#05070a'
+}
+
+const previewText: CSSProperties = {
+  minWidth: 0,
+  color: '#101216',
+  lineHeight: 1.35
+}
+
+const detailDescription: CSSProperties = {
+  margin: '0 8px 38px',
+  color: 'var(--text-primary)',
+  fontSize: 14,
+  lineHeight: 1.55
+}
+
+const detailSection: CSSProperties = {
+  marginTop: 30
+}
+
+const detailSectionTitle: CSSProperties = {
+  margin: '0 0 12px',
+  color: 'var(--text-primary)',
+  fontSize: 15,
+  lineHeight: 1.35,
+  fontWeight: 700,
+  letterSpacing: 0
+}
+
+const infoGrid: CSSProperties = {
+  margin: 0,
+  border: '1px solid var(--border-default)',
+  borderRadius: 8,
+  overflow: 'hidden'
+}
+
+const infoRow: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '150px minmax(0, 1fr)',
+  gap: 12,
+  padding: '12px 14px',
+  borderBottom: '1px solid var(--border-subtle)'
+}
+
+const infoLabel: CSSProperties = {
+  color: 'var(--text-dimmed)',
+  fontSize: 12
+}
+
+const infoValue: CSSProperties = {
+  margin: 0,
+  minWidth: 0,
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflowWrap: 'anywhere'
+}
+
+const diagnosticsPanel: CSSProperties = {
+  maxWidth: 760,
+  margin: '0 auto',
+  border: '1px solid var(--border-default)',
+  borderRadius: 8,
+  backgroundColor: 'var(--bg-secondary)',
+  color: 'var(--text-secondary)',
+  padding: '12px 14px',
+  fontSize: 12
 }
