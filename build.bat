@@ -117,10 +117,26 @@ echo =====================================
 echo.
 
 cd desktop
+set CLIPROXYAPI_STASH_DIR=
+if exist resources\bin\cliproxyapi.exe (
+    set CLIPROXYAPI_STASH_DIR=%TEMP%\dotcraft-cliproxyapi-%RANDOM%-%RANDOM%
+    mkdir "%CLIPROXYAPI_STASH_DIR%"
+    copy /Y "resources\bin\cliproxyapi.exe" "%CLIPROXYAPI_STASH_DIR%\cliproxyapi.exe" >nul
+    if exist resources\bin\cliproxyapi.version (
+        copy /Y "resources\bin\cliproxyapi.version" "%CLIPROXYAPI_STASH_DIR%\cliproxyapi.version" >nul
+    )
+)
 if exist resources\bin (
     rmdir /s /q resources\bin
 )
 mkdir resources\bin
+if defined CLIPROXYAPI_STASH_DIR (
+    copy /Y "%CLIPROXYAPI_STASH_DIR%\cliproxyapi.exe" "resources\bin\cliproxyapi.exe" >nul
+    if exist "%CLIPROXYAPI_STASH_DIR%\cliproxyapi.version" (
+        copy /Y "%CLIPROXYAPI_STASH_DIR%\cliproxyapi.version" "resources\bin\cliproxyapi.version" >nul
+    )
+    rmdir /s /q "%CLIPROXYAPI_STASH_DIR%"
+)
 copy /Y "..\build\release\dotcraft.exe" "resources\bin\dotcraft.exe"
 if %ERRORLEVEL% neq 0 (
     echo Failed to stage embedded dotcraft.exe for Desktop build.

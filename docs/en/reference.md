@@ -39,7 +39,7 @@ Choose a document by goal. First-time users should start with [Getting Started](
 | Goal | Recommended doc |
 |------|-----------------|
 | Connect JetBrains, Obsidian, Unity, and other editors | [ACP Mode Guide](./acp_guide.md) |
-| Use the Unity editor extension and scene/resource tools | [Unity Integration Guide](./unity_guide.md) |
+| Use the Unity editor extension and scene/resource tools | [dotcraft-unity](https://github.com/DotHarness/dotcraft-unity) |
 | Manage local workspace runtimes and visual entry points with Hub | [Hub Local Management Guide](./hub_guide.md) |
 | Run Wire Protocol service and share a workspace across clients | [AppServer Mode Guide](./appserver_guide.md) |
 | Implement a local Hub client that discovers and manages workspace AppServers | [Hub Protocol](./reference/hub-protocol.md) |

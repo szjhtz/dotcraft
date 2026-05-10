@@ -86,9 +86,10 @@ When the editor launches DotCraft in ACP mode, the following sequence takes plac
 
 1. **Initialization** — The editor and the ACP bridge exchange protocol versions and capability declarations (`initialize`). The bridge then connects to the AppServer (spawning a local subprocess if no `--remote` is given) and forwards the handshake over the wire protocol.
 2. **Session creation** — The editor creates a new session (`session/new`); the bridge forwards the request to AppServer, which creates the session, then relays the server's response (available slash commands, config options, etc.) back to the editor UI.
-3. **Prompt exchange** — The editor sends user messages (`session/prompt`); AppServer runs the agent and streams back replies, tool call statuses, and results. The bridge relays these as `session/update` notifications to the editor.
-4. **Permission requests** — Before executing file writes or shell commands, AppServer issues an approval request over the wire protocol; the bridge translates it into a `requestPermission` ACP message for the editor to surface to the user.
-5. **File and terminal access** — When AppServer needs editor-native file or terminal access, it routes the call through the bridge back to the editor (`fs/readTextFile`, `fs/writeTextFile`, `terminal/*`), all through the editor's own APIs.
+3. **Prompt exchange** — The editor sends user messages (`session/prompt`); AppServer runs the agent and streams back visible replies, reasoning content, tool call statuses, and results. The bridge relays visible replies as `agent_message_chunk`, reasoning content as `agent_thought_chunk`, and sends them to the editor through `session/update` notifications.
+4. **Configuration changes** — DotCraft exposes mode and model selectors through ACP `configOptions`. Clients that support this call `session/set_config_option` to switch models, and the bridge updates both the current thread and the workspace default model.
+5. **Permission requests** — Before executing file writes or shell commands, AppServer issues an approval request over the wire protocol; the bridge translates it into a `requestPermission` ACP message for the editor to surface to the user.
+6. **File and terminal access** — When AppServer needs editor-native file or terminal access, it routes the call through the bridge back to the editor (`fs/readTextFile`, `fs/writeTextFile`, `terminal/*`), all through the editor's own APIs.
 
 This means DotCraft can read unsaved buffer contents, show diffs inline before applying changes, and run commands in an editor-managed terminal — capabilities that go beyond what a plain CLI agent can offer. At the same time, all agent state is fully managed by AppServer, so sessions persist and are accessible from other clients even after the editor session ends.
 
@@ -101,14 +102,15 @@ This means DotCraft can read unsaved buffer contents, show diffs inline before a
 | `session/load` | Load an existing session and replay history |
 | `session/list` | List all ACP sessions |
 | `session/prompt` | Send a prompt and receive streaming replies |
-| `session/update` | DotCraft pushes message chunks and tool call status to the editor |
+| `session/update` | DotCraft pushes visible message chunks, thought message chunks, and tool call status to the editor |
+| `session/set_config_option` | Change session configuration options such as mode and model |
 | `session/cancel` | Cancel an in-progress operation |
 | `requestPermission` | DotCraft requests execution permission for sensitive operations |
 | `fs/readTextFile` | Read files through the editor, including unsaved changes |
 | `fs/writeTextFile` | Write files through the editor with diff preview |
 | `terminal/*` | Create and manage terminals through the editor |
 | Slash Commands | Custom commands (from `.craft/commands/`) are broadcast to the editor UI |
-| Config Options | Expose selectable configuration (mode, model, etc.) to the editor |
+| Config Options | Expose selectable configuration (mode, model, etc.) to the editor; model selectors use ACP `category: "model"` |
 
 ## Session & Workspace Behavior
 

@@ -64,6 +64,7 @@ public sealed class AcpBridgeHandler(
     private readonly AppServerProcess? _appServerProcess = appServerProcess;
 
     public const int ProtocolVersion = 1;
+    internal const string DefaultModelValue = "__dotcraft_default__";
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -254,8 +255,10 @@ public sealed class AcpBridgeHandler(
         }, ct: ct);
 
         ThrowIfWireError(startDoc, "thread/start");
-        var threadId = startDoc.RootElement.GetProperty("result").GetProperty("thread").GetProperty("id").GetString()
+        var threadEl = startDoc.RootElement.GetProperty("result").GetProperty("thread");
+        var threadId = threadEl.GetProperty("id").GetString()
             ?? throw new InvalidOperationException("thread/start returned no thread id");
+        var (mode, model) = ExtractThreadModeAndModel(threadEl);
 
         if (hookRunner != null)
             await hookRunner.RunAsync(HookEvent.SessionStart, new HookInput { SessionId = threadId }, ct);
@@ -263,7 +266,7 @@ public sealed class AcpBridgeHandler(
         acpTransport.SendResponse(request.Id, new SessionNewResult
         {
             SessionId = threadId,
-            ConfigOptions = BuildConfigOptions()
+            ConfigOptions = await BuildConfigOptionsAsync(mode, model, ct)
         });
 
         BroadcastSlashCommands(threadId);
@@ -317,10 +320,11 @@ public sealed class AcpBridgeHandler(
         }
 
         var loadedMode = thread?.Configuration?.Mode ?? "agent";
+        var loadedModel = thread?.Configuration?.Model;
         acpTransport.SendResponse(request.Id, new SessionLoadResult
         {
             SessionId = sessionId,
-            ConfigOptions = BuildConfigOptions(loadedMode)
+            ConfigOptions = await BuildConfigOptionsAsync(loadedMode, loadedModel, ct)
         });
 
         if (hookRunner != null)
@@ -338,6 +342,8 @@ public sealed class AcpBridgeHandler(
             updateKind = AcpUpdateKind.UserMessageChunk;
         else if (item.Type == ItemType.AgentMessage)
             updateKind = AcpUpdateKind.AgentMessageChunk;
+        else if (item.Type == ItemType.ReasoningContent)
+            updateKind = AcpUpdateKind.AgentThoughtChunk;
 
         if (updateKind == null)
             return;
@@ -376,6 +382,8 @@ public sealed class AcpBridgeHandler(
             return userMsg.Text;
         if (payload is AgentMessagePayload agentMsg)
             return agentMsg.Text;
+        if (payload is ReasoningContentPayload reasoning)
+            return reasoning.Text;
         return null;
     }
 
@@ -825,7 +833,7 @@ public sealed class AcpBridgeHandler(
             {
                 var delta = @params.TryGetProperty("delta", out var d) ? d.GetString() : null;
                 if (!string.IsNullOrEmpty(delta))
-                    SendMessageChunk(sessionId, ReasoningContentHelper.FormatBlock(delta));
+                    SendThoughtChunk(sessionId, delta);
                 break;
             }
             case AppServerMethods.ItemStarted:
@@ -970,12 +978,22 @@ public sealed class AcpBridgeHandler(
 
     private void SendMessageChunk(string sessionId, string text)
     {
+        SendContentChunk(sessionId, AcpUpdateKind.AgentMessageChunk, text);
+    }
+
+    private void SendThoughtChunk(string sessionId, string text)
+    {
+        SendContentChunk(sessionId, AcpUpdateKind.AgentThoughtChunk, text);
+    }
+
+    private void SendContentChunk(string sessionId, string updateKind, string text)
+    {
         acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
             {
-                SessionUpdate = AcpUpdateKind.AgentMessageChunk,
+                SessionUpdate = updateKind,
                 Content = new AcpContentBlock { Type = "text", Text = text }
             }
         });
@@ -1080,23 +1098,52 @@ public sealed class AcpBridgeHandler(
             await wire.SendRequestAsync(AppServerMethods.ThreadModeSet,
                 new { threadId = p.SessionId, mode = modeName }, ct: ct);
 
-            var updatedOptions = BuildConfigOptions(modeName);
+            var current = await ReadThreadConfigurationAsync(p.SessionId, includeTurns: false, ct);
+            var updatedOptions = await BuildConfigOptionsAsync(modeName, current.Model, ct);
             acpTransport.SendResponse(request.Id, new SessionSetConfigOptionResult { ConfigOptions = updatedOptions });
 
-            acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
-            {
-                SessionId = p.SessionId,
-                Update = new AcpSessionUpdate
-                {
-                    SessionUpdate = AcpUpdateKind.ConfigOptionsUpdate,
-                    ConfigOptions = updatedOptions
-                }
-            });
+            SendConfigOptionsUpdate(p.SessionId, updatedOptions);
+            return;
         }
-        else
+
+        if (p.ConfigId == "model")
         {
-            acpTransport.SendError(request.Id, -32602, $"Unknown configId: {p.ConfigId}");
+            var current = await ReadThreadConfigurationAsync(p.SessionId, includeTurns: false, ct);
+            var availableOptions = await BuildConfigOptionsAsync(current.Mode, current.Model, ct);
+            var modelOption = availableOptions.FirstOrDefault(o => IsModelConfigOption(o));
+            if (modelOption == null)
+            {
+                acpTransport.SendError(request.Id, -32602, "Model switching is unavailable for this session.");
+                return;
+            }
+
+            if (modelOption.Options.All(o => !string.Equals(o.Value, p.Value, StringComparison.Ordinal)))
+            {
+                acpTransport.SendError(request.Id, -32602, $"Unknown model option: {p.Value}");
+                return;
+            }
+
+            var nextModel = string.Equals(p.Value, DefaultModelValue, StringComparison.Ordinal)
+                ? null
+                : p.Value.Trim();
+            await wire.WorkspaceConfigUpdateAsync(nextModel, ct);
+
+            current = await ReadThreadConfigurationAsync(p.SessionId, includeTurns: false, ct);
+            var config = current.Configuration ?? new JsonObject();
+            SetCaseInsensitiveStringProperty(config, "model", nextModel);
+
+            var updateDoc = await wire.SendRequestAsync(AppServerMethods.ThreadConfigUpdate,
+                new { threadId = p.SessionId, config }, ct: ct);
+            ThrowIfWireError(updateDoc, "thread/config/update");
+
+            var updatedOptions = await BuildConfigOptionsAsync(current.Mode, nextModel, ct);
+            acpTransport.SendResponse(request.Id, new SessionSetConfigOptionResult { ConfigOptions = updatedOptions });
+            SendConfigOptionsUpdate(p.SessionId, updatedOptions);
+            logger?.LogEvent($"Model changed [session={p.SessionId}]: {nextModel ?? "Default"}");
+            return;
         }
+
+        acpTransport.SendError(request.Id, -32602, $"Unknown configId: {p.ConfigId}");
     }
 
     private void SendModeUpdate(string sessionId, AgentMode mode)
@@ -1235,24 +1282,176 @@ public sealed class AcpBridgeHandler(
         return configs;
     }
 
-    private static List<ConfigOption> BuildConfigOptions(string currentMode = "agent")
+    private void SendConfigOptionsUpdate(string sessionId, List<ConfigOption> configOptions)
     {
-        return
-        [
+        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        {
+            SessionId = sessionId,
+            Update = new AcpSessionUpdate
+            {
+                SessionUpdate = AcpUpdateKind.ConfigOptionsUpdate,
+                ConfigOptions = configOptions
+            }
+        });
+    }
+
+    private async Task<List<ConfigOption>> BuildConfigOptionsAsync(
+        string? currentMode = "agent",
+        string? currentModel = null,
+        CancellationToken ct = default)
+    {
+        ModelListResult? modelList = null;
+        try
+        {
+            modelList = await wire.ModelListAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError("ACP model list unavailable", ex);
+        }
+
+        return BuildConfigOptions(currentMode, currentModel, modelList);
+    }
+
+    internal static List<ConfigOption> BuildConfigOptions(
+        string? currentMode = "agent",
+        string? currentModel = null,
+        ModelListResult? modelList = null)
+    {
+        var options = new List<ConfigOption>
+        {
             new ConfigOption
             {
                 Id = "mode",
                 Name = "Mode",
                 Category = "mode",
-                CurrentValue = currentMode,
+                CurrentValue = string.IsNullOrWhiteSpace(currentMode) ? "agent" : currentMode.Trim(),
                 Options =
                 [
                     new ConfigOptionValue { Value = "agent", Name = "Agent", Description = "Full agent mode with all tools" },
                     new ConfigOptionValue { Value = "plan", Name = "Plan", Description = "Read-only planning mode" }
                 ]
             }
-        ];
+        };
+
+        if (modelList?.Success == true)
+        {
+            var modelIds = modelList.Models
+                .Select(m => m.Id?.Trim())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .ToList();
+
+            var normalizedCurrentModel = NormalizeOptionalModel(currentModel);
+            if (!string.IsNullOrWhiteSpace(normalizedCurrentModel)
+                && modelIds.All(id => !string.Equals(id, normalizedCurrentModel, StringComparison.OrdinalIgnoreCase)))
+            {
+                modelIds.Add(normalizedCurrentModel);
+            }
+
+            modelIds = [.. modelIds
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)];
+
+            var modelOptions = new List<ConfigOptionValue>
+            {
+                new() { Value = DefaultModelValue, Name = "Default" }
+            };
+            modelOptions.AddRange(modelIds.Select(id => new ConfigOptionValue { Value = id, Name = id }));
+
+            options.Add(new ConfigOption
+            {
+                Id = "model",
+                Name = "Model",
+                Category = "model",
+                CurrentValue = string.IsNullOrWhiteSpace(normalizedCurrentModel)
+                    ? DefaultModelValue
+                    : normalizedCurrentModel,
+                Options = modelOptions
+            });
+        }
+
+        return options;
     }
+
+    private async Task<ThreadConfigurationState> ReadThreadConfigurationAsync(
+        string threadId,
+        bool includeTurns,
+        CancellationToken ct)
+    {
+        var readDoc = await wire.SendRequestAsync(AppServerMethods.ThreadRead, new
+        {
+            threadId,
+            includeTurns
+        }, ct: ct);
+
+        ThrowIfWireError(readDoc, "thread/read");
+        var threadEl = readDoc.RootElement.GetProperty("result").GetProperty("thread");
+        var (mode, model) = ExtractThreadModeAndModel(threadEl);
+        JsonObject? config = null;
+        if (threadEl.TryGetProperty("configuration", out var configEl)
+            && configEl.ValueKind == JsonValueKind.Object)
+        {
+            config = JsonNode.Parse(configEl.GetRawText()) as JsonObject;
+        }
+
+        return new ThreadConfigurationState(mode, model, config);
+    }
+
+    private static (string Mode, string? Model) ExtractThreadModeAndModel(JsonElement threadEl)
+    {
+        if (!threadEl.TryGetProperty("configuration", out var configEl)
+            || configEl.ValueKind != JsonValueKind.Object)
+        {
+            return ("agent", null);
+        }
+
+        var mode = TryGetCaseInsensitiveString(configEl, "mode");
+        var model = TryGetCaseInsensitiveString(configEl, "model");
+        return (string.IsNullOrWhiteSpace(mode) ? "agent" : mode.Trim(), NormalizeOptionalModel(model));
+    }
+
+    private static string? TryGetCaseInsensitiveString(JsonElement obj, string name)
+    {
+        foreach (var property in obj.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)
+                && property.Value.ValueKind == JsonValueKind.String)
+            {
+                return property.Value.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeOptionalModel(string? model)
+    {
+        var trimmed = model?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private static void SetCaseInsensitiveStringProperty(JsonObject obj, string key, string? value)
+    {
+        var existingKey = obj
+            .Select(kv => kv.Key)
+            .FirstOrDefault(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            if (existingKey != null)
+                obj.Remove(existingKey);
+            return;
+        }
+
+        obj[existingKey ?? key] = value;
+    }
+
+    private static bool IsModelConfigOption(ConfigOption option) =>
+        string.Equals(option.Id, "model", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(option.Category, "model", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record ThreadConfigurationState(string Mode, string? Model, JsonObject? Configuration);
 
     private bool EnsureInitialized(JsonRpcRequest request)
     {

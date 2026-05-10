@@ -39,7 +39,7 @@
 | 目标 | 推荐文档 |
 |------|----------|
 | 让 JetBrains、Obsidian、Unity 等编辑器接入 DotCraft | [ACP 模式指南](./acp_guide.md) |
-| 使用 Unity 编辑器扩展和场景资源工具 | [Unity 集成指南](./unity_guide.md) |
+| 使用 Unity 编辑器扩展和场景资源工具 | [dotcraft-unity](https://github.com/DotHarness/dotcraft-unity) |
 | 使用 Hub 管理本机工作区运行时和可视化入口 | [Hub 本地管理指南](./hub_guide.md) |
 | 运行 Wire Protocol 服务、多客户端共享工作区 | [AppServer 模式指南](./appserver_guide.md) |
 | 实现本地 Hub client，发现和托管工作区 AppServer | [Hub Protocol](./reference/hub-protocol.md) |

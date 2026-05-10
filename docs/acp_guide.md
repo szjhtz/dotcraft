@@ -86,9 +86,10 @@ dotcraft -acp --remote ws://<host>:<port>/ws
 
 1. **初始化** — 编辑器与 ACP 桥接层交换协议版本和能力声明（`initialize`）；桥接层随后连接 AppServer（若未指定 `--remote` 则自动启动本地子进程），并将握手信息通过 Wire Protocol 转发给 AppServer。
 2. **创建会话** — 编辑器发送创建会话请求（`session/new`）；桥接层将请求转发给 AppServer，由 AppServer 创建会话，再将响应（可用斜杠命令、配置选项等）中继回编辑器 UI。
-3. **提示交互** — 编辑器发送用户消息（`session/prompt`）；AppServer 运行 Agent 并流式返回回复、工具调用状态和执行结果，桥接层将这些内容作为 `session/update` 通知转发给编辑器。
-4. **权限请求** — 执行文件写入或 Shell 命令前，AppServer 通过 Wire Protocol 下发审批请求；桥接层将其转换为 `requestPermission` ACP 消息，由编辑器向用户展示审批/拒绝提示。
-5. **文件与终端访问** — 当 AppServer 需要编辑器原生的文件或终端访问能力时，请求通过桥接层转发回编辑器（`fs/readTextFile`、`fs/writeTextFile`、`terminal/*`），所有操作均通过编辑器自身的 API 路由。
+3. **提示交互** — 编辑器发送用户消息（`session/prompt`）；AppServer 运行 Agent 并流式返回可见回复、思考内容、工具调用状态和执行结果，桥接层将可见回复作为 `agent_message_chunk`、思考内容作为 `agent_thought_chunk`，并通过 `session/update` 通知转发给编辑器。
+4. **配置切换** — DotCraft 通过 ACP `configOptions` 暴露模式和模型选择器。支持该能力的客户端调用 `session/set_config_option` 切换模型，桥接层会同步更新当前线程和工作区默认模型。
+5. **权限请求** — 执行文件写入或 Shell 命令前，AppServer 通过 Wire Protocol 下发审批请求；桥接层将其转换为 `requestPermission` ACP 消息，由编辑器向用户展示审批/拒绝提示。
+6. **文件与终端访问** — 当 AppServer 需要编辑器原生的文件或终端访问能力时，请求通过桥接层转发回编辑器（`fs/readTextFile`、`fs/writeTextFile`、`terminal/*`），所有操作均通过编辑器自身的 API 路由。
 
 这意味着 DotCraft 能够读取编辑器缓冲区中尚未保存的内容、在应用变更前展示内联 diff、并在编辑器管理的终端中执行命令——这些能力超出了普通 CLI 代理所能提供的范畴。与此同时，所有 Agent 状态均由 AppServer 统一管理，会话持久存储并可在其他客户端中访问，即使编辑器关闭后依然保留。
 
@@ -101,14 +102,15 @@ dotcraft -acp --remote ws://<host>:<port>/ws
 | `session/load` | 加载已有会话并回放历史 |
 | `session/list` | 列出所有 ACP 会话 |
 | `session/prompt` | 发送提示并流式接收回复 |
-| `session/update` | DotCraft 向编辑器推送消息块和工具调用状态 |
+| `session/update` | DotCraft 向编辑器推送可见消息块、思考消息块和工具调用状态 |
+| `session/set_config_option` | 切换会话配置选项，例如模式和模型 |
 | `session/cancel` | 取消正在进行的操作 |
 | `requestPermission` | DotCraft 就敏感操作向编辑器请求执行权限 |
 | `fs/readTextFile` | 通过编辑器读取文件（含未保存内容） |
 | `fs/writeTextFile` | 通过编辑器写入文件（可预览 diff） |
 | `terminal/*` | 通过编辑器创建和管理终端 |
 | Slash Commands | `.craft/commands/` 中的自定义命令自动广播到编辑器命令选择器 |
-| Config Options | 将可选配置（模式、模型等）暴露到编辑器 UI |
+| Config Options | 将可选配置（模式、模型等）暴露到编辑器 UI，模型选择器使用 ACP `category: "model"` |
 
 ## 会话与工作区行为
 

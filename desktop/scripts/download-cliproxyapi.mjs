@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdirSync, writeFileSync, chmodSync, copyFileSync, rmSync, existsSync, readdirSync, statSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { join, basename, dirname } from 'node:path'
+import { join, basename, dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 
@@ -9,6 +9,9 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const versionConfig = JSON.parse(readFileSync(join(__dirname, 'cliproxyapi-version.json'), 'utf8'))
 const TARGET_DIR = join(process.cwd(), 'resources', 'bin')
+const CACHE_DIR = process.env.CLIPROXYAPI_CACHE_DIR
+  ? resolve(process.env.CLIPROXYAPI_CACHE_DIR)
+  : join(process.cwd(), 'cache', 'cliproxyapi')
 const VERSION_MARKER_FILE = 'cliproxyapi.version'
 const PLATFORM_MAP = {
   win32: 'windows',
@@ -70,6 +73,14 @@ function getTargetPaths(exeName) {
   }
 }
 
+function getCachePaths(exeName, platform, arch) {
+  const cacheDir = join(CACHE_DIR, versionConfig.version, `${platform}-${arch}`)
+  return {
+    binaryPath: join(cacheDir, exeName),
+    versionPath: join(cacheDir, VERSION_MARKER_FILE)
+  }
+}
+
 function readInstalledVersion(versionPath) {
   if (!existsSync(versionPath)) {
     return null
@@ -80,6 +91,15 @@ function readInstalledVersion(versionPath) {
 
 function isDesiredBinaryAlreadyInstalled(binaryPath, versionPath) {
   return existsSync(binaryPath) && readInstalledVersion(versionPath) === versionConfig.version
+}
+
+function installBinary(sourcePath, destinationPaths) {
+  mkdirSync(dirname(destinationPaths.binaryPath), { recursive: true })
+  copyFileSync(sourcePath, destinationPaths.binaryPath)
+  if (process.platform !== 'win32') {
+    chmodSync(destinationPaths.binaryPath, 0o755)
+  }
+  writeFileSync(destinationPaths.versionPath, `${versionConfig.version}\n`)
 }
 
 function recursiveFindBinary(dirPath, names) {
@@ -156,11 +176,22 @@ function extractArchive(archivePath, outputDir) {
 
 async function main() {
   const { platform, arch, exeName } = ensureSupported()
-  const { binaryPath: targetPath, versionPath } = getTargetPaths(exeName)
+  const targetPaths = getTargetPaths(exeName)
+  const cachePaths = getCachePaths(exeName, platform, arch)
   const forceDownload = shouldForceDownload()
 
-  if (!forceDownload && isDesiredBinaryAlreadyInstalled(targetPath, versionPath)) {
-    console.log(`[cliproxyapi] Reusing bundled ${exeName} at ${targetPath} (${versionConfig.version})`)
+  if (!forceDownload && isDesiredBinaryAlreadyInstalled(targetPaths.binaryPath, targetPaths.versionPath)) {
+    if (!isDesiredBinaryAlreadyInstalled(cachePaths.binaryPath, cachePaths.versionPath)) {
+      installBinary(targetPaths.binaryPath, cachePaths)
+      console.log(`[cliproxyapi] Cached bundled ${exeName} at ${cachePaths.binaryPath} (${versionConfig.version})`)
+    }
+    console.log(`[cliproxyapi] Reusing bundled ${exeName} at ${targetPaths.binaryPath} (${versionConfig.version})`)
+    return
+  }
+
+  if (!forceDownload && isDesiredBinaryAlreadyInstalled(cachePaths.binaryPath, cachePaths.versionPath)) {
+    installBinary(cachePaths.binaryPath, targetPaths)
+    console.log(`[cliproxyapi] Reusing cached ${exeName} from ${cachePaths.binaryPath} (${versionConfig.version})`)
     return
   }
 
@@ -188,14 +219,11 @@ async function main() {
       throw new Error('Could not find CLIProxyAPI executable in extracted archive')
     }
 
-    mkdirSync(TARGET_DIR, { recursive: true })
-    copyFileSync(binaryPath, targetPath)
-    if (process.platform !== 'win32') {
-      chmodSync(targetPath, 0o755)
-    }
-    writeFileSync(versionPath, `${versionConfig.version}\n`)
-    console.log(`[cliproxyapi] Installed ${basename(binaryPath)} -> ${targetPath}`)
-    console.log(`[cliproxyapi] Recorded version marker at ${versionPath}`)
+    installBinary(binaryPath, targetPaths)
+    installBinary(binaryPath, cachePaths)
+    console.log(`[cliproxyapi] Installed ${basename(binaryPath)} -> ${targetPaths.binaryPath}`)
+    console.log(`[cliproxyapi] Cached ${basename(binaryPath)} -> ${cachePaths.binaryPath}`)
+    console.log(`[cliproxyapi] Recorded version marker at ${targetPaths.versionPath}`)
   } finally {
     if (existsSync(workDir)) {
       rmSync(workDir, { recursive: true, force: true })

@@ -874,7 +874,7 @@ public static class AcpUpdateKind
     public const string ToolCall = "tool_call";
     public const string ToolCallUpdate = "tool_call_update";
     public const string Plan = "plan";
-    public const string ConfigOptionsUpdate = "config_options_update";
+    public const string ConfigOptionsUpdate = "config_option_update";
     public const string AvailableCommandsUpdate = "available_commands_update";
     public const string CurrentModeUpdate = "current_mode_update";
 }
