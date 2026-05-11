@@ -9,7 +9,7 @@ import { ChannelAdapter, type ChannelAdapterOptions } from "./adapter.js";
 import { DotCraftClient } from "./client.js";
 import type { ModuleError, ModuleErrorCode } from "./lifecycle.js";
 import type { WorkspaceContext } from "./module.js";
-import { Transport, TransportClosed } from "./transport.js";
+import { StdioTransport, Transport, TransportClosed } from "./transport.js";
 
 export type LoadJsonConfigResult = { found: true; data: unknown } | { found: false };
 
@@ -85,8 +85,9 @@ export abstract class ModuleChannelAdapter<TConfig = unknown> extends ChannelAda
     }
 
     try {
-      this.validateConfig(loaded.data);
-      this.loadedConfig = loaded.data;
+      const rawConfig = isStdioRuntime() ? withStdioRuntimeDefaults(loaded.data) : loaded.data;
+      this.validateConfig(rawConfig);
+      this.loadedConfig = rawConfig;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.setStatus("configInvalid", this.buildModuleError("configInvalid", message));
@@ -94,7 +95,9 @@ export abstract class ModuleChannelAdapter<TConfig = unknown> extends ChannelAda
     }
 
     try {
-      const transport = this.buildTransportFromConfig(this.loadedConfig);
+      const transport = isStdioRuntime()
+        ? new StdioTransport()
+        : this.buildTransportFromConfig(this.loadedConfig);
       this.client = new DotCraftClient(transport);
       await super.start();
     } catch (error) {
@@ -148,4 +151,28 @@ function isNodeErrno(error: unknown, code: string): boolean {
     "code" in error &&
     String((error as { code?: unknown }).code) === code
   );
+}
+
+function isStdioRuntime(): boolean {
+  return process.env.DOTCRAFT_CHANNEL_TRANSPORT === "stdio";
+}
+
+function withStdioRuntimeDefaults(rawConfig: unknown): unknown {
+  if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
+    return rawConfig;
+  }
+
+  const config = { ...(rawConfig as Record<string, unknown>) };
+  const dotcraftRaw = config.dotcraft;
+  const dotcraft =
+    dotcraftRaw && typeof dotcraftRaw === "object" && !Array.isArray(dotcraftRaw)
+      ? { ...(dotcraftRaw as Record<string, unknown>) }
+      : {};
+
+  if (typeof dotcraft.wsUrl !== "string" || dotcraft.wsUrl.trim() === "") {
+    dotcraft.wsUrl = "ws://127.0.0.1/stdio-placeholder";
+  }
+
+  config.dotcraft = dotcraft;
+  return config;
 }

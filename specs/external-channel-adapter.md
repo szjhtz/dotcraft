@@ -145,6 +145,7 @@ GatewayHost
 - The adapter process does not need a network port.
 - `ExternalChannelHost` reuses the existing `StdioTransport`.
 - `stderr` from the adapter is forwarded to DotCraft's diagnostic log stream.
+- Built-in TypeScript adapters may be configured with `builtinModule` instead of a persisted absolute `command`. In this case the AppServer expands the command at runtime using Hub-provided `DOTCRAFT_NODE_BIN`, `DOTCRAFT_NODE_RUN_AS_NODE`, and `DOTCRAFT_MODULES_DIR` environment variables.
 
 Best for: single-machine deployments, simple operational model.
 

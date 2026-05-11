@@ -30,6 +30,8 @@ internal sealed class AppServerWorkspaceRuntimeFeature(IServiceProvider services
 
     public IChannelStatusProvider? ChannelStatusProvider => _channelRunner;
 
+    public IExternalChannelLogProvider? ExternalChannelLogProvider => _channelRunner;
+
     public string? DashboardUrl => _channelRunner?.DashboardUrl;
 
     public event Action<IAutomationTaskEventPayload>? AutomationTaskUpdated;

@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace DotCraft.AppServer;
 
-public interface IAppServerChannelRunner : IChannelStatusProvider, IAsyncDisposable
+public interface IAppServerChannelRunner : IChannelStatusProvider, IExternalChannelLogProvider, IAsyncDisposable
 {
     string? DashboardUrl { get; }
 
@@ -73,6 +73,9 @@ internal sealed class ChannelRunnerAdapter(ChannelRunner inner) : IAppServerChan
         inner.ApplyExternalChannelRemoveAsync(channelName, ct);
 
     public IReadOnlyList<ChannelStatusInfo> GetChannelStatuses() => inner.GetChannelStatuses();
+
+    public IReadOnlyList<string> GetRecentExternalChannelLogs(string channelName, int? tail = null) =>
+        inner.GetRecentExternalChannelLogs(channelName, tail);
 
     public ValueTask DisposeAsync() => inner.DisposeAsync();
 }

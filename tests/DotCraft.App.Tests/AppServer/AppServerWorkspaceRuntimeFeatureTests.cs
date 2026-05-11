@@ -313,6 +313,13 @@ public sealed class AppServerWorkspaceRuntimeFeatureTests
             }
         ];
 
+        public IReadOnlyList<string> GetRecentExternalChannelLogs(string channelName, int? tail = null)
+        {
+            _ = channelName;
+            _ = tail;
+            return [];
+        }
+
         public ValueTask DisposeAsync()
         {
             DisposeCalls++;

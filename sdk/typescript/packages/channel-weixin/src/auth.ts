@@ -82,11 +82,11 @@ export async function waitForQrLogin(opts: {
 
     if (st.status === "scaned" && !scannedPrinted) {
       scannedPrinted = true;
-      console.log("\nScanned — confirm in WeChat...\n");
+      console.error("\nScanned — confirm in WeChat...\n");
     }
 
     if (st.status === "expired") {
-      console.log("QR expired, fetching new QR...");
+      console.error("QR expired, fetching new QR...");
       const next = await fetchQrCode(opts.apiBaseUrl, opts.botType);
       qrcode = next.qrcode;
       opts.onQrUrl(next.qrcode_img_content);

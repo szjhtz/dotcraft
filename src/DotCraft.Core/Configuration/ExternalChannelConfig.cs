@@ -43,6 +43,14 @@ public sealed class ExternalChannelEntry
     public string? Command { get; set; }
 
     /// <summary>
+    /// Built-in TypeScript module directory name. When set, DotCraft expands the
+    /// command from Hub-provided runtime hints instead of persisting absolute paths.
+    /// </summary>
+    [ConfigField(Hint = "Optional built-in TypeScript module id, such as channel-telegram.")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BuiltinModule { get; set; }
+
+    /// <summary>
     /// Additional command-line arguments for the subprocess.
     /// </summary>
     [ConfigField(Hint = "One argument per line in Dashboard.")]
@@ -70,6 +78,7 @@ public sealed class ExternalChannelEntry
             Enabled = Enabled,
             Transport = Transport,
             Command = Command,
+            BuiltinModule = BuiltinModule,
             Args = Args != null ? [.. Args] : null,
             WorkingDirectory = WorkingDirectory,
             Env = Env != null ? new Dictionary<string, string>(Env, StringComparer.Ordinal) : null

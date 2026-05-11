@@ -27,6 +27,8 @@ public interface IWorkspaceRuntimeAppServerFeature : IAsyncDisposable
 {
     IChannelStatusProvider? ChannelStatusProvider { get; }
 
+    IExternalChannelLogProvider? ExternalChannelLogProvider { get; }
+
     string? DashboardUrl { get; }
 
     event Action<IAutomationTaskEventPayload>? AutomationTaskUpdated;

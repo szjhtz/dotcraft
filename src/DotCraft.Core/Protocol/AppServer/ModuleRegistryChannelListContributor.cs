@@ -13,6 +13,9 @@ public sealed class ModuleRegistryChannelListContributor(
     CronService? cronService,
     HeartbeatService? heartbeatService) : IAppServerChannelListContributor
 {
+    private readonly Lazy<IReadOnlyList<ChannelInfo>> _bundledTypeScriptChannels =
+        new(BundledTypeScriptModuleScanner.ScanFromEnvironment);
+
     /// <inheritdoc />
     public void AppendBaseChannels(List<ChannelInfo> channels, HashSet<string> seen)
     {
@@ -28,6 +31,9 @@ public sealed class ModuleRegistryChannelListContributor(
             foreach (var e in module.GetSessionChannelListEntries())
                 Add(e.Name, e.Category);
         }
+
+        foreach (var channel in _bundledTypeScriptChannels.Value)
+            Add(channel.Name, channel.Category);
 
         if (cronService != null)
             Add("cron", "system");

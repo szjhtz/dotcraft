@@ -57,6 +57,7 @@ public sealed class AppServerRequestHandler(
     IEnumerable<IAppServerProtocolExtension>? protocolExtensions = null,
     Func<ExternalChannelEntry, CancellationToken, Task>? onExternalChannelUpserted = null,
     Func<string, CancellationToken, Task>? onExternalChannelRemoved = null,
+    IExternalChannelLogProvider? externalChannelLogProvider = null,
     SessionStreamDebugLogger? streamDebugLogger = null,
     IReadOnlyList<ConfigSchemaSection>? configSchema = null,
     IAppConfigMonitor? appConfigMonitor = null,
@@ -170,6 +171,7 @@ public sealed class AppServerRequestHandler(
         AppServerMethods.ExternalChannelGet,
         AppServerMethods.ExternalChannelUpsert,
         AppServerMethods.ExternalChannelRemove,
+        AppServerMethods.ExternalChannelLogs,
         AppServerMethods.SubAgentProfileList,
         AppServerMethods.SubAgentSettingsUpdate,
         AppServerMethods.SubAgentProfileSetEnabled,
@@ -222,6 +224,7 @@ public sealed class AppServerRequestHandler(
                 AppServerMethods.ExternalChannelGet => HandleExternalChannelGetAsync(msg, ct),
                 AppServerMethods.ExternalChannelUpsert => HandleExternalChannelUpsertAsync(msg, ct),
                 AppServerMethods.ExternalChannelRemove => HandleExternalChannelRemoveAsync(msg, ct),
+                AppServerMethods.ExternalChannelLogs => HandleExternalChannelLogsAsync(msg, ct),
                 AppServerMethods.SubAgentProfileList => HandleSubAgentProfileListAsync(msg, ct),
                 AppServerMethods.SubAgentSettingsUpdate => HandleSubAgentSettingsUpdateAsync(msg, ct),
                 AppServerMethods.SubAgentProfileSetEnabled => HandleSubAgentProfileSetEnabledAsync(msg, ct),
@@ -840,6 +843,24 @@ public sealed class AppServerRequestHandler(
             [ConfigChangeRegions.ExternalChannel]);
 
         return new ExternalChannelRemoveResult { Removed = true };
+    }
+
+    private Task<object?> HandleExternalChannelLogsAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        var p = GetParams<ExternalChannelLogsParams>(msg);
+        EnsureExternalChannelManagementAvailable();
+        if (externalChannelLogProvider == null)
+            throw AppServerErrors.InvalidRequest("External channel log retrieval is not available.");
+        if (string.IsNullOrWhiteSpace(p.Name))
+            throw AppServerErrors.InvalidParams("'name' is required.");
+
+        var lines = externalChannelLogProvider.GetRecentExternalChannelLogs(p.Name.Trim(), p.Tail);
+        return Task.FromResult<object?>(new ExternalChannelLogsResult
+        {
+            Name = p.Name.Trim(),
+            Lines = lines.ToList()
+        });
     }
 
     private Task<object?> HandleSubAgentProfileListAsync(AppServerIncomingMessage msg, CancellationToken ct)
@@ -2018,6 +2039,7 @@ public sealed class AppServerRequestHandler(
         Enabled = config.Enabled,
         Transport = config.Transport == ExternalChannelTransport.Websocket ? "websocket" : "subprocess",
         Command = string.IsNullOrWhiteSpace(config.Command) ? null : config.Command,
+        BuiltinModule = string.IsNullOrWhiteSpace(config.BuiltinModule) ? null : config.BuiltinModule,
         Args = config.Args is { Count: > 0 } ? [.. config.Args] : null,
         WorkingDirectory = string.IsNullOrWhiteSpace(config.WorkingDirectory) ? null : config.WorkingDirectory,
         Env = config.Env is { Count: > 0 } ? new Dictionary<string, string>(config.Env, StringComparer.Ordinal) : null
@@ -2029,6 +2051,7 @@ public sealed class AppServerRequestHandler(
         Enabled = wire.Enabled,
         Transport = NormalizeExternalChannelTransport(wire.Transport),
         Command = string.IsNullOrWhiteSpace(wire.Command) ? null : wire.Command.Trim(),
+        BuiltinModule = string.IsNullOrWhiteSpace(wire.BuiltinModule) ? null : wire.BuiltinModule.Trim(),
         Args = wire.Args is { Count: > 0 } ? [.. wire.Args.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())] : null,
         WorkingDirectory = string.IsNullOrWhiteSpace(wire.WorkingDirectory) ? null : wire.WorkingDirectory.Trim(),
         Env = wire.Env is { Count: > 0 } ? new Dictionary<string, string>(wire.Env, StringComparer.Ordinal) : null
@@ -2156,12 +2179,13 @@ public sealed class AppServerRequestHandler(
 
         if (transport == ExternalChannelTransport.Subprocess)
         {
-            if (string.IsNullOrWhiteSpace(channel.Command))
-                throw AppServerErrors.ExternalChannelValidationFailed("'channel.command' is required for subprocess transport.");
+            if (string.IsNullOrWhiteSpace(channel.Command) && string.IsNullOrWhiteSpace(channel.BuiltinModule))
+                throw AppServerErrors.ExternalChannelValidationFailed("'channel.command' or 'channel.builtinModule' is required for subprocess transport.");
         }
         else
         {
             if (!string.IsNullOrWhiteSpace(channel.Command) ||
+                !string.IsNullOrWhiteSpace(channel.BuiltinModule) ||
                 channel.Args is { Count: > 0 } ||
                 !string.IsNullOrWhiteSpace(channel.WorkingDirectory) ||
                 channel.Env is { Count: > 0 })
@@ -2464,7 +2488,9 @@ public sealed class AppServerRequestHandler(
     {
         var nativeChannels = new List<ChannelInfo>();
         channelListContributor.AppendBaseChannels(nativeChannels, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        if (nativeChannels.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)))
+        if (nativeChannels.Any(c =>
+                !string.Equals(c.Category, "external", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)))
         {
             throw AppServerErrors.ExternalChannelNameConflict(
                 $"'{name}' conflicts with a native channel name.");
@@ -2483,6 +2509,8 @@ public sealed class AppServerRequestHandler(
         {
             if (!string.IsNullOrWhiteSpace(channel.Command))
                 node["command"] = channel.Command;
+            if (!string.IsNullOrWhiteSpace(channel.BuiltinModule))
+                node["builtinModule"] = channel.BuiltinModule;
             if (channel.Args is { Count: > 0 })
                 node["args"] = JsonSerializer.SerializeToNode(channel.Args);
             if (!string.IsNullOrWhiteSpace(channel.WorkingDirectory))

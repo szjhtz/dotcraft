@@ -29,6 +29,7 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
     private readonly string _hubToken;
     private readonly string? _dotcraftBin;
     private readonly HubAppServerRegistryStore? _store;
+    private readonly HubRuntimeToolsStore? _runtimeToolsStore;
     private readonly ConcurrentDictionary<string, HubAppServerRegistryRecord> _persisted;
     private readonly CancellationTokenSource _healthCts = new();
     private Task? _healthTask;
@@ -39,7 +40,8 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         string hubApiBaseUrl,
         string hubToken,
         string? dotcraftBin = null,
-        string? registryPath = null)
+        string? registryPath = null,
+        string? runtimeToolsPath = null)
     {
         _entries = new ConcurrentDictionary<string, ManagedEntry>(WorkspaceComparer);
         _events = events;
@@ -47,6 +49,7 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         _hubToken = hubToken;
         _dotcraftBin = dotcraftBin;
         _store = string.IsNullOrWhiteSpace(registryPath) ? null : new HubAppServerRegistryStore(registryPath);
+        _runtimeToolsStore = string.IsNullOrWhiteSpace(runtimeToolsPath) ? null : new HubRuntimeToolsStore(runtimeToolsPath);
         _persisted = new ConcurrentDictionary<string, HubAppServerRegistryRecord>(
             _store?.Load() ?? new Dictionary<string, HubAppServerRegistryRecord>(WorkspaceComparer),
             WorkspaceComparer);
@@ -73,6 +76,11 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
             RefreshExited(entry);
             if (entry.Process is { IsRunning: true } && entry.State == HubAppServerStates.Running)
             {
+                var effectiveRuntimeTools = MergeRuntimeTools(request.RuntimeTools);
+                var runtimeRestartReason = GetTypeScriptRuntimeRestartReason(entry, effectiveRuntimeTools);
+                if (runtimeRestartReason is not null)
+                    ApplyTypeScriptRuntimeRestartRequiredStatus(entry, effectiveRuntimeTools, runtimeRestartReason);
+
                 var apiProxyRestartReason = GetApiProxyRestartReason(entry, request.ApiProxy);
                 if (apiProxyRestartReason is not null)
                 {
@@ -112,7 +120,7 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
 
             ThrowIfExternalLockIsLive(entry, craftPath);
 
-            var plan = BuildServicePlan(canonical, craftPath, request.ApiProxy, request.RuntimeTools);
+            var plan = BuildServicePlan(canonical, craftPath, request.ApiProxy, MergeRuntimeTools(request.RuntimeTools));
             entry.State = HubAppServerStates.Starting;
             entry.LastError = null;
             entry.RecentStderr = null;
@@ -143,6 +151,9 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
                 entry.Pid = process.ProcessId;
                 entry.ServerVersion = process.ServerVersion;
                 entry.StartedByHub = true;
+                entry.TypeScriptNodeBin = plan.TypeScriptNodeBin;
+                entry.TypeScriptNodeRunAsNode = plan.TypeScriptNodeRunAsNode;
+                entry.TypeScriptModulesDir = plan.TypeScriptModulesDir;
                 entry.RecentStderr = process.RecentStderr;
                 entry.LastStartedAt = DateTimeOffset.UtcNow;
                 entry.LastSeenAt = DateTimeOffset.UtcNow;
@@ -371,17 +382,43 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         AddOptionalModuleService(config, "Api", "api", null, ManagedAppServerEnvironment.ApiHost, ManagedAppServerEnvironment.ApiPort, endpoints, status, environment, usedPorts, canonicalWorkspacePath);
         AddOptionalModuleService(config, "AgUi", "agui", "Path", ManagedAppServerEnvironment.AguiHost, ManagedAppServerEnvironment.AguiPort, endpoints, status, environment, usedPorts, canonicalWorkspacePath);
         AddApiProxyService(apiProxy, endpoints, status, environment);
-        AddRuntimeTools(runtimeTools, environment);
+        AddRuntimeTools(runtimeTools, environment, status);
 
-        return new ServicePlan(environment, endpoints, status, wsProbeUrl, wsToken);
+        return new ServicePlan(
+            environment,
+            endpoints,
+            status,
+            wsProbeUrl,
+            wsToken,
+            NormalizeOptionalPath(runtimeTools?.NodeBin),
+            runtimeTools?.NodeRunAsNode == true,
+            NormalizeOptionalPath(runtimeTools?.ModulesDir));
     }
 
     internal static void AddRuntimeTools(
         HubRuntimeToolsRequest? runtimeTools,
-        Dictionary<string, string?> environment)
+        Dictionary<string, string?> environment,
+        Dictionary<string, HubServiceStatus>? status = null)
     {
         if (!string.IsNullOrWhiteSpace(runtimeTools?.RipgrepPath))
             environment["DOTCRAFT_RG_PATH"] = runtimeTools.RipgrepPath.Trim();
+
+        var nodeBin = NormalizeOptionalPath(runtimeTools?.NodeBin);
+        var modulesDir = NormalizeOptionalPath(runtimeTools?.ModulesDir);
+        if (!string.IsNullOrWhiteSpace(nodeBin))
+            environment["DOTCRAFT_NODE_BIN"] = nodeBin;
+        if (runtimeTools?.NodeRunAsNode == true)
+            environment["DOTCRAFT_NODE_RUN_AS_NODE"] = "1";
+        if (!string.IsNullOrWhiteSpace(modulesDir))
+            environment["DOTCRAFT_MODULES_DIR"] = modulesDir;
+
+        if (status != null)
+        {
+            status["typescriptRuntime"] =
+                !string.IsNullOrWhiteSpace(nodeBin) && !string.IsNullOrWhiteSpace(modulesDir)
+                    ? new HubServiceStatus("allocated", Reason: "TypeScript channel runtime hints are available.")
+                    : new HubServiceStatus("unavailable", Reason: "TypeScript channel runtime is not configured. Launch DotCraft Desktop once or run 'dotcraft hub set-runtime'.");
+        }
     }
 
     private static void AddApiProxyService(
@@ -599,6 +636,42 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
             new HubServiceStatus("restartRequired", statusUrl, reason));
     }
 
+    private HubRuntimeToolsRequest MergeRuntimeTools(HubRuntimeToolsRequest? runtimeTools)
+    {
+        if (_runtimeToolsStore == null)
+            return HubRuntimeToolsStore.Merge(new HubRuntimeToolsRequest(), runtimeTools);
+        return _runtimeToolsStore.MergeAndSave(runtimeTools);
+    }
+
+    private static string? GetTypeScriptRuntimeRestartReason(
+        ManagedEntry entry,
+        HubRuntimeToolsRequest runtimeTools)
+    {
+        var nodeBin = NormalizeOptionalPath(runtimeTools.NodeBin);
+        var modulesDir = NormalizeOptionalPath(runtimeTools.ModulesDir);
+        if (!string.Equals(entry.TypeScriptNodeBin, nodeBin, StringComparison.OrdinalIgnoreCase))
+            return "TypeScript channel Node runtime changed; restart the AppServer to apply it.";
+        if (entry.TypeScriptNodeRunAsNode != (runtimeTools.NodeRunAsNode == true))
+            return "TypeScript channel Node launch mode changed; restart the AppServer to apply it.";
+        if (!string.Equals(entry.TypeScriptModulesDir, modulesDir, StringComparison.OrdinalIgnoreCase))
+            return "TypeScript channel modules directory changed; restart the AppServer to apply it.";
+        return null;
+    }
+
+    private static void ApplyTypeScriptRuntimeRestartRequiredStatus(
+        ManagedEntry entry,
+        HubRuntimeToolsRequest runtimeTools,
+        string reason)
+    {
+        entry.ServiceStatus = WithServiceStatus(
+            entry.ServiceStatus,
+            "typescriptRuntime",
+            new HubServiceStatus(
+                "restartRequired",
+                Url: NormalizeOptionalPath(runtimeTools.ModulesDir),
+                Reason: reason));
+    }
+
     private async Task EnsureApiProxySidecarAsync(
         ManagedEntry entry,
         HubApiProxySidecarRequest? apiProxy,
@@ -745,6 +818,9 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
 
         return fullPath;
     }
+
+    private static string? NormalizeOptionalPath(string? path)
+        => string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path.Trim());
 
     private static string NormalizeRequiredUrl(string? url, string message)
     {
@@ -1049,7 +1125,10 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         IReadOnlyDictionary<string, string> ResponseEndpoints,
         IReadOnlyDictionary<string, HubServiceStatus> ServiceStatus,
         string WebSocketProbeUrl,
-        string WebSocketToken);
+        string WebSocketToken,
+        string? TypeScriptNodeBin,
+        bool TypeScriptNodeRunAsNode,
+        string? TypeScriptModulesDir);
 
     private sealed record ApiProxySidecarPlan(
         string BinaryPath,
@@ -1270,6 +1349,12 @@ public sealed class ManagedAppServerRegistry : IAsyncDisposable
         public string? ApiProxyEndpoint { get; set; }
 
         public string? ApiProxyApiKey { get; set; }
+
+        public string? TypeScriptNodeBin { get; set; }
+
+        public bool TypeScriptNodeRunAsNode { get; set; }
+
+        public string? TypeScriptModulesDir { get; set; }
 
         public int? Pid { get; set; }
 

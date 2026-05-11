@@ -55,6 +55,12 @@ public sealed class HubApiProxySidecarRequest
 public sealed class HubRuntimeToolsRequest
 {
     public string? RipgrepPath { get; set; }
+
+    public string? NodeBin { get; set; }
+
+    public bool? NodeRunAsNode { get; set; }
+
+    public string? ModulesDir { get; set; }
 }
 
 public sealed class HubNotificationRequest

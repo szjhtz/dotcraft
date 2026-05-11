@@ -132,6 +132,8 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
 
     public IChannelStatusProvider? ChannelStatusProvider => EnsureStarted().AppServerFeature?.ChannelStatusProvider;
 
+    public IExternalChannelLogProvider? ExternalChannelLogProvider => EnsureStarted().AppServerFeature?.ExternalChannelLogProvider;
+
     public IAppServerChannelListContributor ChannelListContributor => EnsureStarted().ChannelListContributor;
 
     public WireAcpExtensionProxy WireAcpExtensionProxy => EnsureStarted().WireAcpExtensionProxy;

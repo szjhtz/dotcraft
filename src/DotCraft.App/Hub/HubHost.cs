@@ -69,7 +69,8 @@ public sealed class HubHost : IDotCraftHost
                 apiBaseUrl,
                 token,
                 _dotcraftBin,
-                _paths.AppServersRegistryPath);
+                _paths.AppServersRegistryPath,
+                _paths.RuntimeToolsPath);
             _registry.StartHealthChecks();
             _app = BuildApp(apiBaseUrl, token, startedAt, _registry, _eventBus);
             _app.Urls.Add(apiBaseUrl);

@@ -73,9 +73,20 @@ function waitForShutdownSignal(): Promise<NodeJS.Signals> {
   });
 }
 
+function logInfo(message: string): void {
+  if (process.env.DOTCRAFT_CHANNEL_TRANSPORT === "stdio") {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
+}
+
 async function renderQrInTerminal(url: string): Promise<void> {
+  logInfo(`\nScan this QR with WeChat:\n${url}\n`);
+  if (process.env.DOTCRAFT_CHANNEL_TRANSPORT === "stdio") {
+    return;
+  }
   const qrcodeTerminal = await import("qrcode-terminal");
-  console.log("\nScan this QR with WeChat:\n", url, "\n");
   try {
     qrcodeTerminal.default.generate(url, { small: true });
   } catch {
@@ -96,7 +107,7 @@ async function runWorkspaceMode(args: ParsedArgs): Promise<void> {
   const instance = createModule(context);
   let lastQrUrl = "";
   instance.onStatusChange((status, error) => {
-    console.log(
+    logInfo(
       `[weixin] lifecycle=${status}` +
         (error?.code ? ` code=${error.code}` : "") +
         (error?.message ? ` message=${error.message}` : ""),
@@ -125,7 +136,7 @@ async function runWorkspaceMode(args: ParsedArgs): Promise<void> {
   }
 
   const signal = await waitForShutdownSignal();
-  console.log(`[weixin] shutdown signal: ${signal}`);
+  logInfo(`[weixin] shutdown signal: ${signal}`);
   await instance.stop();
 }
 
@@ -141,7 +152,7 @@ async function runLegacyMode(args: ParsedArgs): Promise<void> {
 
   let creds = state.loadCredentials();
   if (!creds?.botToken || !creds.ilinkBotId) {
-    console.log("Starting Weixin QR login...");
+    logInfo("Starting Weixin QR login...");
     creds = await waitForQrLogin({
       apiBaseUrl: config.weixin.apiBaseUrl,
       botType: config.weixin.botType ?? DEFAULT_BOT_TYPE,
@@ -163,7 +174,7 @@ async function runLegacyMode(args: ParsedArgs): Promise<void> {
   });
 
   await adapter.start();
-  console.log("Connected to DotCraft; starting Weixin monitor...");
+  logInfo("Connected to DotCraft; starting Weixin monitor...");
 
   const ac = new AbortController();
   process.on("SIGINT", () => ac.abort());
@@ -181,7 +192,7 @@ async function runLegacyMode(args: ParsedArgs): Promise<void> {
         await adapter.handleInboundUserMessage(msg);
       },
       onSessionExpired: async () => {
-        console.log("Session expired — run again to scan QR.");
+        logInfo("Session expired — run again to scan QR.");
       },
     },
   });

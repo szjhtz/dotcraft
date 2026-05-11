@@ -288,6 +288,7 @@ public sealed class AppServerHost(
             protocolExtensions: ProtocolExtensions,
             onExternalChannelUpserted: _runtime.ApplyExternalChannelUpsertAsync,
             onExternalChannelRemoved: _runtime.ApplyExternalChannelRemoveAsync,
+            externalChannelLogProvider: _runtime.ExternalChannelLogProvider,
             streamDebugLogger: _services.GetService<SessionStreamDebugLogger>(),
             configSchema: _runtime.ConfigSchema,
             appConfigMonitor: _services.GetRequiredService<IAppConfigMonitor>(),

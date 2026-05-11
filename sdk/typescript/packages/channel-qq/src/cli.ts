@@ -38,6 +38,14 @@ function waitForShutdownSignal(): Promise<NodeJS.Signals> {
   });
 }
 
+function logInfo(message: string): void {
+  if (process.env.DOTCRAFT_CHANNEL_TRANSPORT === "stdio") {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
+}
+
 async function runWorkspaceMode(args: ParsedArgs): Promise<void> {
   if (!args.workspacePath) {
     throw new Error("Missing value for --workspace.");
@@ -54,7 +62,7 @@ async function runWorkspaceMode(args: ParsedArgs): Promise<void> {
 
   const instance = createModule(context);
   instance.onStatusChange((status, error) => {
-    console.log(
+    logInfo(
       `[qq] lifecycle=${status}` +
         (error?.code ? ` code=${error.code}` : "") +
         (error?.message ? ` message=${error.message}` : ""),
@@ -75,7 +83,7 @@ async function runWorkspaceMode(args: ParsedArgs): Promise<void> {
   }
 
   const signal = await waitForShutdownSignal();
-  console.log(`[qq] shutdown signal: ${signal}`);
+  logInfo(`[qq] shutdown signal: ${signal}`);
   await instance.stop();
 }
 

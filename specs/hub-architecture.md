@@ -303,9 +303,9 @@ When a healthy AppServer is already running, an APIProxy mismatch during `ensure
 
 If APIProxy is requested and cannot be started or probed, Hub must fail the ensure request instead of returning an AppServer whose model endpoint points at a dead proxy. If APIProxy is not requested, Hub must not start or configure it.
 
-Hub-managed APIProxy does not change the remote AppServer protocol, does not proxy normal conversation traffic, and does not manage TypeScript social channel adapters. Built-in TypeScript channels remain a separate AppServer/adapter lifecycle concern.
+Hub-managed APIProxy does not change the remote AppServer protocol and does not proxy normal conversation traffic. Built-in TypeScript channel lifecycle is owned by the workspace AppServer through external-channel subprocess adapters, while Hub only forwards runtime hints needed to launch those adapters.
 
-Desktop and other local clients may pass local runtime tool hints, such as a resolved bundled `rg` path, in `POST /v1/appservers/ensure` or restart requests. Hub forwards these hints only as AppServer process environment variables and must not expose them as service endpoints or status payloads.
+Desktop and other local clients may pass local runtime tool hints, such as a resolved bundled `rg` path, Electron-as-Node path, Electron run-as-Node flag, and bundled TypeScript modules directory, in `POST /v1/appservers/ensure` or restart requests. Hub persists these hints under `~/.craft/hub/runtime.json` and forwards them only as AppServer process environment variables: `DOTCRAFT_RG_PATH`, `DOTCRAFT_NODE_BIN`, `DOTCRAFT_NODE_RUN_AS_NODE`, and `DOTCRAFT_MODULES_DIR`. Hub must not expose secrets in runtime-tool status payloads; `serviceStatus.typescriptRuntime` may report `allocated`, `unavailable`, or `restartRequired`.
 
 Hub must not silently rewrite unrelated user-configured ports for native channels, webhook modules, or future integrations unless a service explicitly participates in Hub-managed runtime overrides.
 

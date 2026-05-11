@@ -1690,7 +1690,7 @@ export function registerIpcHandlers(
       if (!params?.moduleId || typeof params.moduleId !== 'string') {
         return { lines: [] }
       }
-      return { lines: moduleProcessManager?.getRecentLogs(params.moduleId) ?? [] }
+      return { lines: (await moduleProcessManager?.getRecentLogs(params.moduleId)) ?? [] }
     }
   )
 

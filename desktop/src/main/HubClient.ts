@@ -42,6 +42,9 @@ export interface HubApiProxySidecarRequest {
 
 export interface HubRuntimeToolsRequest {
   ripgrepPath?: string
+  nodeBin?: string
+  nodeRunAsNode?: boolean
+  modulesDir?: string
 }
 
 export interface HubStatusResponse {

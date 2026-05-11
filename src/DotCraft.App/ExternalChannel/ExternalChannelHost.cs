@@ -25,6 +25,12 @@ namespace DotCraft.ExternalChannel;
 /// </summary>
 public sealed class ExternalChannelHost : IChannelService
 {
+    private const int MaxLogLines = 200;
+    private const string DotCraftNodeBinEnv = "DOTCRAFT_NODE_BIN";
+    private const string DotCraftNodeRunAsNodeEnv = "DOTCRAFT_NODE_RUN_AS_NODE";
+    private const string DotCraftModulesDirEnv = "DOTCRAFT_MODULES_DIR";
+    private const string DotCraftChannelTransportEnv = "DOTCRAFT_CHANNEL_TRANSPORT";
+
     private readonly ExternalChannelEntry _config;
     private readonly ISessionService _sessionService;
     private readonly string _serverVersion;
@@ -63,6 +69,8 @@ public sealed class ExternalChannelHost : IChannelService
     // State
     private volatile bool _stopped;
     private volatile bool _permanentlyFailed;
+    private readonly Queue<string> _recentLogLines = new();
+    private readonly object _recentLogLock = new();
 
     public ExternalChannelHost(
         ExternalChannelEntry config,
@@ -196,6 +204,17 @@ public sealed class ExternalChannelHost : IChannelService
     /// channel would miss channel-native tools.
     /// </summary>
     public bool IsReady => IsAdapterConnected;
+
+    public IReadOnlyList<string> GetRecentLogs(int? tail = null)
+    {
+        lock (_recentLogLock)
+        {
+            var lines = _recentLogLines.ToList();
+            if (tail is > 0 && tail.Value < lines.Count)
+                return lines.Skip(lines.Count - tail.Value).ToArray();
+            return lines;
+        }
+    }
 
     /// <summary>
     /// Starts the external channel adapter.
@@ -448,7 +467,6 @@ public sealed class ExternalChannelHost : IChannelService
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = _config.Command!,
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -456,14 +474,23 @@ public sealed class ExternalChannelHost : IChannelService
             CreateNoWindow = true,
         };
 
-        if (_config.Args is { Count: > 0 })
+        if (!string.IsNullOrWhiteSpace(_config.BuiltinModule))
         {
-            foreach (var arg in _config.Args)
-                startInfo.ArgumentList.Add(arg);
+            ConfigureBuiltInTypeScriptAdapter(startInfo, _config.BuiltinModule);
+        }
+        else
+        {
+            startInfo.FileName = _config.Command!;
+
+            if (_config.Args is { Count: > 0 })
+            {
+                foreach (var arg in _config.Args)
+                    startInfo.ArgumentList.Add(arg);
+            }
         }
 
-        if (!string.IsNullOrEmpty(_config.WorkingDirectory))
-            startInfo.WorkingDirectory = _config.WorkingDirectory;
+        if (string.IsNullOrWhiteSpace(startInfo.WorkingDirectory))
+            startInfo.WorkingDirectory = _hostWorkspacePath;
 
         if (_config.Env is { Count: > 0 })
         {
@@ -471,10 +498,73 @@ public sealed class ExternalChannelHost : IChannelService
                 startInfo.Environment[key] = value;
         }
 
+        if (!string.IsNullOrEmpty(_config.WorkingDirectory))
+            startInfo.WorkingDirectory = _config.WorkingDirectory;
+
         return _managedChildProcessFactory(startInfo);
     }
 
-    private static async Task ForwardStderrAsync(Process process, CancellationToken ct)
+    private void ConfigureBuiltInTypeScriptAdapter(ProcessStartInfo startInfo, string moduleName)
+    {
+        if (moduleName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || moduleName.Contains(Path.DirectorySeparatorChar)
+            || moduleName.Contains(Path.AltDirectorySeparatorChar))
+        {
+            throw new InvalidOperationException($"Invalid built-in TypeScript channel module name: {moduleName}");
+        }
+
+        var nodeBin = Environment.GetEnvironmentVariable(DotCraftNodeBinEnv);
+        var modulesDir = Environment.GetEnvironmentVariable(DotCraftModulesDirEnv);
+        if (string.IsNullOrWhiteSpace(nodeBin) || !File.Exists(nodeBin))
+        {
+            throw new InvalidOperationException(
+                "Built-in TypeScript channel runtime is unavailable. Launch DotCraft Desktop once, " +
+                $"or configure Hub runtime with '{DotCraftNodeBinEnv}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(modulesDir) || !Directory.Exists(modulesDir))
+        {
+            throw new InvalidOperationException(
+                "Built-in TypeScript channel modules are unavailable. Launch DotCraft Desktop once, " +
+                $"or configure Hub runtime with '{DotCraftModulesDirEnv}'.");
+        }
+
+        var moduleDir = Path.Combine(modulesDir, moduleName);
+        var cliPath = Path.Combine(moduleDir, "dist", "cli.bundle.js");
+        if (!File.Exists(cliPath))
+            cliPath = Path.Combine(moduleDir, "dist", "cli.js");
+        if (!File.Exists(cliPath))
+            throw new InvalidOperationException($"Built-in TypeScript channel CLI not found: {moduleDir}");
+
+        startInfo.FileName = nodeBin;
+        startInfo.ArgumentList.Add(cliPath);
+        startInfo.ArgumentList.Add("--workspace");
+        startInfo.ArgumentList.Add(_hostWorkspacePath);
+        startInfo.Environment[DotCraftChannelTransportEnv] = "stdio";
+
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(DotCraftNodeRunAsNodeEnv),
+                "1",
+                StringComparison.Ordinal))
+        {
+            startInfo.Environment["ELECTRON_RUN_AS_NODE"] = "1";
+        }
+    }
+
+    private void AppendLogLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return;
+        var stamped = $"{DateTimeOffset.UtcNow:O} {line}";
+        lock (_recentLogLock)
+        {
+            _recentLogLines.Enqueue(stamped);
+            while (_recentLogLines.Count > MaxLogLines)
+                _recentLogLines.Dequeue();
+        }
+    }
+
+    private async Task ForwardStderrAsync(Process process, CancellationToken ct)
     {
         try
         {
@@ -483,6 +573,7 @@ public sealed class ExternalChannelHost : IChannelService
                 var line = await process.StandardError.ReadLineAsync(ct);
                 if (line == null)
                     break;
+                AppendLogLine(line);
                 await Console.Error.WriteLineAsync(line);
             }
         }

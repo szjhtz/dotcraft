@@ -2337,6 +2337,9 @@ public sealed class McpServerConfigWire
     public string? Command { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BuiltinModule { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? Args { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -2485,6 +2488,9 @@ public sealed class ExternalChannelConfigWire
     public string? Command { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BuiltinModule { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? Args { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -2527,6 +2533,20 @@ public sealed class ExternalChannelRemoveParams
 public sealed class ExternalChannelRemoveResult
 {
     public bool Removed { get; set; }
+}
+
+public sealed class ExternalChannelLogsParams
+{
+    public string Name { get; set; } = string.Empty;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Tail { get; set; }
+}
+
+public sealed class ExternalChannelLogsResult
+{
+    public string Name { get; set; } = string.Empty;
+    public List<string> Lines { get; set; } = [];
 }
 
 // ───── subagent/profiles/* (SubAgent profile management) ─────
@@ -2781,6 +2801,7 @@ public static class AppServerMethods
     public const string ExternalChannelGet = "externalChannel/get";
     public const string ExternalChannelUpsert = "externalChannel/upsert";
     public const string ExternalChannelRemove = "externalChannel/remove";
+    public const string ExternalChannelLogs = "externalChannel/logs";
     public const string SubAgentProfileList = "subagent/profiles/list";
     public const string SubAgentSettingsUpdate = "subagent/settings/update";
     public const string SubAgentProfileSetEnabled = "subagent/profiles/setEnabled";

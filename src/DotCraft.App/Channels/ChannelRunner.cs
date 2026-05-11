@@ -26,7 +26,7 @@ namespace DotCraft.Channels;
 /// Also implements <see cref="IChannelStatusProvider"/> for the <c>channel/status</c> wire method
 /// (spec Section 20).
 /// </summary>
-public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider
+public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider, IExternalChannelLogProvider
 {
     private readonly IServiceProvider _sp;
     private readonly AppConfig _config;
@@ -338,11 +338,13 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider
                 goto done;
             }
 
-            if (entry.Transport == ExternalChannelTransport.Subprocess && string.IsNullOrWhiteSpace(entry.Command))
+            if (entry.Transport == ExternalChannelTransport.Subprocess
+                && string.IsNullOrWhiteSpace(entry.Command)
+                && string.IsNullOrWhiteSpace(entry.BuiltinModule))
             {
                 AnsiConsole.MarkupLine(
                     $"[yellow][[ExternalChannel]][/] Skipping runtime upsert for [yellow]{entry.Name}[/]: " +
-                    "subprocess channel requires a non-empty command.");
+                    "subprocess channel requires a non-empty command or built-in module.");
                 goto done;
             }
 
@@ -600,6 +602,20 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider
         });
 
         return result;
+    }
+
+    public IReadOnlyList<string> GetRecentExternalChannelLogs(string channelName, int? tail = null)
+    {
+        if (string.IsNullOrWhiteSpace(channelName))
+            return [];
+
+        lock (_channelsLock)
+        {
+            var host = _allChannels
+                .OfType<ExternalChannelHost>()
+                .FirstOrDefault(ch => string.Equals(ch.Name, channelName, StringComparison.OrdinalIgnoreCase));
+            return host?.GetRecentLogs(tail) ?? [];
+        }
     }
 
     private static int GetCategoryOrder(string category) => category switch

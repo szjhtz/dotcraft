@@ -48,7 +48,8 @@ internal sealed class AppServerTestHarness : IDisposable
         McpClientManager? mcpClientManager = null,
         IWelcomeSuggestionService? welcomeSuggestionService = null,
         WireNodeReplProxy? wireNodeReplProxy = null,
-        IBackgroundTerminalService? backgroundTerminalService = null)
+        IBackgroundTerminalService? backgroundTerminalService = null,
+        IAppServerChannelListContributor? channelListContributor = null)
     {
         _tempDir = Path.Combine(
             Path.GetTempPath(),
@@ -63,7 +64,7 @@ internal sealed class AppServerTestHarness : IDisposable
         Monitor = appConfigMonitor ?? new AppConfigMonitor(new AppConfig());
         Handler = new AppServerRequestHandler(
             Service, Connection, Transport,
-            new ModuleRegistryChannelListContributor(new ModuleRegistry(), null, null),
+            channelListContributor ?? new ModuleRegistryChannelListContributor(new ModuleRegistry(), null, null),
             serverVersion: "0.0.1-test",
             defaultApprovalDecision: defaultApprovalDecision,
             workspaceCraftPath: workspaceCraftPath,

@@ -448,6 +448,8 @@ public sealed class WorkspaceRuntimeTests
 
         public IChannelStatusProvider? ChannelStatusProvider { get; } = new FakeChannelStatusProvider();
 
+        public IExternalChannelLogProvider? ExternalChannelLogProvider => null;
+
         public string? DashboardUrl => DashboardAddress;
 
         public event Action<IAutomationTaskEventPayload>? AutomationTaskUpdated;

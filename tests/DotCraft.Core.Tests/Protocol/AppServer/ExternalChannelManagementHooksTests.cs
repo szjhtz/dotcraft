@@ -108,4 +108,74 @@ public sealed class ExternalChannelManagementHooksTests : IDisposable
         Assert.Equal("weixin", removedName);
         Assert.True(removedFromConfigBeforeHook);
     }
+
+    [Fact]
+    public async Task ExternalChannelUpsert_AllowsExternalCatalogChannelName()
+    {
+        _h = new AppServerTestHarness(
+            workspaceCraftPath: _workspaceCraftPath,
+            channelListContributor: new FixedChannelListContributor(
+                new ChannelInfo { Name = "feishu", Category = "external" }));
+
+        await _h.InitializeAsync();
+        var request = _h.BuildRequest(AppServerMethods.ExternalChannelUpsert, new
+        {
+            channel = new
+            {
+                name = "feishu",
+                enabled = true,
+                transport = "subprocess",
+                builtinModule = "channel-feishu"
+            }
+        });
+
+        await _h.ExecuteRequestAsync(request);
+        var response = await _h.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(response);
+
+        var channels = AppConfig.Load(Path.Combine(_workspaceCraftPath, "config.json")).ExternalChannels;
+        var feishu = Assert.Single(channels);
+        Assert.Equal("feishu", feishu.Name);
+        Assert.Equal("channel-feishu", feishu.BuiltinModule);
+    }
+
+    [Fact]
+    public async Task ExternalChannelUpsert_RejectsNativeChannelName()
+    {
+        _h = new AppServerTestHarness(
+            workspaceCraftPath: _workspaceCraftPath,
+            channelListContributor: new FixedChannelListContributor(
+                new ChannelInfo { Name = "cli", Category = "builtin" }));
+
+        await _h.InitializeAsync();
+        var request = _h.BuildRequest(AppServerMethods.ExternalChannelUpsert, new
+        {
+            channel = new
+            {
+                name = "cli",
+                enabled = true,
+                transport = "subprocess",
+                builtinModule = "channel-cli"
+            }
+        });
+
+        await _h.ExecuteRequestAsync(request);
+        var response = await _h.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsErrorResponse(
+            response,
+            AppServerErrors.ExternalChannelNameConflictCode);
+    }
+
+    private sealed class FixedChannelListContributor(params ChannelInfo[] channels)
+        : IAppServerChannelListContributor
+    {
+        public void AppendBaseChannels(List<ChannelInfo> target, HashSet<string> seen)
+        {
+            foreach (var channel in channels)
+            {
+                if (seen.Add(channel.Name))
+                    target.Add(channel);
+            }
+        }
+    }
 }

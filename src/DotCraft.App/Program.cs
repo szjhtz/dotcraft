@@ -37,6 +37,19 @@ if (cliArgs.ReservesStdout)
 if (cliArgs.Mode == CommandLineArgs.RunMode.Hub)
 {
     var hubPaths = HubPaths.ForCurrentUser();
+    if (args.Length >= 2 && args[1].Equals("set-runtime", StringComparison.OrdinalIgnoreCase))
+    {
+        var runtimeTools = ParseHubRuntimeTools(args.Skip(2).ToArray());
+        var store = new HubRuntimeToolsStore(hubPaths.RuntimeToolsPath);
+        var merged = store.MergeAndSave(runtimeTools);
+        await Console.Out.WriteLineAsync($"Saved Hub runtime tools to {hubPaths.RuntimeToolsPath}");
+        if (!string.IsNullOrWhiteSpace(merged.NodeBin))
+            await Console.Out.WriteLineAsync($"Node: {merged.NodeBin}");
+        if (!string.IsNullOrWhiteSpace(merged.ModulesDir))
+            await Console.Out.WriteLineAsync($"Modules: {merged.ModulesDir}");
+        return;
+    }
+
     var globalConfig = AppConfig.Load(hubPaths.GlobalConfigPath);
     cliArgs.ApplyTo(globalConfig);
 
@@ -44,6 +57,51 @@ if (cliArgs.Mode == CommandLineArgs.RunMode.Hub)
     await using var hubHost = new HubHost(hubConfig, hubPaths);
     await hubHost.RunAsync();
     return;
+}
+
+static HubRuntimeToolsRequest ParseHubRuntimeTools(string[] args)
+{
+    var result = new HubRuntimeToolsRequest();
+    for (var i = 0; i < args.Length; i++)
+    {
+        var arg = args[i];
+        if (arg.Equals("--node-bin", StringComparison.OrdinalIgnoreCase))
+        {
+            result.NodeBin = ConsumeHubRuntimeValue(args, ref i, "--node-bin");
+            continue;
+        }
+
+        if (arg.Equals("--modules-dir", StringComparison.OrdinalIgnoreCase))
+        {
+            result.ModulesDir = ConsumeHubRuntimeValue(args, ref i, "--modules-dir");
+            continue;
+        }
+
+        if (arg.Equals("--ripgrep-path", StringComparison.OrdinalIgnoreCase))
+        {
+            result.RipgrepPath = ConsumeHubRuntimeValue(args, ref i, "--ripgrep-path");
+            continue;
+        }
+
+        if (arg.Equals("--electron-run-as-node", StringComparison.OrdinalIgnoreCase)
+            || arg.Equals("--node-run-as-node", StringComparison.OrdinalIgnoreCase))
+        {
+            result.NodeRunAsNode = true;
+            continue;
+        }
+
+        throw new ArgumentException($"Unknown hub set-runtime option: {arg}");
+    }
+
+    return result;
+}
+
+static string ConsumeHubRuntimeValue(string[] args, ref int index, string option)
+{
+    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+        throw new ArgumentException($"Missing value for {option}.");
+    index++;
+    return args[index];
 }
 
 // -------------------------------------------------------------------------

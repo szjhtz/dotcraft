@@ -23,7 +23,12 @@ export function shortId(value: string | undefined | null): string {
 }
 
 export function logInfo(evt: string, fields?: LogFields): void {
-  console.log(`${PREFIX} evt=${evt}${formatFields(fields)}`);
+  const message = `${PREFIX} evt=${evt}${formatFields(fields)}`;
+  if (process.env.DOTCRAFT_CHANNEL_TRANSPORT === "stdio") {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
 }
 
 export function logWarn(evt: string, fields?: LogFields): void {

@@ -15,6 +15,11 @@ public sealed record HubPaths(
     public string AppServersRegistryPath => Path.Combine(HubStatePath, "appservers.json");
 
     /// <summary>
+    /// Persisted runtime tool hints donated by Desktop or configured through the Hub CLI.
+    /// </summary>
+    public string RuntimeToolsPath => Path.Combine(HubStatePath, "runtime.json");
+
+    /// <summary>
     /// Resolves Hub paths for the current user.
     /// </summary>
     public static HubPaths ForCurrentUser()
