@@ -255,6 +255,13 @@ Client                              Server
 | `backends` | string[] | Optional list of client browser backends. Current values include `desktop-iab`; Chrome extension clients use `chrome-extension`. When omitted, servers treat `backend` as the only backend. |
 | `protocolVersion` | number | Browser-use IAB protocol version. Current value is `2`. |
 | `supportsCancel` | boolean | Optional. When `true`, the client handles `ext/nodeRepl/cancel` for in-flight evaluations. |
+| `browserSessionProtocolVersion` | number | Optional. Browser session metadata protocol version supported by the client. Chrome M2/M3 clients use `1`. |
+| `supportsCommandCancel` | boolean | Optional. When `true`, browser commands carry command ids and can be cooperatively cancelled independently of the outer Node REPL request. |
+| `maxBrowserResultBytes` | number | Optional. Maximum serialized browser command result bytes before the client rejects oversized results. |
+| `defaultCommandTimeoutMs` | number | Optional. Default browser command timeout used when a command omits `timeoutMs`. |
+| `maxCommandTimeoutMs` | number | Optional. Maximum accepted browser command timeout after clamping. |
+| `supportsTypedFinalize` | boolean | Optional. When `true`, `browser.tabs.finalize({ keep })` requires typed keep entries with `handoff` or `deliverable` status. |
+| `supportsChromeDiagnostics` | boolean | Optional. When `true`, the Chrome backend can surface safe setup, discovery, command, and cancellation diagnostic summaries. |
 
 **`channelAdapter` object** (when present):
 
@@ -2541,7 +2548,7 @@ The ACP (Agent Client Protocol) integration allows the agent's tools to access t
 
 The browser-use integrations expose agent tools through a **server -> client** Node REPL backend. The server only sends these requests to a thread-bound client that declared both `capabilities.nodeRepl` and `capabilities.browserUse` during `initialize`.
 
-Clients may back the runtime with Desktop embedded browser tabs, a Chrome extension connected through Native Messaging, or another compatible backend declared in `capabilities.browserUse.backends`. Backend-specific setup and user-consent rules are owned by the contributing plugin skill, but all backends share the same `ext/nodeRepl/*` transport.
+Clients may back the runtime with Desktop embedded browser tabs, a Chrome extension connected through Native Messaging, or another compatible backend declared in `capabilities.browserUse.backends`. Backend-specific setup and user-consent rules are owned by the contributing plugin skill, but all backends share the same `ext/nodeRepl/*` transport. Chrome-specific browser session lifecycle, tab ownership, timeout, diagnostics, and migration goals are defined in [Chrome Browser Runtime](chrome-browser-runtime.md).
 
 #### `ext/nodeRepl/evaluate`
 
@@ -2552,9 +2559,21 @@ Clients may back the runtime with Desktop embedded browser tabs, a Chrome extens
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `threadId` | string | yes | Thread ID whose Desktop runtime owns the persistent REPL. |
+| `turnId` | string | no | Current turn ID when the server can resolve one from tool execution scope. |
 | `evaluationId` | string | yes | Unique ID for this evaluation, used for cancellation and late-result suppression. |
+| `browserSession` | object | no | Browser session identity forwarded to embedded browser and Chrome backends. See [Chrome Browser Runtime](chrome-browser-runtime.md). |
 | `code` | string | yes | JavaScript source to evaluate in the thread-bound persistent Node REPL. |
 | `timeoutMs` | number | no | Requested overall timeout in milliseconds. Client may clamp to its supported range. |
+
+`browserSession` fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `protocolVersion` | number | yes | Browser session metadata version. Current value is `1`. |
+| `sessionId` | string | yes | Browser session isolation key. For normal DotCraft agent calls this is the thread ID. |
+| `threadId` | string | no | Thread that owns the runtime. Duplicates `threadId` for clients that forward the session object deeper into browser backends. |
+| `turnId` | string | no | Current turn ID when known. |
+| `evaluationId` | string | yes | Evaluation ID associated with this Node REPL call. |
 
 **Result**:
 

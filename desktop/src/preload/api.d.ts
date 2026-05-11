@@ -421,6 +421,7 @@ declare global {
           nativeHost: unknown
           chromeRunning: unknown
           installedBrowsers: unknown
+          backend?: unknown
           bridge: unknown
         }>
         installNativeHost(): Promise<unknown>

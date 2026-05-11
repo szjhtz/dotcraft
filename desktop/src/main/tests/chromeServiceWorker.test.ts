@@ -20,6 +20,7 @@ function createEvent() {
 }
 
 function loadServiceWorker(tabs: Map<number, ChromeTab>) {
+  const nativeMessages: unknown[] = []
   const updateCalls: Array<{ tabId: number; update: Record<string, unknown> }> = []
   const createCalls: Array<Record<string, unknown>> = []
   const context = {
@@ -42,7 +43,7 @@ function loadServiceWorker(tabs: Map<number, ChromeTab>) {
         connectNative: () => ({
           onMessage: createEvent(),
           onDisconnect: createEvent(),
-          postMessage: () => undefined
+          postMessage: (message: unknown) => nativeMessages.push(message)
         }),
         getManifest: () => ({ version: '0.0.0' }),
         lastError: null,
@@ -118,9 +119,23 @@ function loadServiceWorker(tabs: Map<number, ChromeTab>) {
   return {
     context: context as typeof context & {
       dispatchCommand: (method: string, params: Record<string, unknown>) => Promise<unknown>
+      handleRequest: (message: Record<string, unknown>) => Promise<void>
+      cancelCommand: (commandId: string, reason?: string) => boolean
     },
     updateCalls,
-    createCalls
+    createCalls,
+    nativeMessages
+  }
+}
+
+function sessionParams(id = 'thread-test') {
+  return {
+    browserSession: {
+      sessionId: id,
+      turnId: `turn-${id}`,
+      evaluationId: `eval-${id}`,
+      protocolVersion: 1
+    }
   }
 }
 
@@ -150,6 +165,7 @@ describe('chrome extension service worker', () => {
     }
 
     const result = await worker.context.dispatchCommand('tab.goto', {
+      ...sessionParams(),
       tab: { id: 1 },
       url: 'https://www.bilibili.com/',
       options: { timeoutMs: 1000 }
@@ -185,6 +201,7 @@ describe('chrome extension service worker', () => {
     }
 
     const result = await worker.context.dispatchCommand('tabs.new', {
+      ...sessionParams(),
       url: 'https://example.test/',
       active: false,
       options: { waitUntil: 'load', timeoutMs: 1000 }
@@ -208,9 +225,135 @@ describe('chrome extension service worker', () => {
     const worker = loadServiceWorker(tabs)
 
     await expect(worker.context.dispatchCommand('tab.waitForNavigation', {
+      ...sessionParams(),
       tab: { id: 1 },
       previousUrl: 'chrome://extensions/',
       options: { timeoutMs: 1 }
     })).rejects.toThrow('current URL is "chrome://extensions/"')
+  })
+
+  it('rejects oversized tab.evaluate results', async () => {
+    const tabs = new Map<number, ChromeTab>([[
+      1,
+      { id: 1, windowId: 1, index: 0, title: 'Example', url: 'https://example.test/', status: 'complete', active: true }
+    ]])
+    const worker = loadServiceWorker(tabs)
+    worker.context.chrome.debugger.sendCommand = async () => ({ result: { value: 'x'.repeat(100) } })
+
+    await expect(worker.context.dispatchCommand('tab.evaluate', {
+      ...sessionParams(),
+      tab: { id: 1 },
+      source: 'return "large";',
+      maxBytes: 10
+    })).rejects.toThrow('ResultTooLarge: tab.evaluate result exceeded 10 bytes')
+  })
+
+  it('classifies unsupported commands', async () => {
+    const worker = loadServiceWorker(new Map<number, ChromeTab>())
+
+    await expect(worker.context.dispatchCommand('dotcraft.nope', {})).rejects.toThrow(
+      'SessionMetadataMissing: Chrome command requires browserSession.sessionId'
+    )
+    await expect(worker.context.dispatchCommand('dotcraft.nope', sessionParams())).rejects.toThrow(
+      'UnsupportedApi: Unsupported DotCraft Chrome command: dotcraft.nope'
+    )
+  })
+
+  it('classifies debugger attachment failures', async () => {
+    const tabs = new Map<number, ChromeTab>([[
+      1,
+      { id: 1, windowId: 1, index: 0, title: 'Example', url: 'https://example.test/', status: 'complete', active: true }
+    ]])
+    const worker = loadServiceWorker(tabs)
+    worker.context.chrome.debugger.attach = async () => {
+      throw new Error('Another debugger is already attached')
+    }
+
+    await expect(worker.context.dispatchCommand('tab.evaluate', {
+      ...sessionParams(),
+      tab: { id: 1 },
+      source: 'return true;'
+    })).rejects.toThrow('DebuggerUnavailable: Chrome debugger bridge is unavailable')
+  })
+
+  it('isolates created and finalized tabs by browser session', async () => {
+    const tabs = new Map<number, ChromeTab>()
+    const worker = loadServiceWorker(tabs)
+    const sessionA = sessionParams('thread-a')
+    const sessionB = sessionParams('thread-b')
+
+    const tabA = await worker.context.dispatchCommand('tabs.new', {
+      ...sessionA,
+      active: false
+    }) as Record<string, unknown>
+    const tabB = await worker.context.dispatchCommand('tabs.new', {
+      ...sessionB,
+      active: false
+    }) as Record<string, unknown>
+
+    const finalized = await worker.context.dispatchCommand('tabs.finalize', {
+      ...sessionA,
+      keep: []
+    }) as Record<string, unknown>
+
+    expect(finalized).toMatchObject({
+      ok: true,
+      closed: [tabA.id],
+      released: []
+    })
+    expect(tabs.has(Number(tabA.id))).toBe(false)
+    expect(tabs.has(Number(tabB.id))).toBe(true)
+  })
+
+  it('requires claimTab ids to come from the latest openTabs result for the session', async () => {
+    const tabs = new Map<number, ChromeTab>([[
+      1,
+      { id: 1, windowId: 1, index: 0, title: 'Example', url: 'https://example.test/', status: 'complete', active: true }
+    ]])
+    const worker = loadServiceWorker(tabs)
+    const browserSession = sessionParams('thread-claim')
+
+    await expect(worker.context.dispatchCommand('user.claimTab', {
+      ...browserSession,
+      tab: { id: 1 }
+    })).rejects.toThrow('latest user.openTabs')
+
+    const openTabs = await worker.context.dispatchCommand('user.openTabs', browserSession) as Array<Record<string, unknown>>
+    const claimed = await worker.context.dispatchCommand('user.claimTab', {
+      ...browserSession,
+      tab: openTabs[0]
+    }) as Record<string, unknown>
+
+    expect(claimed).toMatchObject({ id: 1, claimed: true })
+  })
+
+  it('cancels pending wait commands and reports CommandCancelled', async () => {
+    const tabs = new Map<number, ChromeTab>([[
+      1,
+      { id: 1, windowId: 1, index: 0, title: 'Example', url: 'https://example.test/start', status: 'complete', active: true }
+    ]])
+    const worker = loadServiceWorker(tabs)
+    const wait = worker.context.handleRequest({
+      id: 100,
+      commandId: 'cmd-wait-url',
+      method: 'tab.waitForURL',
+      params: {
+        ...sessionParams('thread-cancel'),
+        tab: { id: 1 },
+        url: 'https://example.test/done',
+        options: { timeoutMs: 1000 }
+      }
+    })
+
+    expect(worker.context.cancelCommand('cmd-wait-url', 'outer-timeout')).toBe(true)
+    await wait
+
+    expect(worker.nativeMessages.at(-1)).toMatchObject({
+      type: 'dotcraft-response',
+      id: 100,
+      commandId: 'cmd-wait-url',
+      ok: false,
+      error: expect.stringContaining('CommandCancelled: Chrome command cmd-wait-url was cancelled')
+    })
   })
 })

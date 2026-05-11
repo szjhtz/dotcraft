@@ -131,6 +131,8 @@ Runtime:
 
 `agent.browser` is the same browser object as `await agent.browsers.get("iab")`. `tabs.list()` returns metadata snapshots: `{ id, url, title, loading }`. To operate on a listed tab, first call `browser.tabs.get(id)`.
 
+Finalize browser work exactly once at the end of the turn with typed keep entries, for example `browser.tabs.finalize({ keep: [{ tab, status: "deliverable" }] })`. Use `status: "handoff"` for tabs the user should continue with, `status: "deliverable"` for tabs that are part of the result, and `keep: []` when no agent-created tabs should remain. Do not use legacy shapes such as `keep: [tab]`, `keep: [id]`, or `keep: true`.
+
 Browser capabilities:
 
 - `viewport.set({ width, height })`

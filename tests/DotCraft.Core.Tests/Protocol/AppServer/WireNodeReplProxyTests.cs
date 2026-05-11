@@ -118,7 +118,16 @@ public sealed class WireNodeReplProxyTests
             proxy.BindThread("thread-b", transport, connection);
             TracingChatClient.CurrentSessionKey = "thread-b";
 
-            var result = await proxy.EvaluateAsync("1 + 1", 5);
+            var result = await proxy.EvaluateAsync(
+                "1 + 1",
+                5,
+                metadata: new DotCraft.Abstractions.NodeReplEvaluationMetadata
+                {
+                    ThreadId = "thread-b",
+                    SessionId = "thread-b",
+                    TurnId = "turn-b",
+                    ProtocolVersion = 1
+                });
 
             Assert.NotNull(result);
             Assert.Equal("ok", result!.ResultText);
@@ -127,7 +136,13 @@ public sealed class WireNodeReplProxyTests
             var p = transport.LastParams.Value;
             Assert.Equal("thread-b", p.GetProperty("threadId").GetString());
             Assert.StartsWith("node-repl-", p.GetProperty("evaluationId").GetString());
-            Assert.False(p.TryGetProperty("turnId", out _));
+            Assert.Equal("turn-b", p.GetProperty("turnId").GetString());
+            var browserSession = p.GetProperty("browserSession");
+            Assert.Equal(1, browserSession.GetProperty("protocolVersion").GetInt32());
+            Assert.Equal("thread-b", browserSession.GetProperty("sessionId").GetString());
+            Assert.Equal("thread-b", browserSession.GetProperty("threadId").GetString());
+            Assert.Equal("turn-b", browserSession.GetProperty("turnId").GetString());
+            Assert.Equal(p.GetProperty("evaluationId").GetString(), browserSession.GetProperty("evaluationId").GetString());
             Assert.Equal("1 + 1", p.GetProperty("code").GetString());
             Assert.Equal(5_000, p.GetProperty("timeoutMs").GetInt32());
         }

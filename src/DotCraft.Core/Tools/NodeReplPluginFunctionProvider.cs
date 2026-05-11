@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using DotCraft.Abstractions;
 using DotCraft.Plugins;
+using DotCraft.Protocol;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Tools;
@@ -76,7 +77,23 @@ public sealed class NodeReplPluginFunctionProvider : IAgentToolProvider
                 timeoutSeconds = timeoutNode.GetValue<int>();
             }
 
-            var result = await proxy.EvaluateAsync(code ?? string.Empty, timeoutSeconds, cancellationToken);
+            var pluginScope = PluginFunctionExecutionScope.Current;
+            var toolScope = ToolExecutionRuntimeScope.Current;
+            var metadata = pluginScope == null && toolScope == null
+                ? null
+                : new NodeReplEvaluationMetadata
+                {
+                    ThreadId = pluginScope?.ThreadId,
+                    SessionId = pluginScope?.ThreadId,
+                    TurnId = pluginScope?.TurnId ?? toolScope?.TurnId,
+                    ProtocolVersion = 1
+                };
+
+            var result = await proxy.EvaluateAsync(
+                code ?? string.Empty,
+                timeoutSeconds,
+                cancellationToken,
+                metadata);
             if (result == null)
             {
                 return new PluginFunctionInvocationResult

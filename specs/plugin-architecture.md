@@ -154,6 +154,8 @@ When Chrome is installed and enabled, DotCraft may expose the server-owned `Node
 
 Chrome setup detection must not inspect cookies, passwords, session stores, local storage, or browsing databases. The development extension uses a fixed manifest key for deterministic unpacked extension IDs; production distribution must replace it with the official Chrome Web Store, private, unlisted, or enterprise-managed extension ID.
 
+The long-term Chrome automation runtime contract is defined in [Chrome Browser Runtime](chrome-browser-runtime.md). Plugin architecture owns contribution and installation semantics; Chrome Browser Runtime owns browser session lifecycle, tab ownership, command timeout, diagnostics, and Codex-aligned migration goals.
+
 ### External Channel Tools
 
 External channel tools are runtime-declared by channel adapters during AppServer `initialize`. Static plugin manifests are not required for external-channel runtime tools. Execution continues to use the `ext/channel/toolCall` server-to-client request defined by [External Channel Adapter](external-channel-adapter.md).

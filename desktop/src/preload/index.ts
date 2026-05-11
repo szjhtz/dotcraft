@@ -124,6 +124,7 @@ export interface ChromeSetupStatus {
   nativeHost: unknown
   chromeRunning: unknown
   installedBrowsers: unknown
+  backend?: unknown
   bridge: unknown
 }
 

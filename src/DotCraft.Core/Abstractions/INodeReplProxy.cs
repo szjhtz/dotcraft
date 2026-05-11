@@ -14,8 +14,38 @@ public interface INodeReplProxy
     /// <summary>
     /// Evaluates JavaScript in the Desktop Node REPL runtime for the current thread.
     /// </summary>
-    Task<NodeReplEvaluateResult?> EvaluateAsync(string code, int? timeoutSeconds = null, CancellationToken ct = default);
+    Task<NodeReplEvaluateResult?> EvaluateAsync(
+        string code,
+        int? timeoutSeconds = null,
+        CancellationToken ct = default,
+        NodeReplEvaluationMetadata? metadata = null);
 
+}
+
+/// <summary>
+/// Optional browser session metadata forwarded with a Node REPL evaluation.
+/// </summary>
+public sealed class NodeReplEvaluationMetadata
+{
+    /// <summary>
+    /// Thread whose Desktop runtime owns the evaluation.
+    /// </summary>
+    public string? ThreadId { get; set; }
+
+    /// <summary>
+    /// Turn that initiated the evaluation, when available.
+    /// </summary>
+    public string? TurnId { get; set; }
+
+    /// <summary>
+    /// Browser session isolation key. Defaults to the thread ID for normal agent calls.
+    /// </summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>
+    /// Browser session metadata version. Current value is 1.
+    /// </summary>
+    public int ProtocolVersion { get; set; } = 1;
 }
 
 public sealed class NodeReplEvaluateResult

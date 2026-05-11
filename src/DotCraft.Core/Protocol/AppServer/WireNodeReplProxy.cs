@@ -59,17 +59,23 @@ public sealed class WireNodeReplProxy : INodeReplProxy
     public async Task<NodeReplEvaluateResult?> EvaluateAsync(
         string code,
         int? timeoutSeconds = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        NodeReplEvaluationMetadata? metadata = null)
     {
         if (string.IsNullOrWhiteSpace(code))
             return new NodeReplEvaluateResult { Error = "NodeReplJs requires non-empty code." };
 
-        var threadId = ResolveCurrentThreadId();
+        var threadId = string.IsNullOrWhiteSpace(metadata?.ThreadId)
+            ? ResolveCurrentThreadId()
+            : metadata!.ThreadId;
         if (threadId == null || !_byThread.TryGetValue(threadId, out var binding))
             return null;
 
         var safeTimeout = Math.Clamp(timeoutSeconds ?? 30, 1, 120);
         var evaluationId = "node-repl-" + Guid.NewGuid().ToString("N");
+        var sessionId = string.IsNullOrWhiteSpace(metadata?.SessionId) ? threadId : metadata!.SessionId;
+        var turnId = string.IsNullOrWhiteSpace(metadata?.TurnId) ? null : metadata!.TurnId;
+        var protocolVersion = metadata?.ProtocolVersion > 0 ? metadata.ProtocolVersion : 1;
         try
         {
             var response = await binding.Transport.SendClientRequestAsync(
@@ -77,7 +83,16 @@ public sealed class WireNodeReplProxy : INodeReplProxy
                 new
                 {
                     threadId,
+                    turnId,
                     evaluationId,
+                    browserSession = new
+                    {
+                        protocolVersion,
+                        sessionId,
+                        threadId,
+                        turnId,
+                        evaluationId
+                    },
                     code,
                     timeoutMs = safeTimeout * 1000
                 },

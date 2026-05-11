@@ -155,13 +155,22 @@ async function handleServerRequestInMain(method: string, params: unknown): Promi
   }
 
   if (method === 'ext/nodeRepl/evaluate') {
-    const p = (params ?? {}) as { threadId?: string; evaluationId?: string; code?: string; timeoutMs?: number }
+    const p = (params ?? {}) as {
+      threadId?: string
+      turnId?: string
+      evaluationId?: string
+      browserSession?: Record<string, unknown>
+      code?: string
+      timeoutMs?: number
+    }
     if (!p.threadId || typeof p.code !== 'string') {
       return { error: 'Invalid Node REPL evaluate request.', images: [], logs: [] }
     }
     return nodeReplManager.evaluate(mainWindow, {
       threadId: p.threadId,
+      turnId: p.turnId,
       evaluationId: p.evaluationId,
+      browserSession: p.browserSession,
       code: p.code,
       timeoutMs: p.timeoutMs,
       workspacePath: currentWorkspacePath

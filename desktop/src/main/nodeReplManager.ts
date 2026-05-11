@@ -8,10 +8,21 @@ import { checkChromeSetup, resolveChromePluginRoot, runChromeSetupScript } from 
 
 export interface NodeReplEvaluateParams {
   threadId: string
+  turnId?: string
   evaluationId?: string
+  browserSession?: Record<string, unknown>
   code: string
   timeoutMs?: number
   workspacePath?: string
+}
+
+export interface BrowserSessionMetadata {
+  protocolVersion: number
+  sessionId: string
+  threadId?: string
+  turnId?: string
+  evaluationId: string
+  backendId?: string
 }
 
 export interface NodeReplEvaluateResult {
@@ -28,6 +39,7 @@ interface NodeReplThreadRuntime {
   logs: string[]
   activeEvaluationId?: string
   activeAbortController?: AbortController
+  chromeCancelEvaluation?: (evaluationId: string, reason: string) => Promise<void> | void
   phase?: string
 }
 
@@ -50,6 +62,20 @@ function formatError(error: unknown, phase: string | undefined): string {
   const prefix = `phase=${phase ?? 'js-runtime'}`
   if (error instanceof Error) return `${prefix} ${error.name}: ${error.message}`
   return `${prefix} ${String(error)}`
+}
+
+class NodeReplEvaluationTimeoutError extends Error {
+  constructor(timeoutMs: number, phase: string | undefined) {
+    super(`NodeReplJs timed out after ${timeoutMs}ms (phase=${phase ?? 'unknown'}).`)
+    this.name = 'NodeReplEvaluationTimeoutError'
+  }
+}
+
+class NodeReplEvaluationCancelledError extends Error {
+  constructor(phase: string | undefined) {
+    super(`NodeReplJs cancelled (phase=${phase ?? 'unknown'}).`)
+    this.name = 'NodeReplEvaluationCancelledError'
+  }
 }
 
 function resolveBrowserClientPath(): string {
@@ -105,6 +131,25 @@ function newEvaluationId(): string {
   return `node-repl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function normalizeBrowserSession(params: NodeReplEvaluateParams, evaluationId: string): BrowserSessionMetadata {
+  const raw = params.browserSession ?? {}
+  const sessionId = stringField(raw.sessionId) ?? params.threadId
+  const turnId = params.turnId ?? stringField(raw.turnId)
+  return {
+    ...raw,
+    protocolVersion: 1,
+    sessionId,
+    threadId: stringField(raw.threadId) ?? params.threadId,
+    turnId,
+    evaluationId,
+    backendId: stringField(raw.backendId)
+  }
+}
+
 function normalizeCellCode(code: string): string {
   return String(code ?? '').replace(/\bimport\s*\(/g, '__dotcraftDynamicImport(')
 }
@@ -150,6 +195,7 @@ export class NodeReplManager {
     }
 
     const evaluationId = params.evaluationId?.trim() || newEvaluationId()
+    const browserSession = normalizeBrowserSession(params, evaluationId)
     const abortController = new AbortController()
     runtime.activeEvaluationId = evaluationId
     runtime.activeAbortController = abortController
@@ -159,9 +205,10 @@ export class NodeReplManager {
       threadId: params.threadId,
       workspacePath: params.workspacePath,
       evaluationId,
-      signal: abortController.signal
+      signal: abortController.signal,
+      browserSession
     })
-    this.refreshContext(runtime, browserRuntime, evaluationId, abortController.signal, params.workspacePath)
+    this.refreshContext(runtime, browserRuntime, evaluationId, abortController.signal, params.workspacePath, browserSession)
 
     const timeoutMs = Math.max(1_000, Math.min(params.timeoutMs ?? 30_000, 120_000))
     try {
@@ -183,16 +230,18 @@ export class NodeReplManager {
         logs: [...runtime.logs, ...collected.logs]
       }
     } catch (error: unknown) {
-      const isTimeoutOrCancel = error instanceof Error &&
-        (error.message.includes('timed out') || error.message.includes('cancelled'))
-      if (isTimeoutOrCancel) {
+      const isOuterControlError =
+        error instanceof NodeReplEvaluationTimeoutError ||
+        error instanceof NodeReplEvaluationCancelledError
+      if (isOuterControlError) {
+        await this.cancelChromeCommands(runtime, evaluationId, error instanceof Error ? error.message : 'outer-control')
         abortController.abort()
         this.browserManager.abortEvaluation(params.threadId, evaluationId)
         this.disposeReplRuntime(params.threadId, runtime)
       }
       const collected = browserRuntime.collect()
       return {
-        error: error instanceof Error && isTimeoutOrCancel
+        error: error instanceof Error && isOuterControlError
           ? error.message
           : formatError(error, runtime.phase),
         images: collected.images,
@@ -210,7 +259,8 @@ export class NodeReplManager {
   cancel(threadId: string, evaluationId: string): { ok: boolean } {
     const runtime = this.runtimes.get(threadId)
     if (!runtime || runtime.activeEvaluationId !== evaluationId) return { ok: false }
-    runtime.activeAbortController?.abort(new Error(`NodeReplJs cancelled (phase=${runtime.phase ?? 'unknown'}).`))
+    void this.cancelChromeCommands(runtime, evaluationId, 'cancelled')
+    runtime.activeAbortController?.abort(new NodeReplEvaluationCancelledError(runtime.phase))
     this.browserManager.abortEvaluation(threadId, evaluationId)
     this.disposeReplRuntime(threadId, runtime)
     return { ok: true }
@@ -221,6 +271,7 @@ export class NodeReplManager {
     if (runtime) {
       runtime.activeAbortController?.abort(new Error('NodeReplJs reset.'))
       if (runtime.activeEvaluationId) {
+        void this.cancelChromeCommands(runtime, runtime.activeEvaluationId, 'reset')
         this.browserManager.abortEvaluation(threadId, runtime.activeEvaluationId)
       }
       this.disposeReplRuntime(threadId, runtime)
@@ -249,7 +300,8 @@ export class NodeReplManager {
     browserRuntime: BrowserRuntimeBindings,
     evaluationId: string,
     signal: AbortSignal,
-    workspacePath?: string
+    workspacePath?: string,
+    browserSession?: BrowserSessionMetadata
   ): void {
     const globals = runtime.globals
     const ensureActive = () => {
@@ -284,6 +336,7 @@ export class NodeReplManager {
       browserUseClientPath: resolveBrowserClientPath(),
       chromeBrowserClientPath: resolveChromeBrowserClientPath(),
       workspacePath: workspacePath ?? '',
+      browserSession,
       chromePluginRoot,
       chromeScriptsPath: join(chromePluginRoot, 'scripts'),
       chrome: createChromeSetupApi(workspacePath)
@@ -291,6 +344,14 @@ export class NodeReplManager {
     globals.dotcraft = dotcraftApi
     globals.URL = NodeUrl
     globals.__dotcraftDynamicImport = async (specifier: unknown) => import(String(specifier))
+    globals.__dotcraftSetChromeCancelHook = (hook: unknown) => {
+      if (typeof hook === 'function') {
+        runtime.chromeCancelEvaluation = hook as (evaluationId: string, reason: string) => Promise<void> | void
+      }
+    }
+    globals.__dotcraftClearChromeCancelHook = () => {
+      runtime.chromeCancelEvaluation = undefined
+    }
     globals.__dotcraftSetupAtlasRuntime = async (
       options?: { globals?: Record<string, unknown>; backend?: string }
     ) => {
@@ -307,7 +368,20 @@ export class NodeReplManager {
     if (this.runtimes.get(threadId) !== runtime) return
     runtime.activeEvaluationId = undefined
     runtime.activeAbortController = undefined
+    runtime.chromeCancelEvaluation = undefined
     this.runtimes.delete(threadId)
+  }
+
+  private async cancelChromeCommands(
+    runtime: NodeReplThreadRuntime,
+    evaluationId: string,
+    reason: string
+  ): Promise<void> {
+    try {
+      await runtime.chromeCancelEvaluation?.(evaluationId, reason)
+    } catch (error) {
+      runtime.logs.push(`Chrome cancel hook failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   private withTimeout<T>(
@@ -332,11 +406,10 @@ export class NodeReplManager {
         const reason = signal.reason
         finish(() => reject(reason instanceof Error
           ? reason
-          : new Error(`NodeReplJs cancelled (phase=${phase() ?? 'unknown'}).`)))
+          : new NodeReplEvaluationCancelledError(phase())))
       }
       const timeout = setTimeout(
-        () => finish(() => reject(new Error(
-          `NodeReplJs timed out after ${timeoutMs}ms (phase=${phase() ?? 'unknown'}).`))),
+        () => finish(() => reject(new NodeReplEvaluationTimeoutError(timeoutMs, phase()))),
         timeoutMs)
       if (signal.aborted) {
         onAbort()

@@ -30,7 +30,8 @@ vi.mock('fs', () => ({
     stat: vi.fn(),
     mkdir: vi.fn(),
     rm: vi.fn(),
-    rename: vi.fn()
+    rename: vi.fn(),
+    readdir: vi.fn().mockResolvedValue([])
   }
 }))
 
@@ -416,11 +417,11 @@ describe('registerIpcHandlers', () => {
     expect(listWorkspaceFilesMock).not.toHaveBeenCalled()
   })
 
-  it('chrome:check-setup runs the fixed Chrome setup checks', async () => {
+  it('chrome:check-setup runs Chrome setup checks and backend discovery', async () => {
     execFileMock.mockImplementation((_command, args, _options, callback: ExecFileCallback) => {
       const script = String((args as string[])[0])
       if (script.endsWith('check-extension-installed.js')) callback(null, '{"ok":true,"extensionId":"abc"}', '')
-      else if (script.endsWith('check-native-host-manifest.js')) callback(null, '{"ok":true,"manifestPath":"host.json"}', '')
+      else if (script.endsWith('check-native-host-manifest.js')) callback(null, '{"ok":true,"exists":true,"hostExists":true,"wrapperValid":true}', '')
       else if (script.endsWith('chrome-is-running.js')) callback(null, '{"ok":true,"processCount":1}', '')
       else if (script.endsWith('installed-browsers.js')) callback(null, '{"ok":true,"browsers":[]}', '')
       else callback(new Error(`Unexpected script: ${script}`), '', '')
@@ -428,19 +429,33 @@ describe('registerIpcHandlers', () => {
     })
     const handlers = registerHandlersForTest()
     const checkSetup = handlers.get('chrome:check-setup')!
-    const previousBridgePort = process.env.DOTCRAFT_CHROME_BRIDGE_PORT
-    process.env.DOTCRAFT_CHROME_BRIDGE_PORT = '-1'
 
     const result = await checkSetup({})
-    if (previousBridgePort == null) delete process.env.DOTCRAFT_CHROME_BRIDGE_PORT
-    else process.env.DOTCRAFT_CHROME_BRIDGE_PORT = previousBridgePort
 
     expect(result).toEqual({
-      extension: { ok: true, extensionId: 'abc' },
-      nativeHost: { ok: true, manifestPath: 'host.json' },
-      chromeRunning: { ok: true, processCount: 1 },
-      installedBrowsers: { ok: true, browsers: [] },
-      bridge: { ok: false, error: 'Invalid Chrome bridge port.' }
+      extension: { ok: true, code: 'extensionReady', message: 'DotCraft Chrome extension is ready.' },
+      nativeHost: {
+        ok: true,
+        code: 'nativeHostReady',
+        message: 'Chrome Native Host is installed.',
+        safeDetails: { exists: true, hostExists: true, wrapperValid: true }
+      },
+      chromeRunning: { ok: true, code: 'chromeRunning', message: 'Chrome is running.', safeDetails: { processCount: 1 } },
+      installedBrowsers: { ok: true, code: 'chromeInstalled', message: 'Google Chrome is installed.', safeDetails: { browserCount: 0 } },
+      backend: {
+        ok: false,
+        code: 'backendDisconnected',
+        message: 'Chrome backend is disconnected.',
+        action: 'clickExtensionRefresh',
+        safeDetails: { candidateCount: 0 }
+      },
+      bridge: {
+        ok: false,
+        code: 'backendDisconnected',
+        message: 'Chrome backend is disconnected.',
+        action: 'clickExtensionRefresh',
+        safeDetails: { candidateCount: 0 }
+      }
     })
     const scripts = execFileMock.mock.calls.map(([, args]) => String((args as string[])[0]).split(/[\\/]/).at(-1))
     expect(scripts).toEqual([
@@ -452,6 +467,32 @@ describe('registerIpcHandlers', () => {
     const [command, , options] = execFileMock.mock.calls[0]!
     expect(command).toBe(process.execPath)
     expect((options as { env?: NodeJS.ProcessEnv }).env?.ELECTRON_RUN_AS_NODE).toBe('1')
+  })
+
+  it('chrome:check-setup marks an old native host wrapper as repairable without leaking paths', async () => {
+    execFileMock.mockImplementation((_command, args, _options, callback: ExecFileCallback) => {
+      const script = String((args as string[])[0])
+      if (script.endsWith('check-extension-installed.js')) callback(null, '{"ok":true}', '')
+      else if (script.endsWith('check-native-host-manifest.js')) {
+        callback(null, '{"ok":false,"code":"nativeHostNeedsRepair","exists":true,"hostExists":true,"wrapperValid":false,"manifestPath":"C:\\\\secret\\\\host.json","hostPath":"C:\\\\secret\\\\host.cmd"}', '')
+      } else if (script.endsWith('chrome-is-running.js')) callback(null, '{"ok":true}', '')
+      else if (script.endsWith('installed-browsers.js')) callback(null, '{"ok":true,"browsers":[]}', '')
+      else callback(new Error(`Unexpected script: ${script}`), '', '')
+      return null
+    })
+    const handlers = registerHandlersForTest()
+    const checkSetup = handlers.get('chrome:check-setup')!
+
+    const result = await checkSetup({}) as { nativeHost: Record<string, unknown> }
+
+    expect(result.nativeHost).toEqual({
+      ok: false,
+      code: 'nativeHostNeedsRepair',
+      message: 'Chrome Native Host needs to be installed or repaired.',
+      action: 'repairNativeHost',
+      safeDetails: { exists: true, hostExists: true, wrapperValid: false }
+    })
+    expect(JSON.stringify(result.nativeHost)).not.toContain('C:\\secret')
   })
 
   it('chrome:install-native-host runs only the bundled installer script', async () => {

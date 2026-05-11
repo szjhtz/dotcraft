@@ -23,6 +23,9 @@ function createFakeBrowserManager() {
         hang: vi.fn(() => new Promise((resolve) => {
           pendingActions.push(() => resolve('late'))
         })),
+        chromeCommandTimeout: vi.fn(async () => {
+          throw new Error('Chrome bridge request timed out: tab.evaluate')
+        }),
         browser,
         browsers: {
           list: vi.fn(async () => [{ id: 'iab', name: 'DotCraft Browser', type: 'iab' }]),
@@ -346,8 +349,47 @@ describe('NodeReplManager', () => {
     expect(browserManager.prepareNodeRepl).toHaveBeenCalledWith(owner, expect.objectContaining({
       threadId: 'thread-1',
       evaluationId: 'eval-1',
+      browserSession: expect.objectContaining({
+        protocolVersion: 1,
+        sessionId: 'thread-1',
+        threadId: 'thread-1',
+        evaluationId: 'eval-1'
+      }),
       signal: expect.any(AbortSignal)
     }))
+    manager.reset('thread-1')
+  })
+
+  it('injects browser session metadata into dotcraft globals', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    const first = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      evaluationId: 'eval-1',
+      code: 'JSON.stringify(dotcraft.browserSession)'
+    })
+    const second = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      evaluationId: 'eval-2',
+      code: 'JSON.stringify(dotcraft.browserSession)'
+    })
+
+    expect(JSON.parse(first.resultText ?? '{}')).toMatchObject({
+      protocolVersion: 1,
+      sessionId: 'thread-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      evaluationId: 'eval-1'
+    })
+    expect(JSON.parse(second.resultText ?? '{}')).toMatchObject({
+      sessionId: 'thread-1',
+      turnId: 'turn-1',
+      evaluationId: 'eval-2'
+    })
     manager.reset('thread-1')
   })
 
@@ -356,6 +398,7 @@ describe('NodeReplManager', () => {
     const manager = createManager(browserManager)
     const owner = {} as Electron.BrowserWindow
 
+    await manager.evaluate(owner, { threadId: 'thread-1', code: 'globalThis.count = 1' })
     const pending = manager.evaluate(owner, {
       threadId: 'thread-1',
       code: 'await agent.hang()',
@@ -370,6 +413,54 @@ describe('NodeReplManager', () => {
     const result = await manager.evaluate(owner, { threadId: 'thread-1', code: 'typeof globalThis.count' })
     expect(result.error).toBeUndefined()
     expect(result.resultText).toBe('undefined')
+    manager.reset('thread-1')
+  })
+
+  it('calls the Chrome cancel hook before resetting after an outer timeout', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    const timedOut = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      evaluationId: 'eval-timeout',
+      code: `
+        __dotcraftSetChromeCancelHook(async (evaluationId, reason) => {
+          console.warn("chrome-cancel", evaluationId, reason.includes("timed out"))
+        })
+        await agent.hang()
+      `,
+      timeoutMs: 1
+    })
+    browserManager.releasePending()
+
+    expect(timedOut.error).toContain('timed out')
+    expect(timedOut.logs.join('\n')).toContain('chrome-cancel eval-timeout true')
+    const next = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      code: 'typeof globalThis.count'
+    })
+    expect(next.resultText).toBe('undefined')
+    manager.reset('thread-1')
+  })
+
+  it('keeps REPL globals after a browser command timeout', async () => {
+    const browserManager = createFakeBrowserManager()
+    const manager = createManager(browserManager)
+    const owner = {} as Electron.BrowserWindow
+
+    await manager.evaluate(owner, { threadId: 'thread-1', code: 'globalThis.count = 1' })
+    const failed = await manager.evaluate(owner, {
+      threadId: 'thread-1',
+      code: 'await agent.chromeCommandTimeout()',
+      timeoutMs: 5_000
+    })
+    const result = await manager.evaluate(owner, { threadId: 'thread-1', code: 'globalThis.count' })
+
+    expect(failed.error).toContain('Chrome bridge request timed out: tab.evaluate')
+    expect(browserManager.abortEvaluation).not.toHaveBeenCalled()
+    expect(result.error).toBeUndefined()
+    expect(result.resultText).toBe('1')
     manager.reset('thread-1')
   })
 

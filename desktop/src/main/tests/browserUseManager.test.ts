@@ -928,6 +928,34 @@ describe('BrowserUseManager IAB backend', () => {
     expect(JSON.parse(result.resultText ?? '{}')).toEqual({ sameTabs: true, browserApi: true })
   })
 
+  it('requires typed finalize keep entries', async () => {
+    const host = createFakeHost()
+    const manager = new BrowserUseManager(host)
+    const owner = createFakeOwner()
+
+    const legacy = await runBrowserUse(manager, owner, {
+      threadId: 'thread-typed-finalize',
+      code: `
+        const tab = await agent.browser.tabs.new("localhost:3000");
+        await agent.browser.tabs.finalize({ keep: [tab] });
+      `
+    })
+    const typed = await runBrowserUse(manager, owner, {
+      threadId: 'thread-typed-finalize',
+      code: `
+        const tab = await agent.browser.tabs.selected();
+        return await agent.browser.tabs.finalize({ keep: [{ tab, status: "deliverable" }] });
+      `
+    })
+
+    expect(legacy.error).toContain('keep status must be')
+    expect(typed.error).toBeUndefined()
+    expect(JSON.parse(typed.resultText ?? '{}')).toMatchObject({
+      ok: true,
+      kept: [expect.stringMatching(/^browser-use-thread-typed-finalize-/)]
+    })
+  })
+
   it('resolves locator clicks strictly and sends coordinate input', async () => {
     const wc = createFakeWebContents()
     ;(wc.executeJavaScript as ReturnType<typeof vi.fn>).mockImplementation(async (script: string) => {

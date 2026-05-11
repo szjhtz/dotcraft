@@ -10,7 +10,7 @@ const metadata = JSON.parse(fs.readFileSync(path.join(__dirname, 'extension-id.j
 const scriptPath = path.join(__dirname, 'native-host.mjs');
 const nodePath = process.execPath;
 
-function wrapperPath() {
+export function wrapperPath() {
   if (process.env.DOTCRAFT_CHROME_NATIVE_HOST_PATH) return process.env.DOTCRAFT_CHROME_NATIVE_HOST_PATH;
   if (process.platform === 'win32') {
     return path.join(os.homedir(), 'AppData', 'Local', 'DotCraft', 'chrome-extension', 'dotcraft-chrome-host.cmd');
@@ -18,28 +18,26 @@ function wrapperPath() {
   return path.join(os.homedir(), '.local', 'share', 'dotcraft', 'chrome-extension', 'dotcraft-chrome-host.sh');
 }
 
-function writeWrapper(target) {
+export function windowsWrapperContent(runtimePath = nodePath, nativeHostPath = scriptPath) {
+  return `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${runtimePath}" "${nativeHostPath}"\r\n`;
+}
+
+export function shellWrapperContent(runtimePath = nodePath, nativeHostPath = scriptPath) {
+  return `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${runtimePath}" "${nativeHostPath}"\n`;
+}
+
+export function writeWrapper(target) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   if (process.platform === 'win32') {
-    fs.writeFileSync(target, `@echo off\r\n"${nodePath}" "${scriptPath}"\r\n`);
+    fs.writeFileSync(target, windowsWrapperContent());
     return;
   }
 
-  fs.writeFileSync(target, `#!/bin/sh\nexec "${nodePath}" "${scriptPath}"\n`);
+  fs.writeFileSync(target, shellWrapperContent());
   fs.chmodSync(target, 0o755);
 }
 
-const hostPath = wrapperPath();
-writeWrapper(hostPath);
-const manifest = {
-  name: metadata.extensionHostName,
-  description: 'DotCraft Chrome native messaging host',
-  type: 'stdio',
-  path: hostPath,
-  allowed_origins: [`chrome-extension://${metadata.extensionId}/`]
-};
-
-function manifestPath() {
+export function manifestPath() {
   if (process.env.DOTCRAFT_CHROME_NATIVE_HOST_MANIFEST_PATH) {
     return process.env.DOTCRAFT_CHROME_NATIVE_HOST_MANIFEST_PATH;
   }
@@ -52,27 +50,46 @@ function manifestPath() {
   return path.join(os.homedir(), '.config', 'google-chrome', 'NativeMessagingHosts', `${metadata.extensionHostName}.json`);
 }
 
-const target = manifestPath();
-fs.mkdirSync(path.dirname(target), { recursive: true });
-fs.writeFileSync(target, `${JSON.stringify(manifest, null, 2)}\n`);
-
-if (process.platform === 'win32') {
-  execFileSync('reg', [
-    'add',
-    `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${metadata.extensionHostName}`,
-    '/ve',
-    '/t',
-    'REG_SZ',
-    '/d',
-    target,
-    '/f'
-  ], { stdio: 'ignore' });
+export function buildManifest(hostPath) {
+  return {
+    name: metadata.extensionHostName,
+    description: 'DotCraft Chrome native messaging host',
+    type: 'stdio',
+    path: hostPath,
+    allowed_origins: [`chrome-extension://${metadata.extensionId}/`]
+  };
 }
 
-  process.stdout.write(JSON.stringify({
-  ok: true,
-  manifestPath: target,
-  hostPath,
-  extensionId: metadata.extensionId,
-  hostExists: fs.existsSync(hostPath)
-}, null, 2) + '\n');
+export function installNativeHostManifest() {
+  const hostPath = wrapperPath();
+  writeWrapper(hostPath);
+  const target = manifestPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(buildManifest(hostPath), null, 2)}\n`);
+
+  if (process.platform === 'win32') {
+    execFileSync('reg', [
+      'add',
+      `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${metadata.extensionHostName}`,
+      '/ve',
+      '/t',
+      'REG_SZ',
+      '/d',
+      target,
+      '/f'
+    ], { stdio: 'ignore' });
+  }
+
+  return {
+    ok: true,
+    manifestPath: target,
+    hostPath,
+    exists: fs.existsSync(target),
+    hostExists: fs.existsSync(hostPath),
+    wrapperValid: true
+  };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.stdout.write(JSON.stringify(installNativeHostManifest(), null, 2) + '\n');
+}

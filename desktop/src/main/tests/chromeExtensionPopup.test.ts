@@ -51,12 +51,39 @@ describe('Chrome extension popup', () => {
     expect(statusViewModel({ connected: true, bridgeReady: true, version: '0.1.0' })).toMatchObject({
       label: 'Connected',
       className: 'is-connected',
+      message: 'Chrome backend ready. Control Chrome with DotCraft.',
       version: '0.1.0'
     })
     expect(statusViewModel({ connected: false, bridgeReady: false })).toMatchObject({
       label: 'Disconnected',
-      className: 'is-disconnected'
+      className: 'is-disconnected',
+      message: 'Click the extension icon to start the DotCraft Chrome backend, then refresh status in DotCraft settings.'
     })
+  })
+
+  it('does not render native pipe paths in connected popup text', async () => {
+    const { statusViewModel } = await importPopup()
+    const view = statusViewModel({
+      connected: true,
+      bridgeReady: true,
+      pipePath: '\\\\.\\pipe\\dotcraft-chrome-123-secret',
+      version: '0.1.0'
+    })
+
+    expect(view.message).toBe('Chrome backend ready. Control Chrome with DotCraft.')
+    expect(JSON.stringify(view)).not.toContain('dotcraft-chrome-123-secret')
+  })
+
+  it('redacts backend pipe paths from disconnected popup errors', async () => {
+    const { statusViewModel } = await importPopup()
+    const view = statusViewModel({
+      connected: false,
+      bridgeReady: false,
+      error: 'Failed to open \\\\.\\pipe\\dotcraft-chrome-123-secret'
+    })
+
+    expect(view.message).toContain('[Chrome backend pipe]')
+    expect(view.message).not.toContain('dotcraft-chrome-123-secret')
   })
 
   it('asks the service worker for status when refreshed', async () => {
@@ -81,6 +108,7 @@ describe('Chrome extension popup', () => {
     expect(sendMessage).toHaveBeenCalledWith({ type: 'dotcraft-popup-status' }, expect.any(Function))
     expect(view.classes.has('is-connected')).toBe(true)
     expect(view.label.textContent).toBe('Connected')
+    expect(view.message.textContent).toBe('Chrome backend ready. Control Chrome with DotCraft.')
     expect(view.version.textContent).toBe('Version 0.1.0')
   })
 

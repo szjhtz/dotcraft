@@ -122,10 +122,22 @@ interface BrowserUseTabRuntime {
   owner: BrowserWindow
   logs: BrowserUseLogEntry[]
   adopted?: boolean
+  keptStatus?: BrowserFinalizeKeepStatus
   cdpAttached?: boolean
   snapshotRefs: Map<string, BrowserUseElementMatch>
   domCuaNodes: Map<string, BrowserUseElementMatch>
   snapshotGeneration: number
+}
+
+type BrowserFinalizeKeepStatus = 'handoff' | 'deliverable'
+
+interface BrowserSessionMetadata {
+  protocolVersion?: number
+  sessionId?: string
+  threadId?: string
+  turnId?: string
+  evaluationId?: string
+  backendId?: string
 }
 
 interface BrowserUseOperationTrace {
@@ -159,6 +171,8 @@ interface BrowserUseThreadRuntime {
   hasFocusedFirstTab: boolean
   activeEvaluationId?: string
   activeAbortSignal?: AbortSignal
+  browserSession?: BrowserSessionMetadata
+  recentOpenTabIds: Set<string>
   activeOperation?: BrowserUseOperationTrace
   operationHistory: BrowserUseOperationTrace[]
   viewportWidth: number
@@ -294,6 +308,7 @@ export class BrowserUseManager {
     workspacePath?: string
     evaluationId?: string
     signal?: AbortSignal
+    browserSession?: BrowserSessionMetadata
   }): {
     agent: Record<string, unknown>
     display: (imageLike: unknown) => Promise<void>
@@ -306,6 +321,10 @@ export class BrowserUseManager {
     runtime.activeOperation = undefined
     runtime.activeEvaluationId = params.evaluationId
     runtime.activeAbortSignal = params.signal
+    runtime.browserSession = {
+      ...(params.browserSession ?? {}),
+      backendId: 'iab'
+    }
     return {
       agent: runtime.agent!,
       display: runtime.display!,
@@ -370,6 +389,7 @@ export class BrowserUseManager {
       logs: [],
       images: [],
       hasFocusedFirstTab: false,
+      recentOpenTabIds: new Set<string>(),
       operationHistory: [],
       viewportWidth: BROWSER_USE_DEFAULT_VIEWPORT_WIDTH,
       viewportHeight: BROWSER_USE_DEFAULT_VIEWPORT_HEIGHT,
@@ -447,8 +467,13 @@ export class BrowserUseManager {
       },
       tabs,
       user: {
-        openTabs: async () => [...runtime.tabs.values()].map((tab) => this.tabSnapshot(tab)),
-        describeApi: () => ['openTabs()']
+        openTabs: async () => {
+          const tabs = [...runtime.tabs.values()].map((tab) => this.tabSnapshot(tab))
+          runtime.recentOpenTabIds = new Set(tabs.map((tab) => String(tab.id)))
+          return tabs
+        },
+        claimTab: async (tab: unknown) => this.claimTab(runtime, tab),
+        describeApi: () => ['openTabs()', 'claimTab(tabOrId)']
       },
       capabilities: this.createBrowserCapabilitiesApi(runtime),
       describeApi: () => [
@@ -460,6 +485,7 @@ export class BrowserUseManager {
         'tabs.get(id)',
         'tabs.finalize({ keep })',
         'user.openTabs()',
+        'user.claimTab(tabOrId)',
         'capabilities.list()',
         'capabilities.get(id)'
       ]
@@ -562,26 +588,83 @@ export class BrowserUseManager {
     }
   }
 
+  private claimTab(runtime: BrowserUseThreadRuntime, item: unknown): Record<string, unknown> {
+    const id = this.tabIdFromReference(item)
+    if (!id || !runtime.recentOpenTabIds.has(id)) {
+      throw new Error('Cannot claim browser tab: pass a tab object or id from the current session latest user.openTabs() result.')
+    }
+    const tab = runtime.tabs.get(id)
+    if (!tab) throw new Error(`Browser tab not found: ${id}`)
+    tab.adopted = true
+    this.setAutomationState(runtime, tab, true, 'claim')
+    return this.createTabApi(tab)
+  }
+
   private async finalizeTabs(
     runtime: BrowserUseThreadRuntime,
     options?: { keep?: unknown[] }
   ): Promise<Record<string, unknown>> {
-    const keep = new Set((options?.keep ?? []).map((item) => this.tabIdFromKeepItem(item)).filter(Boolean))
+    const keep = this.parseFinalizeKeep(options)
+    const kept: string[] = []
     const closed: string[] = []
+    const released: string[] = []
     for (const tab of [...runtime.tabs.values()]) {
-      if (tab.adopted || keep.has(tab.id)) continue
+      const keptStatus = keep.get(tab.id)
+      if (keptStatus) {
+        tab.keptStatus = keptStatus
+        kept.push(tab.id)
+        this.setAutomationState(runtime, tab, true, keptStatus)
+        continue
+      }
+      if (tab.adopted) {
+        this.setAutomationState(runtime, tab, false)
+        tab.adopted = false
+        released.push(tab.id)
+        continue
+      }
       this.closeTab(tab)
       closed.push(tab.id)
     }
-    return { ok: true, closed }
+    runtime.logs.push(
+      `Browser finalize summary sessionId=${runtime.browserSession?.sessionId ?? runtime.threadId} ` +
+      `turnId=${runtime.browserSession?.turnId ?? ''} evaluationId=${runtime.browserSession?.evaluationId ?? runtime.activeEvaluationId ?? ''} ` +
+      `backendId=iab created=${closed.length + kept.length} claimed=${released.length + kept.length} kept=${kept.length} closed=${closed.length} released=${released.length}`
+    )
+    return { ok: true, kept, closed, released }
   }
 
-  private tabIdFromKeepItem(item: unknown): string {
+  private parseFinalizeKeep(options?: { keep?: unknown[] }): Map<string, BrowserFinalizeKeepStatus> {
+    const keep = options?.keep ?? []
+    if (!Array.isArray(keep)) {
+      throw new Error('browser.tabs.finalize requires keep to be an array of { tab, status } entries.')
+    }
+    const result = new Map<string, BrowserFinalizeKeepStatus>()
+    for (const item of keep) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('browser.tabs.finalize keep entries must be objects shaped like { tab, status }.')
+      }
+      const entry = item as Record<string, unknown>
+      const status = entry.status
+      if (status !== 'handoff' && status !== 'deliverable') {
+        throw new Error('browser.tabs.finalize keep status must be "handoff" or "deliverable".')
+      }
+      const id = this.tabIdFromReference(entry.tab)
+      if (!id) {
+        throw new Error('browser.tabs.finalize keep entries must include a tab reference.')
+      }
+      result.set(id, status)
+    }
+    return result
+  }
+
+  private tabIdFromReference(item: unknown): string {
     if (typeof item === 'string') return item
+    if (typeof item === 'number' && Number.isFinite(item)) return String(Math.trunc(item))
     if (item && typeof item === 'object') {
       const obj = item as Record<string, unknown>
       if (typeof obj.id === 'string') return obj.id
       if (typeof obj.tabId === 'string') return obj.tabId
+      if (obj.info && typeof obj.info === 'object') return this.tabIdFromReference(obj.info)
     }
     return ''
   }

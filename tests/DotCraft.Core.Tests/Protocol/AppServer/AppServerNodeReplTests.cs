@@ -50,6 +50,21 @@ public sealed class AppServerNodeReplTests
         Assert.Equal(["desktop-iab", "chrome-extension"], harness.Connection.BrowserUseBackends);
     }
 
+    [Fact]
+    public async Task Initialize_WithBrowserUseCapabilities_PreservesChromeRuntimeMetadata()
+    {
+        using var harness = new AppServerTestHarness();
+        await harness.InitializeAsync(nodeReplBrowserUse: true, browserUseBackends: ["desktop-iab", "chrome-extension"]);
+
+        Assert.Equal(1, harness.Connection.BrowserUse?.BrowserSessionProtocolVersion);
+        Assert.True(harness.Connection.BrowserUse?.SupportsCommandCancel);
+        Assert.Equal(1048576, harness.Connection.BrowserUse?.MaxBrowserResultBytes);
+        Assert.Equal(15000, harness.Connection.BrowserUse?.DefaultCommandTimeoutMs);
+        Assert.Equal(120000, harness.Connection.BrowserUse?.MaxCommandTimeoutMs);
+        Assert.True(harness.Connection.BrowserUse?.SupportsTypedFinalize);
+        Assert.True(harness.Connection.BrowserUse?.SupportsChromeDiagnostics);
+    }
+
     private static void AssertThreadNodeReplAvailable(WireNodeReplProxy proxy, string threadId)
     {
         var previous = TracingChatClient.CurrentSessionKey;

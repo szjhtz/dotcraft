@@ -27,20 +27,30 @@ function sendRuntimeMessage(message) {
   });
 }
 
+function safePopupError(error) {
+  if (!error) return null;
+  return String(error)
+    .replace(/\\\\\.\\pipe\\dotcraft-chrome-[^\s"'<>]+/g, '[Chrome backend pipe]')
+    .replace(/(?:^|\s)\/[^\s"'<>]*dotcraft-chrome-[^\s"'<>]+\.sock/g, ' [Chrome backend socket]')
+    .trim();
+}
+
 export function statusViewModel(status, fallbackError = null) {
   const connected = status?.connected === true && status?.bridgeReady === true;
-  const error = fallbackError || status?.error || null;
+  const error = safePopupError(fallbackError || status?.error || null);
   return connected
     ? {
         label: 'Connected',
         className: 'is-connected',
-        message: 'Control Chrome with DotCraft.',
+        message: 'Chrome backend ready. Control Chrome with DotCraft.',
         version: status?.version || getManifestVersion()
       }
     : {
         label: 'Disconnected',
         className: 'is-disconnected',
-        message: error ? `DotCraft is not connected. ${error}` : 'Click the extension icon to reconnect with DotCraft.',
+        message: error
+          ? `Chrome backend disconnected. ${error}`
+          : 'Click the extension icon to start the DotCraft Chrome backend, then refresh status in DotCraft settings.',
         version: status?.version || getManifestVersion()
       };
 }

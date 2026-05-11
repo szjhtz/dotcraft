@@ -40,15 +40,23 @@ if (typeof tab === "undefined") {
 
 After setup, run a lightweight check such as `await browser.user.openTabs()`. If it fails, wait about two seconds and retry once.
 
-If retry still fails with a bridge connection error, use `await dotcraft.chrome.checkSetup()` and follow this recovery order:
+If retry still fails with a backend connection error, use `await dotcraft.chrome.checkSetup()` and follow this recovery order:
 
 - Chrome not installed: tell the user DotCraft Chrome needs Google Chrome.
-- Chrome not running: ask before launching Chrome or opening a Chrome window.
 - Extension missing or disabled: ask the user to install/enable the DotCraft Chrome extension.
 - Native host manifest missing or invalid: ask the user to reinstall or repair the DotCraft Chrome plugin setup.
-- Checks pass but bridge is disconnected: ask the user to click the DotCraft Chrome extension icon once, then retry.
+- Chrome not running: ask before launching Chrome or opening a Chrome window.
+- Checks pass but the Chrome backend is disconnected: ask the user to confirm Chrome is open, click the DotCraft Chrome extension icon once, then refresh status or retry. The backend is discovered through a native pipe started by the extension's native host; do not look for or mention a fixed TCP port.
 
 Do not quote raw `ECONNREFUSED` output as the final answer.
+
+Stable Chrome error categories map to these recovery actions:
+
+- `BridgeDisconnected`: explain as Chrome backend disconnected, run `dotcraft.chrome.checkSetup()`, then ask the user to click the DotCraft Chrome extension icon if setup is otherwise healthy.
+- `CommandCancelled`: do not blindly retry; confirm whether the user cancelled, the turn timed out, or the workflow should be resumed.
+- `SessionMetadataMissing`: rerun the first setup cell in the current Node REPL context so `dotcraft.browserSession` is available.
+- `DebuggerUnavailable`: ask the user to close DevTools or another extension UI controlling the tab, then retry the specific command.
+- `ResultTooLarge`: narrow the query, lower `maxLength`, or read smaller chunks; do not retry the same large result with a longer timeout.
 
 ## Observe After Actions
 
@@ -122,7 +130,7 @@ Use these Chrome APIs. Do not invent alternatives unless you have checked `descr
 - `tab.content.get(options)`
 - `tab.domSnapshot(options)`
 - `tab.observe(options)`
-- `tab.evaluate(fn, arg)`
+- `tab.evaluate(fn, arg, { timeoutMs, maxBytes })`
 - `tab.screenshot(options)`
 
 The `tab.playwright` compatibility subset supports:
@@ -176,6 +184,16 @@ The `tab.dom_cua` compatibility subset supports:
 
 Call content methods as functions. For example, use `await tab.content.text({ maxLength: 30000 })`, not `tab.content.text`.
 
+## Large Pages And Logs
+
+Do not return complete large documents, build logs, or virtualized page contents through `tab.evaluate`.
+
+- Prefer page-side filtering: return only matching rows, current viewport text, failing sections, or a small summary object.
+- Use `maxLength` on content reads, for example `await tab.content.text({ maxLength: 30000, timeoutMs: 20000 })`.
+- Use `tab.evaluate(fn, arg, { maxBytes, timeoutMs })` only for bounded objects. The default serialized result limit is 1 MB, and callers may only lower it.
+- If you see `ResultTooLarge`, narrow the query or fetch smaller chunks. Do not retry the same full-page command with a longer timeout.
+- For long logs, look for page controls, filters, search results, ranges, or download endpoints before reading raw text.
+
 ## File Uploads
 
 Use the Playwright-style file chooser flow. Start waiting before clicking the file input or its label:
@@ -219,12 +237,12 @@ Use `open-chrome-window.js` without `--dry-run` only after the user agrees. Do n
 - Claim an existing tab only by passing the exact returned tab object to `browser.user.claimTab(tab)`.
 - Do not guess tab IDs.
 - Prefer reusing an already selected or claimed tab over creating new tabs.
-- Before finishing, call `browser.tabs.finalize({ keep: [tab] })` exactly once as the final Chrome browser action of the turn. Use `keep: []` when no agent-created tabs should remain. Do not use `keep: true`.
+- Before finishing, call `browser.tabs.finalize({ keep: [{ tab, status: "deliverable" }] })` exactly once as the final Chrome browser action of the turn. Use `status: "handoff"` when the user should continue in the tab, `status: "deliverable"` when the tab itself is part of the delivered result, and `keep: []` when no agent-created tabs should remain. Do not use legacy shapes such as `keep: [tab]`, `keep: [id]`, or `keep: true`.
 - Keep only tabs that are deliverables or explicit handoffs.
 
 ## Playwright Discipline
 
-Use stable locators first: role, label, placeholder, test id, then CSS. Keep actions small and verify page state with `observe()`, `domSnapshot()`, or targeted content reads. If an action fails because the bridge is disconnected, retry once, then use the recovery flow above.
+Use stable locators first: role, label, placeholder, test id, then CSS. Keep actions small and verify page state with `observe()`, `domSnapshot()`, or targeted content reads. If an action fails because the Chrome backend is disconnected, retry once, then use the recovery flow above.
 
 ## Safety
 

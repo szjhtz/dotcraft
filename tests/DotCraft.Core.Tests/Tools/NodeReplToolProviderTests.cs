@@ -19,8 +19,14 @@ public sealed class NodeReplToolProviderTests
         public Task<NodeReplEvaluateResult?> EvaluateAsync(
             string code,
             int? timeoutSeconds = null,
-            CancellationToken ct = default) =>
-            Task.FromResult<NodeReplEvaluateResult?>(result ?? new NodeReplEvaluateResult { ResultText = "ok" });
+            CancellationToken ct = default,
+            NodeReplEvaluationMetadata? metadata = null)
+        {
+            LastMetadata = metadata;
+            return Task.FromResult<NodeReplEvaluateResult?>(result ?? new NodeReplEvaluateResult { ResultText = "ok" });
+        }
+
+        public NodeReplEvaluationMetadata? LastMetadata { get; private set; }
 
     }
 
@@ -104,6 +110,11 @@ public sealed class NodeReplToolProviderTests
         Assert.Contains("Error: NodeReplJs timed out after 1000ms.", text.Text);
         var item = Assert.Single(completed);
         Assert.Equal(ItemType.PluginFunctionCall, item.Type);
+        Assert.NotNull(proxy.LastMetadata);
+        Assert.Equal("thread_test", proxy.LastMetadata!.ThreadId);
+        Assert.Equal("thread_test", proxy.LastMetadata.SessionId);
+        Assert.Equal("turn_001", proxy.LastMetadata.TurnId);
+        Assert.Equal(1, proxy.LastMetadata.ProtocolVersion);
     }
 
     private static ToolProviderContext CreateContext(INodeReplProxy proxy, IReadOnlyList<string>? pluginIds = null)

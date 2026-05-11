@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { execFile } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, promises as fsPromises } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import net from 'net'
 
@@ -8,12 +9,21 @@ export interface ChromeOpenRequest {
   url?: string
 }
 
+export interface ChromeSetupCheckStatus {
+  ok: boolean
+  code: string
+  message: string
+  action?: string
+  safeDetails?: Record<string, string | number | boolean>
+}
+
 export interface ChromeSetupStatus {
-  extension: unknown
-  nativeHost: unknown
-  chromeRunning: unknown
-  installedBrowsers: unknown
-  bridge: unknown
+  extension: ChromeSetupCheckStatus
+  nativeHost: ChromeSetupCheckStatus
+  chromeRunning: ChromeSetupCheckStatus
+  installedBrowsers: ChromeSetupCheckStatus
+  backend: ChromeSetupCheckStatus
+  bridge: ChromeSetupCheckStatus
 }
 
 function pluginSourceRootFromAppPath(): string {
@@ -88,28 +98,96 @@ export function runChromeSetupScript(
 }
 
 export async function checkChromeSetup(workspacePath?: string): Promise<ChromeSetupStatus> {
-  const [extension, nativeHost, chromeRunning, installedBrowsers, bridge] = await Promise.all([
+  const [extensionRaw, nativeHostRaw, chromeRunningRaw, installedBrowsersRaw, backendRaw] = await Promise.all([
     runChromeSetupScript(workspacePath, 'check-extension-installed.js', ['--json']),
     runChromeSetupScript(workspacePath, 'check-native-host-manifest.js', ['--json']),
     runChromeSetupScript(workspacePath, 'chrome-is-running.js', ['--check', '--json']),
     runChromeSetupScript(workspacePath, 'installed-browsers.js', ['--check', '--json']),
     checkChromeBridge()
   ])
-  return { extension, nativeHost, chromeRunning, installedBrowsers, bridge }
+  const backend = normalizeSetupCheck('backend', backendRaw)
+  return {
+    extension: normalizeSetupCheck('extension', extensionRaw),
+    nativeHost: normalizeSetupCheck('nativeHost', nativeHostRaw),
+    chromeRunning: normalizeSetupCheck('chromeRunning', chromeRunningRaw),
+    installedBrowsers: normalizeSetupCheck('installedBrowsers', installedBrowsersRaw),
+    backend,
+    bridge: backend
+  }
 }
 
 export function checkChromeBridge(): Promise<unknown> {
-  const port = Number.parseInt(process.env.DOTCRAFT_CHROME_BRIDGE_PORT || '32177', 10)
-  if (!Number.isFinite(port) || port <= 0) {
-    return Promise.resolve({ ok: false, error: 'Invalid Chrome bridge port.' })
+  return checkChromeBackendDiscovery()
+}
+
+async function chromePipeCandidates(): Promise<string[]> {
+  if (process.platform === 'win32') {
+    try {
+      const names = await fsPromises.readdir('\\\\.\\pipe\\')
+      return names.filter((name) => name.startsWith('dotcraft-chrome-')).map((name) => `\\\\.\\pipe\\${name}`)
+    } catch {
+      return []
+    }
+  }
+  try {
+    const names = await fsPromises.readdir(tmpdir())
+    return names
+      .filter((name) => name.startsWith('dotcraft-chrome-') && name.endsWith('.sock'))
+      .map((name) => join(tmpdir(), name))
+  } catch {
+    return []
+  }
+}
+
+function encodeFrame(message: unknown): Buffer {
+  const body = Buffer.from(JSON.stringify(message), 'utf8')
+  const header = Buffer.alloc(4)
+  header.writeUInt32LE(body.length, 0)
+  return Buffer.concat([header, body])
+}
+
+function decodeFirstFrame(buffer: Buffer): unknown | undefined {
+  if (buffer.length < 4) return undefined
+  const length = buffer.readUInt32LE(0)
+  if (buffer.length < length + 4) return undefined
+  return JSON.parse(buffer.subarray(4, 4 + length).toString('utf8'))
+}
+
+async function checkChromeBackendDiscovery(): Promise<unknown> {
+  const candidates = await chromePipeCandidates()
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      code: 'backendDisconnected',
+      candidateCount: 0,
+      error: 'Chrome backend native pipe was not discovered.',
+      action: 'clickExtensionRefresh'
+    }
   }
 
+  const failures: string[] = []
+  for (const pipePath of candidates) {
+    const result = await probeChromePipe(pipePath)
+    if ((result as { ok?: boolean }).ok === true) {
+      return { ...(result as Record<string, unknown>), candidateCount: candidates.length, code: 'backendConnected' }
+    }
+    failures.push(normalizeBridgeError((result as { error?: unknown }).error))
+  }
+  return {
+    ok: false,
+    code: 'backendDisconnected',
+    candidateCount: candidates.length,
+    error: failures[0] ?? 'Chrome backend is not connected.',
+    action: 'clickExtensionRefresh'
+  }
+}
+
+function probeChromePipe(pipePath: string): Promise<unknown> {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: '127.0.0.1', port })
-    let buffer = ''
+    const socket = net.createConnection({ path: pipePath })
+    let buffer = Buffer.alloc(0)
     let settled = false
     let timer: ReturnType<typeof setTimeout>
-    const request = JSON.stringify({ id: 1, method: 'user.openTabs', params: {} }) + '\n'
     const finish = (payload: unknown): void => {
       if (settled) return
       settled = true
@@ -118,31 +196,29 @@ export function checkChromeBridge(): Promise<unknown> {
       resolve(payload)
     }
     timer = setTimeout(() => {
-      finish({ ok: false, error: 'Chrome bridge did not respond.' })
+      finish({ ok: false, error: 'Chrome backend did not respond.' })
     }, 1_000)
 
-    socket.setEncoding('utf8')
     socket.on('connect', () => {
-      socket.write(request)
+      socket.write(encodeFrame({ id: 1, kind: 'command', method: 'getInfo', params: {}, timeoutMs: 1000 }))
     })
     socket.on('data', (chunk) => {
-      buffer += chunk
-      const newline = buffer.indexOf('\n')
-      if (newline < 0) return
-      const line = buffer.slice(0, newline).trim()
-      if (!line) return
+      buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)])
       try {
-        const parsed = JSON.parse(line) as { ok?: boolean; error?: unknown }
-        finish(parsed.ok === true ? { ok: true } : { ok: false, error: normalizeBridgeError(parsed.error) })
-      } catch {
-        finish({ ok: false, error: 'Chrome bridge returned invalid JSON.' })
+        const parsed = decodeFirstFrame(buffer) as { ok?: boolean; result?: { protocolVersion?: number; backendId?: string }; error?: unknown } | undefined
+        if (!parsed) return
+        finish(parsed.ok === true && parsed.result?.protocolVersion === 3
+          ? { ok: true, backendId: parsed.result.backendId, protocolVersion: parsed.result.protocolVersion }
+          : { ok: false, error: normalizeBridgeError(parsed.error) })
+      } catch (error) {
+        finish({ ok: false, error: normalizeBridgeError(error) })
       }
     })
     socket.on('error', (error) => {
       finish({ ok: false, error: normalizeBridgeError(error) })
     })
     socket.on('close', () => {
-      finish({ ok: false, error: 'Chrome bridge closed before responding.' })
+      finish({ ok: false, error: 'Chrome backend closed before responding.' })
     })
   })
 }
@@ -151,7 +227,105 @@ function normalizeBridgeError(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
     return error.message
   }
-  return typeof error === 'string' ? error : 'Chrome bridge is not connected.'
+  return typeof error === 'string' ? error : 'Chrome backend is not connected.'
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function numberField(record: Record<string, unknown> | null, key: string): number | undefined {
+  const value = record?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string | undefined {
+  const value = record?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function booleanField(record: Record<string, unknown> | null, key: string): boolean | undefined {
+  const value = record?.[key]
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function setupSafeDetails(kind: string, record: Record<string, unknown> | null): ChromeSetupCheckStatus['safeDetails'] | undefined {
+  const details: Record<string, string | number | boolean> = {}
+  if (kind === 'backend') {
+    const protocolVersion = numberField(record, 'protocolVersion')
+    const candidateCount = numberField(record, 'candidateCount')
+    const backendId = stringField(record, 'backendId')
+    if (protocolVersion != null) details.protocolVersion = protocolVersion
+    if (candidateCount != null) details.candidateCount = candidateCount
+    if (backendId) details.backendId = backendId
+  }
+  if (kind === 'chromeRunning') {
+    const processCount = numberField(record, 'processCount')
+    if (processCount != null) details.processCount = processCount
+  }
+  if (kind === 'installedBrowsers') {
+    const browsers = record?.browsers
+    if (Array.isArray(browsers)) details.browserCount = browsers.length
+  }
+  if (kind === 'nativeHost') {
+    for (const key of ['exists', 'hostExists', 'wrapperValid']) {
+      const value = booleanField(record, key)
+      if (value != null) details[key] = value
+    }
+  }
+  return Object.keys(details).length > 0 ? details : undefined
+}
+
+function normalizeSetupCheck(kind: string, value: unknown): ChromeSetupCheckStatus {
+  const record = asRecord(value)
+  const ok = record?.ok === true
+  const code = stringField(record, 'code')
+
+  if (kind === 'installedBrowsers') {
+    return {
+      ok,
+      code: code ?? (ok ? 'chromeInstalled' : 'chromeMissing'),
+      message: ok ? 'Google Chrome is installed.' : 'Google Chrome was not found.',
+      action: ok ? undefined : 'installChrome',
+      safeDetails: setupSafeDetails(kind, record)
+    }
+  }
+  if (kind === 'extension') {
+    return {
+      ok,
+      code: code ?? (ok ? 'extensionReady' : 'extensionNotReady'),
+      message: ok ? 'DotCraft Chrome extension is ready.' : 'DotCraft Chrome extension is not ready.',
+      action: ok ? undefined : 'openExtensions'
+    }
+  }
+  if (kind === 'nativeHost') {
+    const message = stringField(record, 'message')
+    return {
+      ok,
+      code: code ?? (ok ? 'nativeHostReady' : 'nativeHostMissing'),
+      message: message ?? (ok ? 'Chrome Native Host is installed.' : 'Chrome Native Host needs to be installed or repaired.'),
+      action: ok ? undefined : 'repairNativeHost',
+      safeDetails: setupSafeDetails(kind, record)
+    }
+  }
+  if (kind === 'chromeRunning') {
+    return {
+      ok,
+      code: code ?? (ok ? 'chromeRunning' : 'chromeNotRunning'),
+      message: ok ? 'Chrome is running.' : 'Chrome is not running.',
+      action: ok ? undefined : 'openChrome',
+      safeDetails: setupSafeDetails(kind, record)
+    }
+  }
+  return {
+    ok,
+    code: code ?? (ok ? 'backendConnected' : 'backendDisconnected'),
+    message: ok ? 'Chrome backend is connected.' : 'Chrome backend is disconnected.',
+    action: ok ? undefined : 'clickExtensionRefresh',
+    safeDetails: setupSafeDetails('backend', record)
+  }
 }
 
 export async function installChromeNativeHost(workspacePath?: string): Promise<unknown> {

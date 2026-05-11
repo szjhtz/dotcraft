@@ -1,20 +1,47 @@
+import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 
-const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = Number(process.env.DOTCRAFT_CHROME_BRIDGE_PORT || 32177);
 const DEFAULT_TIMEOUT_MS = 15000;
+const MAX_COMMAND_TIMEOUT_MS = 120000;
+const DEFAULT_EVALUATE_MAX_BYTES = 1024 * 1024;
+const PIPE_PREFIX = "dotcraft-chrome-";
 const BRIDGE_UNAVAILABLE_MESSAGE =
-  "Chrome extension bridge is not connected; click the DotCraft Chrome extension after installing the native host manifest, then retry.";
+  "Chrome extension backend is not connected; click the DotCraft Chrome extension after installing the native host manifest, then retry.";
+
+class ChromeRuntimeError extends Error {
+  constructor(category, message, options = {}) {
+    super(`${category}: ${message}`);
+    this.name = "ChromeRuntimeError";
+    this.category = category;
+    if (options.cause) this.cause = options.cause;
+    if (options.code) this.code = options.code;
+  }
+}
+
+function chromeError(category, message, options = {}) {
+  return new ChromeRuntimeError(category, message, options);
+}
 
 function normalizeBridgeError(error) {
   const code = error?.code;
   if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE" || code === "ETIMEDOUT") {
-    const wrapped = new Error(BRIDGE_UNAVAILABLE_MESSAGE);
-    wrapped.cause = error;
-    wrapped.code = code;
-    return wrapped;
+    return chromeError("BridgeDisconnected", BRIDGE_UNAVAILABLE_MESSAGE, { cause: error, code });
   }
   return error;
+}
+
+function normalizeRemoteError(error) {
+  const message = error?.message || String(error || "Chrome extension command failed.");
+  const categoryMatch = /^(BridgeDisconnected|CommandTimeout|CommandCancelled|ResultTooLarge|UnsupportedApi|DebuggerUnavailable|SessionMetadataMissing):\s*(.*)$/s.exec(message);
+  if (categoryMatch) {
+    return chromeError(categoryMatch[1], categoryMatch[2], { cause: error });
+  }
+  if (message.includes("timed out")) {
+    return chromeError("CommandTimeout", message, { cause: error });
+  }
+  return new Error(message);
 }
 
 function tabReference(tab) {
@@ -40,15 +67,22 @@ function tabReference(tab) {
 function normalizeFinalizeOptions(options = {}) {
   const keep = options.keep ?? [];
   if (!Array.isArray(keep)) {
-    throw new Error("browser.tabs.finalize({ keep }) requires keep must be an array of tabs or tab ids.");
+    throw new Error("browser.tabs.finalize({ keep }) requires keep to be an array of { tab, status } entries.");
   }
   return {
     ...options,
     keep: keep.map((item) => {
-      if (typeof item === "number" || typeof item === "string") {
-        return item;
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error("browser.tabs.finalize keep entries must be objects shaped like { tab, status }.");
       }
-      return tabReference(item);
+      const status = item.status;
+      if (status !== "handoff" && status !== "deliverable") {
+        throw new Error('browser.tabs.finalize keep status must be "handoff" or "deliverable".');
+      }
+      return {
+        status,
+        tab: tabReference(item.tab),
+      };
     }),
   };
 }
@@ -61,7 +95,112 @@ function truncateContent(value, maxLength) {
 }
 
 function unsupportedApi(name) {
-  throw new Error(`DotCraft Chrome does not support ${name} yet. Use the documented Chrome compatibility subset or ask the user before choosing another browser-control path.`);
+  throw chromeError("UnsupportedApi", `DotCraft Chrome does not support ${name} yet. Use the documented Chrome compatibility subset or ask the user before choosing another browser-control path.`);
+}
+
+function clampTimeoutMs(value, fallback = DEFAULT_TIMEOUT_MS) {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate) || candidate <= 0) return fallback;
+  return Math.max(1, Math.min(Math.floor(candidate), MAX_COMMAND_TIMEOUT_MS));
+}
+
+function requestTimeoutFrom(options = {}, fallback = DEFAULT_TIMEOUT_MS) {
+  return clampTimeoutMs(options?.timeoutMs, fallback);
+}
+
+function normalizeEvaluateMaxBytes(value) {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate) || candidate < 0) return DEFAULT_EVALUATE_MAX_BYTES;
+  return Math.min(Math.floor(candidate), DEFAULT_EVALUATE_MAX_BYTES);
+}
+
+function serializedSizeBytes(value) {
+  const json = JSON.stringify(value);
+  const text = json === undefined ? String(value) : json;
+  return Buffer.byteLength(text, "utf8");
+}
+
+function assertSerializedSize(value, maxBytes, operation) {
+  const actualBytes = serializedSizeBytes(value);
+  if (actualBytes > maxBytes) {
+    throw chromeError(
+      "ResultTooLarge",
+      `${operation} result exceeded ${maxBytes} bytes; actual approximately ${actualBytes} bytes. Narrow the query, use maxLength, or fetch smaller chunks.`
+    );
+  }
+}
+
+export function encodeChromeHostFrame(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  const header = Buffer.alloc(4);
+  header.writeUInt32LE(body.length, 0);
+  return Buffer.concat([header, body]);
+}
+
+export class ChromeHostFrameDecoder {
+  constructor() {
+    this.buffer = Buffer.alloc(0);
+  }
+
+  push(chunk) {
+    this.buffer = Buffer.concat([this.buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+    const frames = [];
+    while (this.buffer.length >= 4) {
+      const length = this.buffer.readUInt32LE(0);
+      if (this.buffer.length < length + 4) break;
+      const body = this.buffer.subarray(4, 4 + length);
+      this.buffer = this.buffer.subarray(4 + length);
+      frames.push(JSON.parse(body.toString("utf8")));
+    }
+    return frames;
+  }
+}
+
+async function defaultPipeCandidates() {
+  if (process.platform === "win32") {
+    try {
+      const names = await fs.readdir("\\\\.\\pipe\\");
+      return names
+        .filter((name) => name.startsWith(PIPE_PREFIX))
+        .map((name) => `\\\\.\\pipe\\${name}`);
+    } catch {
+      return [];
+    }
+  }
+
+  const roots = [os.tmpdir()];
+  const candidates = [];
+  for (const root of roots) {
+    try {
+      const names = await fs.readdir(root);
+      for (const name of names) {
+        if (name.startsWith(PIPE_PREFIX) && name.endsWith(".sock")) {
+          candidates.push(path.join(root, name));
+        }
+      }
+    } catch {
+      // Ignore inaccessible temp roots.
+    }
+  }
+  return candidates;
+}
+
+function validateBrowserSession(browserSession) {
+  if (!browserSession?.sessionId || !browserSession?.turnId || !browserSession?.evaluationId) {
+    throw chromeError(
+      "SessionMetadataMissing",
+      "Chrome command requires browserSession.sessionId, browserSession.turnId, and browserSession.evaluationId."
+    );
+  }
+}
+
+function newCommandId() {
+  return `chrome-command-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function errorCategory(error) {
+  const message = error?.message || String(error || "");
+  return /^([A-Za-z]+):/.exec(message)?.[1] || error?.category || undefined;
 }
 
 function normalizeWaitForLoadStateArgs(stateOrOptions = "load", options = {}) {
@@ -213,15 +352,28 @@ class ChromeDomCuaApi {
   }
 }
 
-class ChromeBridgeClient {
+class ChromeHostClient {
   constructor(options = {}) {
-    this.host = options.host || DEFAULT_HOST;
-    this.port = options.port || DEFAULT_PORT;
+    this.pipePaths = Array.isArray(options.pipePaths) ? options.pipePaths : null;
+    this.listPipes = typeof options.listPipes === "function" ? options.listPipes : defaultPipeCandidates;
+    this.connectPipe = typeof options.connect === "function" ? options.connect : null;
     this.timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+    this.discoveryTimeoutMs = options.discoveryTimeoutMs || DEFAULT_TIMEOUT_MS;
     this.socket = null;
-    this.buffer = "";
+    this.decoder = new ChromeHostFrameDecoder();
     this.nextId = 1;
     this.pending = new Map();
+    this.browserSession = options.browserSession || null;
+    this.browserSessionProvider = typeof options.browserSessionProvider === "function"
+      ? options.browserSessionProvider
+      : null;
+    this.logger = options.logger || globalThis.console;
+    this.diagnostics = {
+      pipeCandidateCount: 0,
+      backendCount: 0,
+      connectFailures: [],
+      reconnectCount: 0,
+    };
   }
 
   async ensureConnected() {
@@ -229,61 +381,88 @@ class ChromeBridgeClient {
       return;
     }
 
-    await new Promise((resolve, reject) => {
-      const socket = net.createConnection({ host: this.host, port: this.port });
-      let settled = false;
+    const candidates = this.pipePaths || await this.listPipes();
+    this.diagnostics.pipeCandidateCount = candidates.length;
+    this.diagnostics.connectFailures = [];
+    for (const pipePath of candidates) {
+      try {
+        const socket = await this.openPipe(pipePath);
+        this.socket = socket;
+        this.decoder = new ChromeHostFrameDecoder();
+        socket.on("data", (chunk) => this.handleData(chunk));
+        socket.on("close", () => this.handleClose());
+        socket.on("error", (error) => this.handleClose(normalizeBridgeError(error)));
+        const info = await this.requestInfo();
+        if (info?.protocolVersion === 3 && info?.backendId) {
+          this.diagnostics.backendCount += 1;
+          return;
+        }
+        socket.destroy();
+        this.socket = null;
+      } catch (error) {
+        this.diagnostics.connectFailures.push({
+          pipePath: String(pipePath),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (this.socket) {
+          this.socket.destroy();
+          this.socket = null;
+        }
+      }
+    }
+    throw chromeError("BridgeDisconnected", BRIDGE_UNAVAILABLE_MESSAGE);
+  }
 
+  openPipe(pipePath) {
+    return new Promise((resolve, reject) => {
+      const socket = this.connectPipe ? this.connectPipe(pipePath) : net.createConnection({ path: pipePath });
+      let settled = false;
       const timer = setTimeout(() => {
         socket.destroy();
         if (!settled) {
           settled = true;
-          reject(normalizeBridgeError(Object.assign(new Error("Chrome bridge connection timed out."), { code: "ETIMEDOUT" })));
+          reject(normalizeBridgeError(Object.assign(new Error("Chrome host pipe connection timed out."), { code: "ETIMEDOUT" })));
         }
-      }, this.timeoutMs);
-
-      socket.setEncoding("utf8");
-
+      }, this.discoveryTimeoutMs);
       socket.on("connect", () => {
         clearTimeout(timer);
+        if (settled) return;
         settled = true;
-        this.socket = socket;
-        socket.on("data", (chunk) => this.handleData(chunk));
-        socket.on("close", () => this.handleClose());
-        socket.on("error", (error) => this.handleClose(normalizeBridgeError(error)));
-        resolve();
+        resolve(socket);
       });
-
       socket.on("error", (error) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
           reject(normalizeBridgeError(error));
-          return;
         }
-        this.handleClose(normalizeBridgeError(error));
       });
     });
   }
 
+  requestInfo() {
+    return this.sendEnvelope({ kind: "command", method: "getInfo", params: {}, timeoutMs: this.timeoutMs }, {
+      timeoutMs: this.timeoutMs,
+      requireSession: false,
+      method: "getInfo",
+    });
+  }
+
   handleData(chunk) {
-    this.buffer += chunk;
-    let newline = this.buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = this.buffer.slice(0, newline).trim();
-      this.buffer = this.buffer.slice(newline + 1);
-      if (line.length > 0) {
-        this.handleMessage(line);
-      }
-      newline = this.buffer.indexOf("\n");
+    let messages;
+    try {
+      messages = this.decoder.push(chunk);
+    } catch (error) {
+      console.warn("[DotCraft Chrome] Ignoring invalid host frame", error);
+      return;
+    }
+    for (const message of messages) {
+      this.handleMessage(message);
     }
   }
 
-  handleMessage(line) {
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch (error) {
-      console.warn("[DotCraft Chrome] Ignoring invalid bridge message", error);
+  handleMessage(message) {
+    if (message?.kind === "event") {
       return;
     }
     const pending = this.pending.get(message.id);
@@ -292,8 +471,8 @@ class ChromeBridgeClient {
     }
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
-    if (message.error) {
-      pending.reject(new Error(message.error.message || String(message.error)));
+    if (message.ok === false || message.error) {
+      pending.reject(normalizeRemoteError(message.error));
     } else {
       pending.resolve(message.result);
     }
@@ -305,7 +484,7 @@ class ChromeBridgeClient {
     if (socket) {
       socket.removeAllListeners();
     }
-    const closeError = error || new Error("Chrome bridge connection closed.");
+    const closeError = error || chromeError("BridgeDisconnected", "Chrome backend connection closed.");
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(closeError);
@@ -313,18 +492,57 @@ class ChromeBridgeClient {
     this.pending.clear();
   }
 
-  async request(method, params = {}) {
+  currentBrowserSession() {
+    const provided = this.browserSessionProvider?.();
+    return provided || this.browserSession || null;
+  }
+
+  async request(method, params = {}, options = {}) {
     await this.ensureConnected();
+    const timeoutMs = requestTimeoutFrom(options, this.timeoutMs);
+    const browserSession = this.currentBrowserSession();
+    validateBrowserSession(browserSession);
+    const commandId = newCommandId();
+    return await this.sendEnvelope({
+      kind: "command",
+      commandId,
+      method,
+      params,
+      browserSession,
+      timeoutMs,
+    }, { method, timeoutMs, commandId, browserSession });
+  }
+
+  sendEnvelope(envelope, options = {}) {
     const id = this.nextId++;
-    const payload = JSON.stringify({ id, method, params }) + "\n";
+    const payload = encodeChromeHostFrame({ id, ...envelope });
+    const timeoutMs = requestTimeoutFrom(options, this.timeoutMs);
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Chrome bridge request timed out: ${method}`));
-      }, this.timeoutMs);
+        if (options.commandId) {
+          this.sendCancel(options.commandId, options.browserSession, "timeout");
+        }
+        const error = chromeError("CommandTimeout", `Chrome bridge request timed out: ${options.method || envelope.method} after ${timeoutMs}ms.`);
+        this.logDiagnostic(options, "timeout", error, timeoutMs);
+        reject(error);
+      }, timeoutMs);
 
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, {
+        resolve: (value) => {
+          this.logDiagnostic(options, "ok", null, timeoutMs);
+          resolve(value);
+        },
+        reject: (error) => {
+          this.logDiagnostic(options, "error", error, timeoutMs);
+          reject(error);
+        },
+        timer,
+        commandId: options.commandId,
+        browserSession: options.browserSession,
+        startedAt: Date.now(),
+      });
       this.socket.write(payload, (error) => {
         if (error) {
           clearTimeout(timer);
@@ -333,6 +551,48 @@ class ChromeBridgeClient {
         }
       });
     });
+  }
+
+  sendCancel(commandId, browserSession, reason) {
+    if (!this.socket || this.socket.destroyed) return;
+    const id = this.nextId++;
+    const payload = encodeChromeHostFrame({
+      id,
+      kind: "cancel",
+      commandId,
+      browserSession,
+      reason,
+    });
+    this.socket.write(payload, () => undefined);
+  }
+
+  async cancelEvaluation(evaluationId, reason = "cancelled") {
+    const matches = [...this.pending.values()]
+      .filter((pending) => pending.commandId && pending.browserSession?.evaluationId === evaluationId);
+    for (const pending of matches) {
+      pending.cancelled = true;
+      this.sendCancel(pending.commandId, pending.browserSession, reason);
+    }
+  }
+
+  logDiagnostic(options, status, error, timeoutMs) {
+    const session = options.browserSession;
+    if (!session || !options.commandId || !this.logger?.warn) return;
+    if (status === "ok") return;
+    this.logger.warn("[DotCraft Chrome diagnostic]", JSON.stringify({
+      sessionId: session.sessionId,
+      turnId: session.turnId,
+      evaluationId: session.evaluationId,
+      commandId: options.commandId,
+      backendId: "chrome-extension",
+      method: options.method,
+      status,
+      timeoutMs,
+      cancelled: status === "cancelled",
+      errorCategory: errorCategory(error),
+      pipeCandidateCount: this.diagnostics.pipeCandidateCount,
+      reconnectCount: this.diagnostics.reconnectCount,
+    }));
   }
 
   close() {
@@ -395,7 +655,7 @@ class ChromeLocator {
       action,
       value,
       options,
-    });
+    }, options);
   }
 
   async count(options = {}) {
@@ -514,12 +774,12 @@ class ChromeContentApi {
   }
 
   async text(options = {}) {
-    const value = await this.tab.client.request("tab.contentText", { tab: tabReference(this.tab.info), ...options });
+    const value = await this.tab.client.request("tab.contentText", { tab: tabReference(this.tab.info), ...options }, options);
     return truncateContent(value, options.maxLength);
   }
 
   async html(options = {}) {
-    const value = await this.tab.client.request("tab.contentHtml", { tab: tabReference(this.tab.info), ...options });
+    const value = await this.tab.client.request("tab.contentHtml", { tab: tabReference(this.tab.info), ...options }, options);
     return truncateContent(value, options.maxLength);
   }
 
@@ -604,7 +864,7 @@ class ChromePlaywrightApi {
       tab: tabReference(this.tab.info),
       state: normalized.state,
       options: normalized.options,
-    });
+    }, normalized.options);
   }
 
   async waitForTimeout(ms) {
@@ -616,7 +876,7 @@ class ChromePlaywrightApi {
       tab: tabReference(this.tab.info),
       url,
       options,
-    });
+    }, options);
   }
 
   async expectNavigation(action, options = {}) {
@@ -632,7 +892,7 @@ class ChromePlaywrightApi {
         tab: tabReference(this.tab.info),
         previousUrl,
         options,
-      });
+      }, options);
     }
     if (options.waitUntil === "load") {
       await this.waitForLoadState("load", options);
@@ -647,7 +907,7 @@ class ChromePlaywrightApi {
     const info = await this.tab.client.request("tab.waitForFileChooser", {
       tab: tabReference(this.tab.info),
       options,
-    });
+    }, options);
     return new ChromeFileChooser(this.tab, info);
   }
 
@@ -703,7 +963,7 @@ class ChromeTab {
   }
 
   async goto(url, options = {}) {
-    const result = await this.client.request("tab.goto", { tab: tabReference(this.info), url, options });
+    const result = await this.client.request("tab.goto", { tab: tabReference(this.info), url, options }, options);
     this.info = tabReference(result || this.info);
     return this;
   }
@@ -736,9 +996,18 @@ class ChromeTab {
     return await this.client.request("tab.screenshot", { tab: tabReference(this.info), options });
   }
 
-  async evaluate(pageFunction, arg) {
+  async evaluate(pageFunction, arg, options = {}) {
     const source = typeof pageFunction === "function" ? `return (${pageFunction.toString()})(arguments[0]);` : String(pageFunction);
-    return await this.client.request("tab.evaluate", { tab: tabReference(this.info), source, arg });
+    const maxBytes = normalizeEvaluateMaxBytes(options.maxBytes);
+    const result = await this.client.request("tab.evaluate", {
+      tab: tabReference(this.info),
+      source,
+      arg,
+      maxBytes,
+      timeoutMs: options.timeoutMs,
+    }, options);
+    assertSerializedSize(result, maxBytes, "tab.evaluate");
+    return result;
   }
 
   async domSnapshot(options = {}) {
@@ -828,7 +1097,7 @@ class ChromeTabsApi {
   }
 
   async new(options = {}) {
-    const tab = await this.browser.client.request("tabs.new", options);
+    const tab = await this.browser.client.request("tabs.new", options, options);
     return new ChromeTab(this.browser, tab);
   }
 
@@ -848,7 +1117,7 @@ class ChromeTabsApi {
 
   async content(options = {}) {
     if (Array.isArray(options.urls) && options.urls.length > 0) {
-      return await this.browser.client.request("tabs.content", options);
+      return await this.browser.client.request("tabs.content", options, options);
     }
     const tab = await this.selected(options);
     return await tab.content.read(options);
@@ -859,7 +1128,7 @@ class ChromeTabsApi {
   }
 
   async finalize(options = {}) {
-    return await this.browser.client.request("tabs.finalize", normalizeFinalizeOptions(options));
+    return await this.browser.client.request("tabs.finalize", normalizeFinalizeOptions(options), options);
   }
 
   describeApi() {
@@ -924,7 +1193,20 @@ export async function setupAtlasRuntime(options = {}) {
     return await fallback.setupAtlasRuntime(options);
   }
 
-  const bridgeOptions = options.chromeBridge || {};
+  const bridgeOptions = options.chromeHost || options.chromeBridge || {};
+  const browserSessionProvider = () => globals.dotcraft?.browserSession || options.browserSession || bridgeOptions.browserSession || null;
+  const chromeClients = globals.__dotcraftChromeClients instanceof Set
+    ? globals.__dotcraftChromeClients
+    : new Set();
+  globals.__dotcraftChromeClients = chromeClients;
+  const cancelHook = async (evaluationId, reason) => {
+    await Promise.all([...chromeClients].map((client) => client.cancelEvaluation?.(evaluationId, reason)));
+  };
+  if (typeof globals.__dotcraftSetChromeCancelHook === "function") {
+    globals.__dotcraftSetChromeCancelHook(cancelHook);
+  } else {
+    globals.__dotcraftChromeCancelEvaluation = cancelHook;
+  }
   globals.agent = globals.agent || {};
   const existingBrowsers = globals.agent.browsers;
   const existingList = typeof existingBrowsers?.list === "function"
@@ -948,8 +1230,13 @@ export async function setupAtlasRuntime(options = {}) {
     },
     async get(name = "extension") {
       if (name === "extension" || name === "chrome") {
-        const client = new ChromeBridgeClient(bridgeOptions);
+        const client = new ChromeHostClient({
+          ...bridgeOptions,
+          browserSessionProvider,
+          logger: globals.console || console,
+        });
         await client.ensureConnected();
+        chromeClients.add(client);
         return new ChromeBrowser(client);
       }
       if (existingGet) {

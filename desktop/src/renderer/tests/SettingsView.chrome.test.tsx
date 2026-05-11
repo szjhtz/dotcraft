@@ -79,11 +79,12 @@ function installWindowApi(locale = 'en'): void {
   settingsGet.mockResolvedValue({ locale, connectionMode: 'local', visibleChannels: [] })
   settingsSet.mockResolvedValue(undefined)
   chromeCheckSetup.mockResolvedValue({
-    extension: { ok: true, extensionId: 'pekajfcokkicggfjmickmkngmmoojlda', profile: 'Default' },
-    nativeHost: { ok: true, manifestPath: 'host.json' },
-    chromeRunning: { ok: true, processCount: 1 },
-    installedBrowsers: { ok: true, browsers: [{ name: 'Google Chrome', executablePath: 'C:\\Chrome\\chrome.exe' }] },
-    bridge: { ok: true }
+    extension: { ok: true, code: 'extensionReady', message: 'DotCraft Chrome extension is ready.' },
+    nativeHost: { ok: true, code: 'nativeHostReady', message: 'Chrome Native Host is installed.', safeDetails: { exists: true, hostExists: true, wrapperValid: true } },
+    chromeRunning: { ok: true, code: 'chromeRunning', message: 'Chrome is running.', safeDetails: { processCount: 1 } },
+    installedBrowsers: { ok: true, code: 'chromeInstalled', message: 'Google Chrome is installed.', safeDetails: { browserCount: 1 } },
+    backend: { ok: true, code: 'backendConnected', message: 'Chrome backend is connected.', safeDetails: { candidateCount: 1, protocolVersion: 3, backendId: 'chrome-extension' } },
+    bridge: { ok: true, code: 'backendConnected', message: 'Chrome backend is connected.', safeDetails: { candidateCount: 1, protocolVersion: 3, backendId: 'chrome-extension' } }
   })
   chromeInstallNativeHost.mockResolvedValue({ ok: true, manifestPath: 'host.json' })
   chromeOpenChrome.mockResolvedValue({ ok: true })
@@ -214,11 +215,15 @@ describe('SettingsView Chrome computer control', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Computer Control' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
 
-    expect((await screen.findAllByText('Google Chrome')).length).toBeGreaterThan(0)
     await waitFor(() => expect(chromeCheckSetup).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getAllByText('Google Chrome')).toHaveLength(2))
     expect(await screen.findByText('Connected')).toBeInTheDocument()
+    expect(screen.getByText('Connection status')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh status' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Chrome' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Repair Host' })).toBeInTheDocument()
     expect(screen.getByText('DotCraft extension')).toBeInTheDocument()
-    expect(screen.getByText('Chrome Bridge')).toBeInTheDocument()
+    expect(screen.getByText('Chrome backend')).toBeInTheDocument()
     expect(screen.queryByText('Extension setup')).not.toBeInTheDocument()
     expect(screen.queryByText('C:\\Chrome\\chrome.exe')).not.toBeInTheDocument()
     expect(screen.queryByText('host.json')).not.toBeInTheDocument()
@@ -236,11 +241,12 @@ describe('SettingsView Chrome computer control', () => {
     })
     usePluginStore.setState({ plugins: [browserPlugin, installedChromePlugin] })
     chromeCheckSetup.mockResolvedValue({
-      extension: { ok: false, extensionId: 'pekajfcokkicggfjmickmkngmmoojlda', profile: 'Default' },
-      nativeHost: { ok: true, manifestPath: 'host.json' },
-      chromeRunning: { ok: true, processCount: 1 },
-      installedBrowsers: { ok: true, browsers: [{ name: 'Google Chrome', executablePath: 'C:\\Chrome\\chrome.exe' }] },
-      bridge: { ok: true }
+      extension: { ok: false, code: 'extensionNotReady', message: 'DotCraft Chrome extension is not ready.', action: 'openExtensions' },
+      nativeHost: { ok: true, code: 'nativeHostReady', message: 'Chrome Native Host is installed.' },
+      chromeRunning: { ok: true, code: 'chromeRunning', message: 'Chrome is running.' },
+      installedBrowsers: { ok: true, code: 'chromeInstalled', message: 'Google Chrome is installed.' },
+      backend: { ok: true, code: 'backendConnected', message: 'Chrome backend is connected.' },
+      bridge: { ok: true, code: 'backendConnected', message: 'Chrome backend is connected.' }
     })
 
     renderView()
@@ -251,7 +257,7 @@ describe('SettingsView Chrome computer control', () => {
     fireEvent.click(openExtensions)
 
     await waitFor(() => expect(chromeOpenChrome).toHaveBeenCalledWith({
-      url: 'chrome://extensions/?id=pekajfcokkicggfjmickmkngmmoojlda'
+      url: 'chrome://extensions'
     }))
     expect(screen.queryByText('Extension setup')).not.toBeInTheDocument()
     expect(screen.queryByText('pekajfcokkicggfjmickmkngmmoojlda')).not.toBeInTheDocument()
@@ -259,7 +265,7 @@ describe('SettingsView Chrome computer control', () => {
     expect(screen.queryByText('host.json')).not.toBeInTheDocument()
   })
 
-  it('shows a disconnected status when the Chrome bridge is down', async () => {
+  it('shows a disconnected status when the Chrome backend is down', async () => {
     appServerSendRequest.mockImplementation(async (method: string) => {
       if (method === 'channel/list') return { channels: [] }
       if (method === 'plugin/list') return { plugins: [browserPlugin, installedChromePlugin], diagnostics: [] }
@@ -268,11 +274,12 @@ describe('SettingsView Chrome computer control', () => {
     })
     usePluginStore.setState({ plugins: [browserPlugin, installedChromePlugin] })
     chromeCheckSetup.mockResolvedValue({
-      extension: { ok: true, extensionId: 'pekajfcokkicggfjmickmkngmmoojlda', profile: 'Default' },
-      nativeHost: { ok: true, manifestPath: 'host.json' },
-      chromeRunning: { ok: true, processCount: 1 },
-      installedBrowsers: { ok: true, browsers: [{ name: 'Google Chrome', executablePath: 'C:\\Chrome\\chrome.exe' }] },
-      bridge: { ok: false, error: 'Chrome bridge is not connected.' }
+      extension: { ok: true, code: 'extensionReady', message: 'DotCraft Chrome extension is ready.' },
+      nativeHost: { ok: true, code: 'nativeHostReady', message: 'Chrome Native Host is installed.' },
+      chromeRunning: { ok: true, code: 'chromeRunning', message: 'Chrome is running.' },
+      installedBrowsers: { ok: true, code: 'chromeInstalled', message: 'Google Chrome is installed.' },
+      backend: { ok: false, code: 'backendDisconnected', message: 'Chrome backend is disconnected.', action: 'clickExtensionRefresh' },
+      bridge: { ok: false, code: 'backendDisconnected', message: 'Chrome backend is disconnected.', action: 'clickExtensionRefresh' }
     })
 
     renderView()
@@ -280,11 +287,75 @@ describe('SettingsView Chrome computer control', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
 
     expect(await screen.findByText('Disconnected')).toBeInTheDocument()
-    expect(screen.getByText('Chrome Bridge')).toBeInTheDocument()
-    expect(screen.queryByText('Chrome bridge is not connected.')).not.toBeInTheDocument()
+    expect(screen.getByText('Chrome backend')).toBeInTheDocument()
+    expect(screen.getAllByText('Make sure Chrome is open, click the DotCraft Chrome extension icon, then refresh status.')).toHaveLength(2)
+    expect(screen.queryByText('Chrome backend is disconnected.')).not.toBeInTheDocument()
   })
 
-  it('reinstalls the Chrome native host from the detail action', async () => {
+  it('shows Install Host when the native host is missing', async () => {
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'channel/list') return { channels: [] }
+      if (method === 'plugin/list') return { plugins: [browserPlugin, installedChromePlugin], diagnostics: [] }
+      if (method === 'skills/list') return { skills: [] }
+      return {}
+    })
+    usePluginStore.setState({ plugins: [browserPlugin, installedChromePlugin] })
+    chromeCheckSetup.mockResolvedValue({
+      extension: { ok: true, code: 'extensionReady', message: 'DotCraft Chrome extension is ready.' },
+      nativeHost: {
+        ok: false,
+        code: 'nativeHostMissing',
+        message: 'Chrome Native Host needs to be installed or repaired.',
+        action: 'repairNativeHost',
+        safeDetails: { exists: false, hostExists: false, wrapperValid: false }
+      },
+      chromeRunning: { ok: true, code: 'chromeRunning', message: 'Chrome is running.' },
+      installedBrowsers: { ok: true, code: 'chromeInstalled', message: 'Google Chrome is installed.' },
+      backend: { ok: false, code: 'backendDisconnected', message: 'Chrome backend is disconnected.', action: 'clickExtensionRefresh' },
+      bridge: { ok: false, code: 'backendDisconnected', message: 'Chrome backend is disconnected.', action: 'clickExtensionRefresh' }
+    })
+
+    renderView()
+    fireEvent.click(await screen.findByRole('button', { name: 'Computer Control' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
+
+    expect(await screen.findByRole('button', { name: 'Install Host' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Install or repair Native Host' })).not.toBeInTheDocument()
+  })
+
+  it('shows Repair Host when the native host wrapper needs repair', async () => {
+    appServerSendRequest.mockImplementation(async (method: string) => {
+      if (method === 'channel/list') return { channels: [] }
+      if (method === 'plugin/list') return { plugins: [browserPlugin, installedChromePlugin], diagnostics: [] }
+      if (method === 'skills/list') return { skills: [] }
+      return {}
+    })
+    usePluginStore.setState({ plugins: [browserPlugin, installedChromePlugin] })
+    chromeCheckSetup.mockResolvedValue({
+      extension: { ok: true, code: 'extensionReady', message: 'DotCraft Chrome extension is ready.' },
+      nativeHost: {
+        ok: false,
+        code: 'nativeHostNeedsRepair',
+        message: 'Chrome Native Host needs to be installed or repaired.',
+        action: 'repairNativeHost',
+        safeDetails: { exists: true, hostExists: true, wrapperValid: false }
+      },
+      chromeRunning: { ok: true, code: 'chromeRunning', message: 'Chrome is running.' },
+      installedBrowsers: { ok: true, code: 'chromeInstalled', message: 'Google Chrome is installed.' },
+      backend: { ok: false, code: 'backendDisconnected', message: 'Chrome backend is disconnected.', action: 'clickExtensionRefresh' },
+      bridge: { ok: false, code: 'backendDisconnected', message: 'Chrome backend is disconnected.', action: 'clickExtensionRefresh' }
+    })
+
+    renderView()
+    fireEvent.click(await screen.findByRole('button', { name: 'Computer Control' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
+
+    expect(await screen.findByRole('button', { name: 'Repair Host' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Install or repair Native Host' })).not.toBeInTheDocument()
+    expect(screen.queryByText('C:\\Chrome\\native-host.json')).not.toBeInTheDocument()
+  })
+
+  it('repairs the Chrome native host from the detail action', async () => {
     appServerSendRequest.mockImplementation(async (method: string) => {
       if (method === 'channel/list') return { channels: [] }
       if (method === 'plugin/list') return { plugins: [browserPlugin, installedChromePlugin], diagnostics: [] }
@@ -296,7 +367,7 @@ describe('SettingsView Chrome computer control', () => {
     renderView()
     fireEvent.click(await screen.findByRole('button', { name: 'Computer Control' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Install or repair Native Host' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Repair Host' }))
 
     await waitFor(() => expect(chromeInstallNativeHost).toHaveBeenCalled())
     expect(chromeCheckSetup).toHaveBeenCalled()

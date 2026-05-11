@@ -214,6 +214,7 @@ interface ChromeSetupStatus {
   nativeHost: unknown
   chromeRunning: unknown
   installedBrowsers: unknown
+  backend?: unknown
   bridge: unknown
 }
 
@@ -462,6 +463,51 @@ function secondaryActionButtonStyle(disabled = false): CSSProperties {
   }
 }
 
+function chromeStatusCardStyle(): CSSProperties {
+  return {
+    ...cardStyle(),
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    flexWrap: 'wrap'
+  }
+}
+
+function chromeActionToolbarStyle(): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexWrap: 'wrap',
+    flex: '1 1 320px',
+    minWidth: 0
+  }
+}
+
+function chromeActionButtonStyle(disabled = false, variant: 'primary' | 'secondary' = 'secondary'): CSSProperties {
+  const isPrimary = variant === 'primary'
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 32,
+    padding: '0 12px',
+    border: isPrimary ? '1px solid var(--accent)' : '1px solid var(--border-default)',
+    borderRadius: '8px',
+    background: isPrimary ? 'var(--accent)' : 'var(--bg-tertiary)',
+    color: isPrimary ? 'var(--on-accent)' : 'var(--text-primary)',
+    fontSize: '12px',
+    fontWeight: 600,
+    lineHeight: 1,
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.7 : 1,
+    whiteSpace: 'nowrap',
+    flexShrink: 0
+  }
+}
+
 function mcpSourcePillStyle(): CSSProperties {
   return {
     display: 'inline-flex',
@@ -500,6 +546,19 @@ function setupResultText(value: unknown, key: string): string {
   return typeof candidate === 'string' ? candidate : ''
 }
 
+function chromeBackendStatus(status: ChromeSetupStatus | null): unknown {
+  return status?.backend ?? status?.bridge
+}
+
+function normalizeChromeSetupStatus(status: ChromeSetupStatus): ChromeSetupStatus {
+  const backend = status.backend ?? status.bridge
+  return {
+    ...status,
+    backend,
+    bridge: status.bridge ?? backend
+  }
+}
+
 function chromeSetupSummary(
   status: ChromeSetupStatus | null,
   t: (key: MessageKey | string, vars?: Record<string, string | number>) => string
@@ -508,14 +567,79 @@ function chromeSetupSummary(
   if (!setupResultOk(status.installedBrowsers)) return { label: t('settings.chrome.status.chromeMissing'), tone: 'error' }
   if (!setupResultOk(status.extension)) return { label: t('settings.chrome.status.extensionMissing'), tone: 'error' }
   if (!setupResultOk(status.nativeHost)) return { label: t('settings.chrome.status.nativeHostMissing'), tone: 'warning' }
-  if (!setupResultOk(status.bridge)) return { label: t('settings.chrome.status.bridgeDisconnected'), tone: 'warning' }
   if (!setupResultOk(status.chromeRunning)) return { label: t('settings.chrome.status.notRunning'), tone: 'warning' }
+  if (!setupResultOk(chromeBackendStatus(status))) return { label: t('settings.chrome.status.backendDisconnected'), tone: 'warning' }
   return { label: t('settings.chrome.status.connected'), tone: 'ok' }
 }
 
-function chromeExtensionManagementUrl(status: ChromeSetupStatus | null): string {
-  const extensionId = status ? setupResultText(status.extension, 'extensionId').trim() : ''
-  return extensionId ? `chrome://extensions/?id=${extensionId}` : 'chrome://extensions'
+function chromeExtensionManagementUrl(_status: ChromeSetupStatus | null): string {
+  return 'chrome://extensions'
+}
+
+function chromeStatusCardTitle(t: (key: MessageKey | string, vars?: Record<string, string | number>) => string): string {
+  return t('settings.chrome.connectionStatus')
+}
+
+function chromeNativeHostActionLabel(
+  status: ChromeSetupStatus | null,
+  installing: boolean,
+  t: (key: MessageKey | string, vars?: Record<string, string | number>) => string
+): string {
+  if (installing) return t('settings.chrome.installingNativeHost')
+  const nativeHost = asRecord(status?.nativeHost)
+  const safeDetails = asRecord(nativeHost?.safeDetails)
+  if (
+    status &&
+    !setupResultOk(nativeHost) &&
+    safeDetails?.exists === false &&
+    safeDetails?.hostExists === false
+  ) {
+    return t('settings.chrome.installHost')
+  }
+  return t('settings.chrome.repairHost')
+}
+
+function chromePrimaryRecoveryAction(
+  status: ChromeSetupStatus | null,
+  t: (key: MessageKey | string, vars?: Record<string, string | number>) => string
+): string | undefined {
+  if (!status) return undefined
+  if (!setupResultOk(status.installedBrowsers)) return chromeRecoveryAction('browser', status, t)
+  if (!setupResultOk(status.extension)) return chromeRecoveryAction('extension', status, t)
+  if (!setupResultOk(status.nativeHost)) return chromeRecoveryAction('nativeHost', status, t)
+  if (!setupResultOk(status.chromeRunning)) return chromeRecoveryAction('running', status, t)
+  if (!setupResultOk(chromeBackendStatus(status))) return chromeRecoveryAction('backend', status, t)
+  return undefined
+}
+
+function chromeRecoveryAction(
+  kind: 'browser' | 'running' | 'extension' | 'nativeHost' | 'backend',
+  status: ChromeSetupStatus,
+  t: (key: MessageKey | string, vars?: Record<string, string | number>) => string
+): string | undefined {
+  const target =
+    kind === 'browser'
+      ? status.installedBrowsers
+      : kind === 'running'
+        ? status.chromeRunning
+        : kind === 'extension'
+          ? status.extension
+          : kind === 'nativeHost'
+            ? status.nativeHost
+            : chromeBackendStatus(status)
+  if (setupResultOk(target)) return undefined
+  switch (kind) {
+    case 'browser':
+      return t('settings.chrome.recovery.installChrome')
+    case 'running':
+      return t('settings.chrome.recovery.openChrome')
+    case 'extension':
+      return t('settings.chrome.recovery.openExtensions')
+    case 'nativeHost':
+      return t('settings.chrome.recovery.repairNativeHost')
+    case 'backend':
+      return t('settings.chrome.recovery.backendDisconnected')
+  }
 }
 
 function statusDotColor(tone: ChromeSetupTone): string {
@@ -847,6 +971,7 @@ export function SettingsView({
   const chromePlugin = plugins.find((plugin) => plugin.id === 'chrome') ?? null
   const browserUsePluginReady = !pluginManagementEnabled || browserUsePlugin?.installed === true
   const chromeSetup = chromeSetupSummary(chromeSetupStatus, t)
+  const chromeSetupRecovery = chromePrimaryRecoveryAction(chromeSetupStatus, t)
   const proxyLockActive = proxyStatusText === 'running'
   const llmApiKeyTrimmed = llmApiKey.trim()
   const llmEndPointTrimmed = llmEndPoint.trim()
@@ -1937,7 +2062,7 @@ export function SettingsView({
     setChromeSetupError('')
     try {
       const status = await window.api.chrome.checkSetup()
-      setChromeSetupStatus(status as ChromeSetupStatus)
+      setChromeSetupStatus(normalizeChromeSetupStatus(status as ChromeSetupStatus))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setChromeSetupError(message)
@@ -3495,22 +3620,29 @@ export function SettingsView({
                         </button>
                       }
                     />
-                    <div style={{ ...cardStyle(), display: 'flex', alignItems: 'center', gap: 14 }}>
-                      {chromePlugin && <PluginIcon plugin={chromePlugin} size={48} />}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
-                          {t('settings.chrome.detailTitle')}
-                        </div>
-                        <div style={{ marginTop: 8 }}>
-                          <ChromeStatusPill label={chromeSetup.label} tone={chromeSetup.tone} />
+                    <div style={chromeStatusCardStyle()}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: '1 1 260px', minWidth: 0 }}>
+                        {chromePlugin && <PluginIcon plugin={chromePlugin} size={48} />}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {chromeStatusCardTitle(t)}
+                          </div>
+                          <div style={{ marginTop: 8 }}>
+                            <ChromeStatusPill label={chromeSetup.label} tone={chromeSetup.tone} />
+                          </div>
+                          {chromeSetupRecovery && (
+                            <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.4, color: 'var(--text-dimmed)' }}>
+                              {chromeSetupRecovery}
+                            </div>
+                          )}
                         </div>
                       </div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <div style={chromeActionToolbarStyle()}>
                         <button
                           type="button"
                           onClick={() => void reloadChromeSetupStatus()}
                           disabled={chromeSetupLoading}
-                          style={secondaryActionButtonStyle(chromeSetupLoading)}
+                          style={chromeActionButtonStyle(chromeSetupLoading, 'primary')}
                         >
                           {chromeSetupLoading ? t('settings.loading') : t('settings.chrome.refreshStatus')}
                         </button>
@@ -3518,7 +3650,7 @@ export function SettingsView({
                           type="button"
                           onClick={() => void handleOpenChrome()}
                           disabled={chromeOpening}
-                          style={secondaryActionButtonStyle(chromeOpening)}
+                          style={chromeActionButtonStyle(chromeOpening)}
                         >
                           {chromeOpening ? t('settings.chrome.opening') : t('settings.chrome.openChrome')}
                         </button>
@@ -3527,7 +3659,7 @@ export function SettingsView({
                             type="button"
                             onClick={() => void handleOpenChrome(chromeExtensionManagementUrl(chromeSetupStatus))}
                             disabled={chromeOpening}
-                            style={secondaryActionButtonStyle(chromeOpening)}
+                            style={chromeActionButtonStyle(chromeOpening)}
                           >
                             {t('settings.chrome.openExtensions')}
                           </button>
@@ -3536,9 +3668,9 @@ export function SettingsView({
                           type="button"
                           onClick={() => void handleInstallChromeNativeHost()}
                           disabled={chromeNativeHostInstalling}
-                          style={secondaryActionButtonStyle(chromeNativeHostInstalling)}
+                          style={chromeActionButtonStyle(chromeNativeHostInstalling)}
                         >
-                          {chromeNativeHostInstalling ? t('settings.chrome.installingNativeHost') : t('settings.chrome.reinstallNativeHost')}
+                          {chromeNativeHostActionLabel(chromeSetupStatus, chromeNativeHostInstalling, t)}
                         </button>
                       </div>
                     </div>
@@ -3564,26 +3696,31 @@ export function SettingsView({
                               label={t('settings.chrome.check.browser')}
                               ok={setupResultOk(chromeSetupStatus.installedBrowsers)}
                               statusLabel={setupResultOk(chromeSetupStatus.installedBrowsers) ? t('settings.chrome.check.ok') : t('settings.chrome.check.needsAttention')}
+                              detail={chromeRecoveryAction('browser', chromeSetupStatus, t)}
                             />
                             <ChromeSetupItem
                               label={t('settings.chrome.check.running')}
                               ok={setupResultOk(chromeSetupStatus.chromeRunning)}
                               statusLabel={setupResultOk(chromeSetupStatus.chromeRunning) ? t('settings.chrome.check.ok') : t('settings.chrome.check.needsAttention')}
+                              detail={chromeRecoveryAction('running', chromeSetupStatus, t)}
                             />
                             <ChromeSetupItem
                               label={t('settings.chrome.check.extension')}
                               ok={setupResultOk(chromeSetupStatus.extension)}
                               statusLabel={setupResultOk(chromeSetupStatus.extension) ? t('settings.chrome.check.ok') : t('settings.chrome.check.needsAttention')}
+                              detail={chromeRecoveryAction('extension', chromeSetupStatus, t)}
                             />
                             <ChromeSetupItem
                               label={t('settings.chrome.check.nativeHost')}
                               ok={setupResultOk(chromeSetupStatus.nativeHost)}
                               statusLabel={setupResultOk(chromeSetupStatus.nativeHost) ? t('settings.chrome.check.ok') : t('settings.chrome.check.needsAttention')}
+                              detail={chromeRecoveryAction('nativeHost', chromeSetupStatus, t)}
                             />
                             <ChromeSetupItem
-                              label={t('settings.chrome.check.bridge')}
-                              ok={setupResultOk(chromeSetupStatus.bridge)}
-                              statusLabel={setupResultOk(chromeSetupStatus.bridge) ? t('settings.chrome.check.ok') : t('settings.chrome.check.needsAttention')}
+                              label={t('settings.chrome.check.backend')}
+                              ok={setupResultOk(chromeBackendStatus(chromeSetupStatus))}
+                              statusLabel={setupResultOk(chromeBackendStatus(chromeSetupStatus)) ? t('settings.chrome.check.ok') : t('settings.chrome.check.needsAttention')}
+                              detail={chromeRecoveryAction('backend', chromeSetupStatus, t)}
                             />
                           </div>
                         </SettingsRow>

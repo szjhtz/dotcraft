@@ -1,20 +1,130 @@
 const HOST_NAME = 'com.dotcraft.chromeextension';
+const DEFAULT_EVALUATE_MAX_BYTES = 1024 * 1024;
 
 let nativePort = null;
-let sessionName = 'Chrome';
 let nativeStatus = {
   connected: false,
   bridgeReady: false,
   error: null,
-  port: null,
+  pipePath: null,
   updatedAt: 0
 };
-const claimedTabs = new Set();
-const createdTabs = new Set();
+const browserSessions = new Map();
 const debuggerQueues = new Map();
+const pendingCommands = new Map();
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms, command) {
+  if (!command) return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve, reject) => {
+    if (command.cancelled) {
+      reject(cancelledError(command));
+      return;
+    }
+    const timer = setTimeout(() => {
+      command.timers.delete(timer);
+      command.rejectors.delete(reject);
+      resolve();
+    }, ms);
+    command.timers.add(timer);
+    command.rejectors.add(reject);
+  });
+}
+
+function classifiedError(category, message, options) {
+  return new Error(`${category}: ${message}`, options);
+}
+
+function cancelledError(command) {
+  return classifiedError('CommandCancelled', `Chrome command ${command.commandId} was cancelled: ${command.reason || 'cancelled'}.`);
+}
+
+function throwIfCancelled(command) {
+  if (command?.cancelled) throw cancelledError(command);
+}
+
+function beginCommand(message) {
+  const commandId = String(message?.commandId || message?.params?.commandId || `extension-command-${Date.now().toString(36)}`);
+  const command = {
+    commandId,
+    cancelled: false,
+    reason: null,
+    timers: new Set(),
+    rejectors: new Set(),
+    startedAt: Date.now()
+  };
+  pendingCommands.set(commandId, command);
+  return command;
+}
+
+function finishCommand(command) {
+  if (!command) return;
+  for (const timer of command.timers) clearTimeout(timer);
+  command.timers.clear();
+  command.rejectors.clear();
+  pendingCommands.delete(command.commandId);
+}
+
+function cancelCommand(commandId, reason = 'cancelled') {
+  const command = pendingCommands.get(String(commandId || ''));
+  if (!command) return false;
+  command.cancelled = true;
+  command.reason = reason;
+  for (const timer of command.timers) clearTimeout(timer);
+  command.timers.clear();
+  for (const reject of [...command.rejectors]) {
+    try {
+      reject(cancelledError(command));
+    } catch {
+      // Ignore rejector failures.
+    }
+  }
+  command.rejectors.clear();
+  return true;
+}
+
+function commandCancelPromise(command) {
+  if (!command) return new Promise(() => {});
+  return new Promise((_, reject) => {
+    if (command.cancelled) {
+      reject(cancelledError(command));
+      return;
+    }
+    command.rejectors.add(reject);
+  });
+}
+
+function browserSessionId(params) {
+  return requireBrowserSession(params).sessionId;
+}
+
+function requireBrowserSession(params) {
+  const session = params?.browserSession;
+  if (!session?.sessionId || !session?.turnId || !session?.evaluationId) {
+    throw classifiedError('SessionMetadataMissing', 'Chrome command requires browserSession.sessionId, browserSession.turnId, and browserSession.evaluationId.');
+  }
+  return session;
+}
+
+function getBrowserSession(params) {
+  const browserSession = requireBrowserSession(params);
+  const sessionId = String(browserSession.sessionId);
+  let session = browserSessions.get(sessionId);
+  if (!session) {
+    session = {
+      sessionId,
+      turnId: browserSession.turnId || null,
+      evaluationId: browserSession.evaluationId || null,
+      sessionName: 'Chrome',
+      claimedTabs: new Set(),
+      createdTabs: new Set(),
+      keptTabs: new Map(),
+      openTabsSeenIds: new Set()
+    };
+    browserSessions.set(sessionId, session);
+  }
+  session.turnId = browserSession.turnId || session.turnId;
+  session.evaluationId = browserSession.evaluationId || session.evaluationId;
+  return session;
 }
 
 function connectNative() {
@@ -26,7 +136,7 @@ function connectNative() {
       connected: false,
       bridgeReady: false,
       error: error instanceof Error ? error.message : String(error),
-      port: null,
+      pipePath: null,
       updatedAt: Date.now()
     };
     throw error;
@@ -35,7 +145,7 @@ function connectNative() {
     connected: true,
     bridgeReady: false,
     error: null,
-    port: null,
+    pipePath: null,
     updatedAt: Date.now()
   };
   nativePort.onMessage.addListener((message) => {
@@ -44,9 +154,13 @@ function connectNative() {
         connected: true,
         bridgeReady: true,
         error: null,
-        port: message.port ?? null,
+        pipePath: message.pipePath ?? null,
         updatedAt: Date.now()
       };
+      return;
+    }
+    if (message?.type === 'dotcraft-cancel') {
+      cancelCommand(message.commandId, message.reason || 'cancelled');
       return;
     }
     if (message?.type === 'dotcraft-host-error') {
@@ -54,7 +168,7 @@ function connectNative() {
         connected: true,
         bridgeReady: false,
         error: message.error || 'Native host error.',
-        port: null,
+        pipePath: null,
         updatedAt: Date.now()
       };
       return;
@@ -70,7 +184,7 @@ function connectNative() {
       connected: false,
       bridgeReady: false,
       error,
-      port: null,
+      pipePath: null,
       updatedAt: Date.now()
     };
     nativePort = null;
@@ -85,17 +199,18 @@ function popupStatus() {
     nativeConnected: nativeStatus.connected,
     bridgeReady: nativeStatus.bridgeReady,
     error: nativeStatus.error,
-    port: nativeStatus.port,
+    pipePath: nativeStatus.pipePath,
     updatedAt: nativeStatus.updatedAt,
     version: manifest.version
   };
 }
 
-function sendResponse(id, ok, result, error) {
+function sendResponse(id, ok, result, error, commandId) {
   try {
     connectNative().postMessage({
       type: 'dotcraft-response',
       id,
+      commandId,
       ok,
       result,
       error
@@ -106,15 +221,20 @@ function sendResponse(id, ok, result, error) {
 }
 
 async function handleRequest(message) {
+  const command = beginCommand(message);
   try {
-    const result = await dispatchCommand(message.method, message.params ?? {});
-    sendResponse(message.id, true, result, null);
+    requireBrowserSession(message.params ?? {});
+    const result = await dispatchCommand(message.method, message.params ?? {}, command);
+    throwIfCancelled(command);
+    sendResponse(message.id, true, result, null, command.commandId);
   } catch (error) {
-    sendResponse(message.id, false, null, error instanceof Error ? error.message : String(error));
+    sendResponse(message.id, false, null, error instanceof Error ? error.message : String(error), command.commandId);
+  } finally {
+    finishCommand(command);
   }
 }
 
-function publicTab(tab) {
+function publicTab(tab, session = null) {
   return {
     id: tab.id,
     tabId: tab.id,
@@ -127,8 +247,9 @@ function publicTab(tab) {
     pinned: Boolean(tab.pinned),
     audible: Boolean(tab.audible),
     groupId: tab.groupId,
-    claimed: claimedTabs.has(tab.id),
-    createdByAgent: createdTabs.has(tab.id)
+    claimed: session?.claimedTabs.has(tab.id) === true,
+    createdByAgent: session?.createdTabs.has(tab.id) === true,
+    keptStatus: session?.keptTabs.get(tab.id)
   };
 }
 
@@ -144,9 +265,13 @@ async function selectedTab() {
   return tab;
 }
 
-async function allTabs() {
+async function allTabs(session, rememberForClaim = false) {
   const tabs = await chrome.tabs.query({});
-  return tabs.filter((tab) => typeof tab.id === 'number').map(publicTab);
+  const publicTabs = tabs.filter((tab) => typeof tab.id === 'number').map((tab) => publicTab(tab, session));
+  if (rememberForClaim) {
+    session.openTabsSeenIds = new Set(publicTabs.map((tab) => tab.id));
+  }
+  return publicTabs;
 }
 
 function tabIdFromParams(params) {
@@ -156,9 +281,58 @@ function tabIdFromParams(params) {
   return id;
 }
 
+function tabIdFromReference(value) {
+  const candidate = value?.tabId ?? value?.id ?? value;
+  const id = Number(String(candidate ?? '').replace(/^chrome:/, ''));
+  if (!Number.isInteger(id)) throw new Error('A valid Chrome tab id is required.');
+  return id;
+}
+
+function parseFinalizeKeep(keep) {
+  if (!Array.isArray(keep)) {
+    throw new Error('browser.tabs.finalize requires keep to be an array of { tab, status } entries.');
+  }
+  const result = new Map();
+  for (const entry of keep) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('browser.tabs.finalize keep entries must be objects shaped like { tab, status }.');
+    }
+    if (entry.status !== 'handoff' && entry.status !== 'deliverable') {
+      throw new Error('browser.tabs.finalize keep status must be "handoff" or "deliverable".');
+    }
+    result.set(tabIdFromReference(entry.tab), entry.status);
+  }
+  return result;
+}
+
 function truncateContent(value, maxLength) {
   if (typeof value !== 'string' || typeof maxLength !== 'number' || maxLength < 0) return value;
   return value.length > maxLength ? value.slice(0, maxLength) : value;
+}
+
+function normalizeEvaluateMaxBytes(value) {
+  const candidate = Number(value);
+  if (!Number.isFinite(candidate) || candidate < 0) return DEFAULT_EVALUATE_MAX_BYTES;
+  return Math.min(Math.floor(candidate), DEFAULT_EVALUATE_MAX_BYTES);
+}
+
+function serializedSizeBytes(value) {
+  const json = JSON.stringify(value);
+  const text = json === undefined ? String(value) : json;
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(text).length;
+  }
+  return text.length;
+}
+
+function assertSerializedSize(value, maxBytes, operation) {
+  const actualBytes = serializedSizeBytes(value);
+  if (actualBytes > maxBytes) {
+    throw classifiedError(
+      'ResultTooLarge',
+      `${operation} result exceeded ${maxBytes} bytes; actual approximately ${actualBytes} bytes. Narrow the query, use maxLength, or fetch smaller chunks.`
+    );
+  }
 }
 
 function timeoutMs(params, fallback = 10000) {
@@ -179,7 +353,7 @@ function committedUrl(tab, expectedUrl, previousUrl) {
   return !previousUrl && actual !== 'about:blank';
 }
 
-async function waitForNavigation(params) {
+async function waitForNavigation(params, command) {
   const tabId = tabIdFromParams(params);
   const expectedUrl = String(params.url ?? params.options?.url ?? '');
   const previousUrl = String(params.previousUrl ?? params.options?.previousUrl ?? '');
@@ -188,13 +362,14 @@ async function waitForNavigation(params) {
   const start = Date.now();
   let current = await getTab(tabId);
   while (Date.now() - start <= timeout) {
+    throwIfCancelled(command);
     current = await getTab(tabId);
     if (committedUrl(current, expectedUrl, previousUrl)) {
       if (wantedState !== 'load' || current.status === 'complete') {
         return { ok: true, url: current.url ?? '', status: current.status ?? '' };
       }
     }
-    await delay(100);
+    await delay(100, command);
   }
   const pending = current.pendingUrl ? `; pending URL is "${current.pendingUrl}"` : '';
   throw new Error(`Timed out waiting for navigation after ${timeout}ms; current URL is "${current.url ?? ''}"${pending}.`);
@@ -208,7 +383,7 @@ function normalizeDebuggerError(error) {
     message.includes('Cannot access contents of url') ||
     message.includes('debugger')
   ) {
-    return new Error('Chrome debugger bridge is unavailable for this tab. Close DevTools or any open extension UI for the tab, then retry.', {
+    return classifiedError('DebuggerUnavailable', 'Chrome debugger bridge is unavailable for this tab. Close DevTools or any open extension UI for the tab, then retry.', {
       cause: error instanceof Error ? error : undefined
     });
   }
@@ -248,19 +423,33 @@ async function withDebugger(tabId, task) {
   }
 }
 
-async function executeInTab(tabId, source, arg) {
+async function executeInTab(tabId, source, arg, options = {}, command) {
   const expression = `(() => { const arguments = [${JSON.stringify(arg ?? null)}];\n${source}\n})()`;
-  return withDebugger(tabId, async (send) => {
+  const timeout = timeoutMs(options, 10000);
+  const operation = withDebugger(tabId, async (send) => {
+    throwIfCancelled(command);
     const result = await send('Runtime.evaluate', {
       expression,
       awaitPromise: true,
       returnByValue: true
     });
+    throwIfCancelled(command);
     if (result.exceptionDetails) {
       throw new Error(result.exceptionDetails.text || 'Chrome Runtime.evaluate failed.');
     }
-    return result.result?.value ?? null;
+    const value = result.result?.value ?? null;
+    if (Object.prototype.hasOwnProperty.call(options, 'maxBytes')) {
+      assertSerializedSize(value, normalizeEvaluateMaxBytes(options.maxBytes), 'tab.evaluate');
+    }
+    return value;
   });
+  return Promise.race([
+    operation,
+    commandCancelPromise(command),
+    delay(timeout, command).then(() => {
+      throw classifiedError('CommandTimeout', `Chrome Runtime.evaluate timed out after ${timeout}ms.`);
+    })
+  ]);
 }
 
 function selectorScript(selector, action, value) {
@@ -421,29 +610,31 @@ function selectorDescriptor(params) {
   };
 }
 
-async function locatorAction(params, action) {
+async function locatorAction(params, action, command) {
   return executeInTab(tabIdFromParams(params), selectorScript(selectorDescriptor(params), action, params.value), {
     selector: selectorDescriptor(params),
     action,
     value: params.value,
     waitState: params.options?.state,
     timeoutMs: timeoutMs(params, 10000)
-  });
+  }, command);
 }
 
-async function tabContent(params, contentType) {
+async function tabContent(params, contentType, command) {
   const tabId = tabIdFromParams(params);
   const value = await executeInTab(
     tabId,
     contentType === 'html'
       ? 'return document.documentElement ? document.documentElement.outerHTML : "";'
       : 'return document.body ? document.body.innerText : "";',
-    null
+    null,
+    { timeoutMs: timeoutMs(params, 10000) },
+    command
   );
   return truncateContent(value, params.maxLength);
 }
 
-async function waitForLoadState(params) {
+async function waitForLoadState(params, command) {
   const state = String(params.state || params.options?.state || 'load').toLowerCase();
   const timeout = timeoutMs(params, 10000);
   const expected = state === 'domcontentloaded' ? 'interactive' : 'complete';
@@ -469,37 +660,39 @@ return new Promise((resolve, reject) => {
   };
   tick();
 });
-`, { expected, state, timeoutMs: timeout });
+`, { expected, state, timeoutMs: timeout }, { timeoutMs: timeout }, command);
 }
 
-async function waitForURL(params) {
+async function waitForURL(params, command) {
   const tabId = tabIdFromParams(params);
   const expectedUrl = String(params.url || '');
   const timeout = timeoutMs(params, 10000);
   const start = Date.now();
   while (Date.now() - start < timeout) {
+    throwIfCancelled(command);
     const tab = await getTab(tabId);
     const actual = tab.url ?? '';
     if (actual === expectedUrl || actual.includes(expectedUrl)) {
       return { ok: true, url: actual };
     }
-    await delay(100);
+    await delay(100, command);
   }
   const tab = await getTab(tabId);
   throw new Error(`Timed out waiting for URL "${expectedUrl}" after ${timeout}ms; current URL is "${tab.url ?? ''}".`);
 }
 
-async function temporaryTabContent(url, params, contentType) {
+async function temporaryTabContent(url, params, contentType, command) {
   const tab = await chrome.tabs.create({ url, active: false });
   try {
-    const publicInfo = publicTab(tab);
-    await waitForLoadState({ tab: publicInfo, state: 'load', options: { timeoutMs: timeoutMs(params, 10000) } });
-    const current = publicTab(await getTab(tab.id));
+    const session = getBrowserSession(params);
+    const publicInfo = publicTab(tab, session);
+    await waitForLoadState({ tab: publicInfo, state: 'load', options: { timeoutMs: timeoutMs(params, 10000) } }, command);
+    const current = publicTab(await getTab(tab.id), session);
     return {
       tab: current,
       title: current.title,
       url: current.url,
-      content: await tabContent({ tab: current, maxLength: params.maxLength }, contentType)
+      content: await tabContent({ tab: current, maxLength: params.maxLength, timeoutMs: timeoutMs(params, 10000) }, contentType, command)
     };
   } finally {
     try {
@@ -510,7 +703,7 @@ async function temporaryTabContent(url, params, contentType) {
   }
 }
 
-async function waitForFileChooser(params) {
+async function waitForFileChooser(params, command) {
   const tabId = tabIdFromParams(params);
   const timeout = timeoutMs(params, 10000);
   return executeInTab(tabId, `
@@ -546,25 +739,26 @@ return new Promise((resolve, reject) => {
   };
   tick();
 });
-`, { timeoutMs: timeout });
+`, { timeoutMs: timeout }, { timeoutMs: timeout }, command);
 }
 
-async function fileChooserIsMultiple(params) {
+async function fileChooserIsMultiple(params, command) {
   return executeInTab(tabIdFromParams(params), `
 const selector = arguments[0].selector;
 const input = document.querySelector(selector);
 if (!input) throw new Error('File input is no longer available.');
 return input.multiple === true;
-`, { selector: params.fileChooser?.selector || 'input[type="file"]' });
+`, { selector: params.fileChooser?.selector || 'input[type="file"]' }, { timeoutMs: timeoutMs(params, 10000) }, command);
 }
 
-async function setFileChooserFiles(params) {
+async function setFileChooserFiles(params, command) {
   const tabId = tabIdFromParams(params);
   const selector = params.fileChooser?.selector || 'input[type="file"]';
   const files = Array.isArray(params.files) ? params.files.map(String) : [];
   if (files.length === 0) throw new Error('At least one file path is required.');
 
   return withDebugger(tabId, async (send) => {
+    throwIfCancelled(command);
     const multiple = await send('Runtime.evaluate', {
       expression: `(() => {
         const input = document.querySelector(${JSON.stringify(selector)});
@@ -574,6 +768,7 @@ async function setFileChooserFiles(params) {
       awaitPromise: true,
       returnByValue: true
     });
+    throwIfCancelled(command);
     if (multiple.exceptionDetails) {
       throw new Error(multiple.exceptionDetails.text || 'File chooser validation failed.');
     }
@@ -593,6 +788,7 @@ async function setFileChooserFiles(params) {
       nodeId: queryResult.nodeId,
       files
     });
+    throwIfCancelled(command);
     return { ok: true, fileCount: files.length };
   });
 }
@@ -602,11 +798,12 @@ function keyFromInput(value) {
   return String(value ?? '');
 }
 
-async function cuaAction(params) {
+async function cuaAction(params, command) {
   const tabId = tabIdFromParams(params);
   const options = params.options ?? {};
   const action = params.action;
   return withDebugger(tabId, async (send) => {
+    throwIfCancelled(command);
     if (action === 'move') {
       await send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
@@ -723,77 +920,112 @@ throw new Error('Unsupported DOM CUA action: ' + action);
 `;
 }
 
-async function domCuaVisibleDom(params) {
+async function domCuaVisibleDom(params, command) {
   return executeInTab(tabIdFromParams(params), visibleDomScript('snapshot', params.options), {
     action: 'snapshot',
     options: params.options ?? {}
-  });
+  }, { timeoutMs: timeoutMs(params, 10000) }, command);
 }
 
-async function domCuaAction(params) {
+async function domCuaAction(params, command) {
   return executeInTab(tabIdFromParams(params), visibleDomScript(params.action, params.options), {
     action: params.action,
     options: params.options ?? {}
-  });
+  }, { timeoutMs: timeoutMs(params, 10000) }, command);
 }
 
-async function dispatchCommand(method, params) {
+async function dispatchCommand(method, params, command) {
+  const session = getBrowserSession(params);
+  throwIfCancelled(command);
   switch (method) {
     case 'browser.nameSession':
-      sessionName = String(params.name || 'Chrome');
-      return { ok: true, name: sessionName };
+      session.sessionName = String(params.name || 'Chrome');
+      return { ok: true, name: session.sessionName };
     case 'user.openTabs':
+      return allTabs(session, true);
     case 'tabs.list':
-      return allTabs();
+      return allTabs(session, false);
     case 'user.claimTab': {
       const tab = await getTab(tabIdFromParams(params));
-      claimedTabs.add(tab.id);
-      return publicTab(tab);
+      if (!session.openTabsSeenIds.has(tab.id)) {
+        throw new Error('Cannot claim Chrome tab: pass a tab object or id from the current session latest user.openTabs() result.');
+      }
+      session.claimedTabs.add(tab.id);
+      return publicTab(tab, session);
     }
     case 'tabs.selected':
-      return publicTab(await selectedTab());
+      return publicTab(await selectedTab(), session);
     case 'tabs.get':
-      return publicTab(await getTab(tabIdFromParams(params)));
+      return publicTab(await getTab(tabIdFromParams(params)), session);
     case 'tabs.content': {
       const contentType = params.contentType === 'html' || params.type === 'html' ? 'html' : 'text';
       const urls = Array.isArray(params.urls) ? params.urls.map(String) : [];
       if (urls.length > 0) {
         const results = [];
         for (const url of urls) {
-          results.push(await temporaryTabContent(url, params, contentType));
+          results.push(await temporaryTabContent(url, params, contentType, command));
         }
         return results;
       }
-      const tab = publicTab(await selectedTab());
-      return tabContent({ tab, maxLength: params.maxLength }, contentType);
+      const tab = publicTab(await selectedTab(), session);
+      return tabContent({ tab, maxLength: params.maxLength, timeoutMs: timeoutMs(params, 10000) }, contentType, command);
     }
     case 'tabs.new': {
       const tab = await chrome.tabs.create({ url: params.url || 'about:blank', active: params.active !== false });
-      createdTabs.add(tab.id);
+      session.createdTabs.add(tab.id);
       if (params.url) {
         await waitForNavigation({
-          tab: publicTab(tab),
+          tab: publicTab(tab, session),
           url: String(params.url),
           previousUrl: tab.url ?? 'about:blank',
           options: params.options ?? params
-        });
+        }, command);
       }
-      return publicTab(await getTab(tab.id));
+      return publicTab(await getTab(tab.id), session);
     }
     case 'tabs.finalize': {
-      const keep = new Set((params.keep ?? []).map((item) => Number(String(item?.tabId ?? item?.id ?? item).replace(/^chrome:/, ''))));
-      for (const tabId of [...createdTabs]) {
+      const keep = parseFinalizeKeep(params.keep ?? []);
+      const kept = [];
+      const closed = [];
+      const released = [];
+      const ownedIds = new Set([...session.createdTabs, ...session.claimedTabs]);
+      for (const [tabId, status] of keep) {
+        if (ownedIds.has(tabId)) {
+          session.keptTabs.set(tabId, status);
+          kept.push(tabId);
+        }
+      }
+      for (const tabId of [...session.createdTabs]) {
         if (!keep.has(tabId)) {
           try {
             await chrome.tabs.remove(tabId);
+            closed.push(tabId);
           } catch {
             // The tab may already be closed.
           }
+        } else {
+          session.keptTabs.set(tabId, keep.get(tabId));
         }
-        createdTabs.delete(tabId);
+        session.createdTabs.delete(tabId);
       }
-      claimedTabs.clear();
-      return { ok: true };
+      for (const tabId of [...session.claimedTabs]) {
+        if (!keep.has(tabId)) {
+          released.push(tabId);
+        } else {
+          session.keptTabs.set(tabId, keep.get(tabId));
+        }
+        session.claimedTabs.delete(tabId);
+      }
+      console.info('DotCraft Chrome finalize summary', {
+        sessionId: session.sessionId,
+        turnId: session.turnId,
+        evaluationId: session.evaluationId,
+        backendId: 'chrome-extension',
+        kept: kept.length,
+        closed: closed.length,
+        released: released.length
+      });
+      return { ok: true, kept, closed, released };
     }
     case 'tab.goto': {
       const tabId = tabIdFromParams(params);
@@ -804,31 +1036,31 @@ async function dispatchCommand(method, params) {
         url: String(params.url),
         previousUrl: previous.url ?? '',
         options: params.options ?? params
-      });
-      return publicTab(await getTab(tabId));
+      }, command);
+      return publicTab(await getTab(tabId), session);
     }
     case 'tab.reload':
       await chrome.tabs.reload(tabIdFromParams(params));
       return { ok: true };
     case 'tab.back':
-      await executeInTab(tabIdFromParams(params), 'history.back(); return true;', null);
+      await executeInTab(tabIdFromParams(params), 'history.back(); return true;', null, { timeoutMs: timeoutMs(params, 10000) }, command);
       return { ok: true };
     case 'tab.forward':
-      await executeInTab(tabIdFromParams(params), 'history.forward(); return true;', null);
+      await executeInTab(tabIdFromParams(params), 'history.forward(); return true;', null, { timeoutMs: timeoutMs(params, 10000) }, command);
       return { ok: true };
     case 'tab.close':
       await chrome.tabs.remove(tabIdFromParams(params));
-      createdTabs.delete(tabIdFromParams(params));
-      claimedTabs.delete(tabIdFromParams(params));
+      session.createdTabs.delete(tabIdFromParams(params));
+      session.claimedTabs.delete(tabIdFromParams(params));
       return { ok: true };
     case 'tab.title':
       return (await getTab(tabIdFromParams(params))).title ?? '';
     case 'tab.url':
       return (await getTab(tabIdFromParams(params))).url ?? '';
     case 'tab.contentText':
-      return tabContent(params, 'text');
+      return tabContent(params, 'text', command);
     case 'tab.contentHtml':
-      return tabContent(params, 'html');
+      return tabContent(params, 'html', command);
     case 'tab.domSnapshot':
       return executeInTab(tabIdFromParams(params), `
 return Array.from(document.querySelectorAll('a,button,input,textarea,select,[role],[data-testid]')).slice(0, 200).map((el, index) => {
@@ -845,9 +1077,12 @@ return Array.from(document.querySelectorAll('a,button,input,textarea,select,[rol
     boundingBox: { x: box.x, y: box.y, width: box.width, height: box.height }
   };
 });
-`, null);
+`, null, { timeoutMs: timeoutMs(params, 10000) }, command);
     case 'tab.evaluate':
-      return executeInTab(tabIdFromParams(params), params.source, params.arg);
+      return executeInTab(tabIdFromParams(params), params.source, params.arg, {
+        maxBytes: params.maxBytes,
+        timeoutMs: timeoutMs(params, 10000)
+      }, command);
     case 'tab.screenshot': {
       const tab = await getTab(tabIdFromParams(params));
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
@@ -855,57 +1090,57 @@ return Array.from(document.querySelectorAll('a,button,input,textarea,select,[rol
       return match ? { mediaType: match[1], dataBase64: match[2] } : dataUrl;
     }
     case 'tab.waitForFileChooser':
-      return waitForFileChooser(params);
+      return waitForFileChooser(params, command);
     case 'tab.fileChooserIsMultiple':
-      return fileChooserIsMultiple(params);
+      return fileChooserIsMultiple(params, command);
     case 'tab.fileChooserSetFiles':
-      return setFileChooserFiles(params);
+      return setFileChooserFiles(params, command);
     case 'tab.waitForLoadState':
-      return waitForLoadState(params);
+      return waitForLoadState(params, command);
     case 'tab.waitForURL':
-      return waitForURL(params);
+      return waitForURL(params, command);
     case 'tab.waitForNavigation':
-      return waitForNavigation(params);
+      return waitForNavigation(params, command);
     case 'cua.action':
-      return cuaAction(params);
+      return cuaAction(params, command);
     case 'domCua.visibleDom':
-      return domCuaVisibleDom(params);
+      return domCuaVisibleDom(params, command);
     case 'domCua.action':
-      return domCuaAction(params);
+      return domCuaAction(params, command);
     case 'locator.action':
-      return locatorAction(params, params.action);
+      return locatorAction(params, params.action, command);
     case 'locator.count':
-      return locatorAction(params, 'count');
+      return locatorAction(params, 'count', command);
     case 'locator.click':
-      return locatorAction(params, 'click');
+      return locatorAction(params, 'click', command);
     case 'locator.dblclick':
-      return locatorAction(params, 'dblclick');
+      return locatorAction(params, 'dblclick', command);
     case 'locator.fill':
-      return locatorAction(params, 'fill');
+      return locatorAction(params, 'fill', command);
     case 'locator.check':
-      return locatorAction(params, 'check');
+      return locatorAction(params, 'check', command);
     case 'locator.selectOption':
-      return locatorAction(params, 'selectOption');
+      return locatorAction(params, 'selectOption', command);
     case 'locator.type':
-      return locatorAction(params, 'type');
+      return locatorAction(params, 'type', command);
     case 'locator.press':
-      return locatorAction(params, 'press');
+      return locatorAction(params, 'press', command);
     case 'locator.textContent':
-      return locatorAction(params, 'textContent');
+      return locatorAction(params, 'textContent', command);
     case 'locator.allTextContents':
-      return locatorAction(params, 'allTextContents');
+      return locatorAction(params, 'allTextContents', command);
     case 'locator.innerText':
-      return locatorAction(params, 'innerText');
+      return locatorAction(params, 'innerText', command);
     case 'locator.getAttribute':
-      return locatorAction(params, 'getAttribute');
+      return locatorAction(params, 'getAttribute', command);
     case 'locator.isVisible':
-      return locatorAction(params, 'isVisible');
+      return locatorAction(params, 'isVisible', command);
     case 'locator.isEnabled':
-      return locatorAction(params, 'isEnabled');
+      return locatorAction(params, 'isEnabled', command);
     case 'locator.waitFor':
-      return locatorAction(params, 'waitFor');
+      return locatorAction(params, 'waitFor', command);
     default:
-      throw new Error(`Unsupported DotCraft Chrome command: ${method}`);
+      throw classifiedError('UnsupportedApi', `Unsupported DotCraft Chrome command: ${method}`);
   }
 }
 

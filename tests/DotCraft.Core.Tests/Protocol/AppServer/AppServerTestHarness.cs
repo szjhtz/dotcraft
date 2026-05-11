@@ -126,7 +126,14 @@ internal sealed class AppServerTestHarness : IDisposable
                     backend = "desktop-iab",
                     backends = browserUseBackends,
                     protocolVersion = 2,
-                    supportsCancel = true
+                    supportsCancel = true,
+                    browserSessionProtocolVersion = 1,
+                    supportsCommandCancel = true,
+                    maxBrowserResultBytes = 1048576,
+                    defaultCommandTimeoutMs = 15000,
+                    maxCommandTimeoutMs = 120000,
+                    supportsTypedFinalize = true,
+                    supportsChromeDiagnostics = true
                 }
                 : null
         };

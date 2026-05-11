@@ -161,6 +161,20 @@ public sealed class BrowserUseCapability
     public int? ProtocolVersion { get; set; }
 
     public bool? SupportsCancel { get; set; }
+
+    public int? BrowserSessionProtocolVersion { get; set; }
+
+    public bool? SupportsCommandCancel { get; set; }
+
+    public int? MaxBrowserResultBytes { get; set; }
+
+    public int? DefaultCommandTimeoutMs { get; set; }
+
+    public int? MaxCommandTimeoutMs { get; set; }
+
+    public bool? SupportsTypedFinalize { get; set; }
+
+    public bool? SupportsChromeDiagnostics { get; set; }
 }
 
 /// <summary>

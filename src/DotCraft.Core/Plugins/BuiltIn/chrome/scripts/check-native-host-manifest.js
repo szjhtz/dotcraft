@@ -39,27 +39,46 @@ function readManifest(file) {
   }
 }
 
+function readText(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 const manifestPath = defaultManifestPath();
 const manifest = readManifest(manifestPath);
 const origins = Array.isArray(manifest?.allowed_origins) ? manifest.allowed_origins : [];
+const exists = fs.existsSync(manifestPath);
+const nameMatches = manifest?.name === metadata.extensionHostName;
+const allowedOriginMatches = origins.includes(expectedOrigin);
+const hostPath = typeof manifest?.path === 'string' ? manifest.path : '';
+const hostExists = hostPath ? fs.existsSync(hostPath) : false;
+const wrapperText = hostExists ? readText(hostPath) : '';
+const wrapperPointsToNativeHost = wrapperText.includes('native-host.mjs');
+const wrapperHasElectronRunAsNode = wrapperText.includes('ELECTRON_RUN_AS_NODE=1');
+const wrapperValid = hostExists && wrapperPointsToNativeHost && wrapperHasElectronRunAsNode;
+const ok = exists && nameMatches && allowedOriginMatches && wrapperValid;
 const result = {
-  ok: manifest?.name === metadata.extensionHostName && origins.includes(expectedOrigin),
-  hostName: metadata.extensionHostName,
-  extensionId: metadata.extensionId,
-  expectedOrigin,
-  manifestPath,
-  exists: fs.existsSync(manifestPath),
-  nameMatches: manifest?.name === metadata.extensionHostName,
-  allowedOriginMatches: origins.includes(expectedOrigin),
-  hostPath: manifest?.path ?? null
+  ok,
+  code: ok ? 'nativeHostReady' : (exists ? 'nativeHostNeedsRepair' : 'nativeHostMissing'),
+  message: ok ? 'Chrome Native Host is installed.' : 'Chrome Native Host needs to be installed or repaired.',
+  exists,
+  nameMatches,
+  allowedOriginMatches,
+  hostExists,
+  wrapperValid,
+  wrapperPointsToNativeHost,
+  wrapperHasElectronRunAsNode
 };
 
 if (asJson) {
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 } else if (result.ok) {
-  console.log(`DotCraft Chrome Native Messaging host manifest is valid: ${manifestPath}`);
+  console.log('DotCraft Chrome Native Messaging host manifest is valid.');
 } else {
-  console.log(`DotCraft Chrome Native Messaging host manifest is missing or invalid: ${manifestPath}`);
+  console.log('DotCraft Chrome Native Messaging host manifest is missing or invalid.');
 }
 
 process.exit(result.ok ? 0 : 1);
