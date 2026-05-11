@@ -110,6 +110,59 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
     }
 
     [Fact]
+    public async Task CompactThreadAsync_WithoutSnapshotRebuildsCurrentToolsForLegacyCompaction()
+    {
+        var summaryChat = new SummaryChatClient("<summary>restart summary</summary>");
+        await using var agentFactory = CreateAgentFactory(
+            summaryChat,
+            toolProviders: [new TestToolProvider()]);
+        var service = CreateService(agentFactory, new StreamingReplyChatClient("ok"));
+        var thread = await service.CreateThreadAsync(
+            MakeIdentity(),
+            new ThreadConfiguration { ToolAllowList = ["GetStatus"] },
+            threadId: "thread-restart-compact");
+        var now = DateTimeOffset.UtcNow;
+        var turn = new SessionTurn
+        {
+            Id = "turn_001",
+            ThreadId = thread.Id,
+            Status = TurnStatus.Completed,
+            StartedAt = now,
+            CompletedAt = now
+        };
+        var userItem = new SessionItem
+        {
+            Id = "item_001",
+            TurnId = turn.Id,
+            Type = ItemType.UserMessage,
+            Status = ItemStatus.Completed,
+            CreatedAt = now,
+            CompletedAt = now,
+            Payload = new UserMessagePayload { Text = "user " + new string('u', 1200) }
+        };
+        turn.Input = userItem;
+        turn.Items.Add(userItem);
+        turn.Items.Add(new SessionItem
+        {
+            Id = "item_002",
+            TurnId = turn.Id,
+            Type = ItemType.AgentMessage,
+            Status = ItemStatus.Completed,
+            CreatedAt = now,
+            CompletedAt = now,
+            Payload = new AgentMessagePayload { Text = "assistant " + new string('a', 1200) }
+        });
+        thread.Turns.Add(turn);
+
+        var result = await service.CompactThreadAsync(thread.Id);
+
+        Assert.Equal("partial", result.Outcome);
+        var capturedTool = Assert.Single(summaryChat.Options?.Tools ?? []);
+        Assert.Equal("GetStatus", capturedTool.Name);
+        Assert.Null(summaryChat.Options?.ToolMode);
+    }
+
+    [Fact]
     public async Task CompactThreadAsync_TwoTurnsWithHighPersistedUsage_CompactsWithPartialWireOutcome()
     {
         var mainChat = new StreamingReplyChatClient("ok");
@@ -232,7 +285,8 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
     private AgentFactory CreateAgentFactory(
         IChatClient compactionChatClient,
         Action<CompactionConfig>? configureCompaction = null,
-        IContextPageManager? contextPageManager = null)
+        IContextPageManager? contextPageManager = null,
+        IReadOnlyList<IAgentToolProvider>? toolProviders = null)
     {
         var compaction = new CompactionConfig
         {
@@ -261,7 +315,7 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
             skillsLoader: new SkillsLoader(_tempDir),
             approvalService: new AutoApproveApprovalService(),
             blacklist: null,
-            toolProviders: Array.Empty<IAgentToolProvider>(),
+            toolProviders: toolProviders ?? Array.Empty<IAgentToolProvider>(),
             compactionChatClient: compactionChatClient,
             contextPageManager: contextPageManager);
     }
@@ -343,11 +397,16 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
 
     private sealed class SummaryChatClient(string responseText) : IChatClient
     {
+        public ChatOptions? Options { get; private set; }
+
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, responseText)));
+            CancellationToken cancellationToken = default)
+        {
+            Options = options;
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, responseText)));
+        }
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -358,6 +417,14 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
         public void Dispose() { }
+    }
+
+    private sealed class TestToolProvider : IAgentToolProvider
+    {
+        public IEnumerable<AITool> CreateTools(ToolProviderContext context)
+        {
+            yield return AIFunctionFactory.Create(() => "tool ok", name: "GetStatus", description: "Get status.");
+        }
     }
 
     private sealed class BlockingChatClient : IChatClient

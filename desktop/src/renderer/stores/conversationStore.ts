@@ -216,7 +216,7 @@ interface ConversationActions {
    */
   onSystemEvent(
     kind: string,
-    params?: { tokenCount?: number | null; percentLeft?: number | null }
+    params?: { turnId?: string | null; tokenCount?: number | null; percentLeft?: number | null }
   ): void
   /** Replace contextUsage from thread/read / thread/started / thread/resumed. */
   setContextUsage(snapshot: {
@@ -482,6 +482,16 @@ const SYSTEM_LABELS: Record<string, string | null> = {
   consolidated: null,
   consolidationSkipped: null,
   consolidationFailed: null
+}
+
+function systemLabelForEvent(
+  kind: string,
+  params?: { turnId?: string | null }
+): string | null | undefined {
+  if (kind === 'compacting' && !params?.turnId) {
+    return 'systemStatus.compacting.manual'
+  }
+  return SYSTEM_LABELS[kind]
 }
 
 function computeSeverity(tokens: number, snapshot: {
@@ -1635,7 +1645,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   onSystemEvent(kind, params) {
-    const label = SYSTEM_LABELS[kind]
+    const label = systemLabelForEvent(kind, params)
     if (label !== undefined) {
       set({ systemLabel: label })
     }

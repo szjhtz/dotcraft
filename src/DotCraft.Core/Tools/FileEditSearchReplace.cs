@@ -233,7 +233,7 @@ internal static class FileEditSearchReplace
     }
 
     /// <summary>
-    /// Line-by-line match after Unicode punctuation normalization (Codex seek_sequence style).
+    /// Line-by-line match after Unicode punctuation normalization.
     /// </summary>
     private static string? TryUnicodeNormalizedMatch(string content, string oldText)
     {

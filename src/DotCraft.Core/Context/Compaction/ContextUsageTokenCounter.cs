@@ -7,7 +7,14 @@ namespace DotCraft.Context.Compaction;
 /// </summary>
 public sealed record ContextUsageAnchor(
     long Tokens,
-    int MessageCount);
+    int MessageCount,
+    string? PrefixFingerprint)
+{
+    public ContextUsageAnchor(long Tokens, int MessageCount)
+        : this(Tokens, MessageCount, PrefixFingerprint: null)
+    {
+    }
+}
 
 /// <summary>
 /// Counts current context pressure from the last provider usage plus an
@@ -29,10 +36,19 @@ public static class ContextUsageTokenCounter
         if (anchor.MessageCount < 0 || anchor.MessageCount > modelVisibleHistory.Count)
             return null;
 
+        if (!string.IsNullOrEmpty(anchor.PrefixFingerprint))
+        {
+            var currentFingerprint = MessageTokenEstimator.ComputePrefixFingerprint(
+                modelVisibleHistory,
+                anchor.MessageCount);
+            if (!string.Equals(currentFingerprint, anchor.PrefixFingerprint, StringComparison.Ordinal))
+                return null;
+        }
+
         var deltaMessages = modelVisibleHistory
             .Skip(anchor.MessageCount)
             .ToList();
-        var deltaTokens = MessageTokenEstimator.Estimate(deltaMessages);
+        var deltaTokens = MessageTokenEstimator.EstimateDelta(deltaMessages);
         return Math.Max(0, anchor.Tokens + deltaTokens);
     }
 }

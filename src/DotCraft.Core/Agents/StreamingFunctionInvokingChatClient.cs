@@ -769,21 +769,9 @@ public sealed class StreamingFunctionInvokingChatClient(IChatClient innerClient,
         if (options?.Tools is not { Count: > 0 })
             return;
 
-        List<AITool>? remainingTools = null;
-        foreach (var tool in options.Tools)
-        {
-            if (tool is not AIFunctionDeclaration)
-                (remainingTools ??= []).Add(tool);
-        }
-
-        var remainingCount = remainingTools?.Count ?? 0;
-        if (remainingCount >= options.Tools.Count)
-            return;
-
         options = options.Clone();
-        options.Tools = remainingTools;
-        if (remainingCount == 0)
-            options.ToolMode = null;
+        options.ToolMode = null;
+        ChatOptionsToolChoice.DisableOpenAIToolChoice(options);
     }
 
     private static void UpdateOptionsForNextIteration(ref ChatOptions? options, string? conversationId)

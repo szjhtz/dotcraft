@@ -10,6 +10,7 @@ To search and install third-party skills in Desktop, see [Search and Install Ski
 |-----------|-----|
 | [dev-guide](https://github.com/DotHarness/dotcraft/tree/master/samples/skills/dev-guide) | Project development guide example, including module development references. |
 | [feature-workflow](https://github.com/DotHarness/dotcraft/tree/master/samples/skills/feature-workflow) | Large feature workflow example for planning, implementation, and verification. |
+| [dotcraft-llm-error-diagnosis](https://github.com/DotHarness/dotcraft/tree/master/samples/skills/llm-error-diagnosis) | Read-only diagnosis workflow for LLM request, agent turn, tool-call, or session resume failures by correlating `.craft/state.db` with thread JSONL. |
 
 ## Usage
 

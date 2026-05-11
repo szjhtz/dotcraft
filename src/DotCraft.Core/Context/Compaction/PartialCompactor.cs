@@ -1,3 +1,4 @@
+using DotCraft.Agents;
 using DotCraft.Tracing;
 using Microsoft.Extensions.AI;
 
@@ -27,8 +28,7 @@ public sealed record PartialCompactAttempt(PartialCompactResult? Result, string?
 
 /// <summary>
 /// Summarizes the older portion of a conversation while preserving a tail of
-/// recent API-round groups verbatim. Port of openclaude's
-/// <c>sessionMemoryCompact.ts</c> / <c>calculateMessagesToKeepIndex</c>.
+/// recent API-round groups verbatim.
 /// </summary>
 public sealed class PartialCompactor
 {
@@ -128,6 +128,16 @@ public sealed class PartialCompactor
         string? threadId,
         CancellationToken cancellationToken = default)
     {
+        return await CompactAsync(messages, snapshot, threadId, fallbackTools: null, cancellationToken);
+    }
+
+    public async Task<PartialCompactAttempt> CompactAsync(
+        IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        string? threadId,
+        IReadOnlyList<AITool>? fallbackTools,
+        CancellationToken cancellationToken = default)
+    {
         if (messages.Count == 0)
             return PartialCompactAttempt.Unavailable("empty_history");
 
@@ -159,7 +169,7 @@ public sealed class PartialCompactor
         }
         else
         {
-            rawSummary = await RunLegacySummaryAsync(paired, threadId, cancellationToken);
+            rawSummary = await RunLegacySummaryAsync(paired, snapshot, fallbackTools, threadId, cancellationToken);
         }
 
         if (string.IsNullOrWhiteSpace(rawSummary))
@@ -198,15 +208,23 @@ public sealed class PartialCompactor
 
     private async Task<string?> RunLegacySummaryAsync(
         IReadOnlyList<ChatMessage> paired,
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools,
         string? threadId,
         CancellationToken cancellationToken)
     {
         var candidate = paired.ToList();
+        var taskMessage = BuildLegacyContextCompactionTaskMessage();
+        candidate = CompactionPreflightTrimmer.TrimSummaryInput(
+            candidate,
+            CompactionPrompts.GetPartialCompactPrompt(),
+            _config,
+            taskMessage);
         for (var attempt = 0; attempt <= MaxPromptTooLongRetries; attempt++)
         {
             try
             {
-                return await RunLegacySummaryOnceAsync(candidate, threadId, cancellationToken);
+                return await RunLegacySummaryOnceAsync(candidate, snapshot, fallbackTools, threadId, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -232,15 +250,18 @@ public sealed class PartialCompactor
 
     private async Task<string?> RunLegacySummaryOnceAsync(
         IReadOnlyList<ChatMessage> paired,
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools,
         string? threadId,
         CancellationToken cancellationToken)
     {
         var summaryPrompt = CompactionPrompts.GetPartialCompactPrompt();
-        var summaryMessages = new List<ChatMessage>(paired.Count + 1)
+        var summaryMessages = new List<ChatMessage>(paired.Count + 2)
         {
             new(ChatRole.System, summaryPrompt)
         };
         summaryMessages.AddRange(paired);
+        summaryMessages.Add(BuildLegacyContextCompactionTaskMessage());
 
         var sessionKey = CompactionTrace.ResolveSessionKey(threadId);
         _traceCollector?.RecordMaintenanceForkRequest(
@@ -254,7 +275,7 @@ public sealed class PartialCompactor
             providerId: null,
             snapshotMessageCount: paired.Count,
             extraTailMessageCount: 0,
-            tools: null,
+            tools: SelectLegacyTools(snapshot, fallbackTools),
             baseInstructionsFingerprint: null,
             toolFingerprint: null);
 
@@ -262,7 +283,7 @@ public sealed class PartialCompactor
         {
             var response = await _chatClient.GetResponseAsync(
                 summaryMessages,
-                new ChatOptions { Tools = null },
+                BuildLegacyOptions(snapshot, fallbackTools),
                 cancellationToken);
             _traceCollector?.RecordMaintenanceForkResponse(
                 sessionKey,
@@ -283,6 +304,35 @@ public sealed class PartialCompactor
                 ex.Message);
             throw;
         }
+    }
+
+    private static ChatMessage BuildLegacyContextCompactionTaskMessage() =>
+        MaintenanceForkRunner.BuildTaskMessage(new MaintenanceForkTask(
+            MaintenanceForkTaskKind.ContextCompaction,
+            "Summarize the conversation visible above according to the system instructions. "
+            + "Return the requested <analysis> then <summary> structure. Do not call tools."));
+
+    private static ChatOptions BuildLegacyOptions(
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools)
+    {
+        var tools = SelectLegacyTools(snapshot, fallbackTools);
+        var options = new ChatOptions { Tools = tools };
+        if (tools is { Count: > 0 })
+            ChatOptionsToolChoice.DisableOpenAIToolChoice(options);
+        return options;
+    }
+
+    private static List<AITool>? SelectLegacyTools(
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools)
+    {
+        if (snapshot?.Tools is { Count: > 0 })
+            return snapshot.Tools.ToList();
+
+        return fallbackTools is { Count: > 0 }
+            ? fallbackTools.ToList()
+            : null;
     }
 
     private static string BuildContextCompactionTaskInstructions(

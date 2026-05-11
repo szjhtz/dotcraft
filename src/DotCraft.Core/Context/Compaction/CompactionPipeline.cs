@@ -45,8 +45,7 @@ public sealed record CompactionHistoryResult(
     IReadOnlyList<ChatMessage> Messages);
 
 /// <summary>
-/// Threshold evaluation for a given token count. Mirrors openclaude's
-/// <c>calculateTokenWarningState</c>.
+/// Threshold evaluation for a given token count.
 /// </summary>
 public sealed record CompactionThreshold(
     long Tokens,
@@ -86,7 +85,7 @@ public sealed class CompactionPipeline
         _micro = new MicroCompactor(config);
         _maintenanceForkRunner = new MaintenanceForkRunner(summaryChatClient, traceCollector);
         _partial = new PartialCompactor(summaryChatClient, config, _maintenanceForkRunner, traceCollector);
-        _full = new FullCompactor(summaryChatClient, _maintenanceForkRunner, traceCollector);
+        _full = new FullCompactor(summaryChatClient, _maintenanceForkRunner, traceCollector, config);
         _failures = new CompactionFailureTracker(config.MaxConsecutiveFailures);
     }
 
@@ -319,7 +318,8 @@ public sealed class CompactionPipeline
         DateTimeOffset? lastAssistantTimestampUtc,
         CancellationToken cancellationToken,
         long? inputTokenHint = null,
-        PromptRequestSnapshot? snapshot = null)
+        PromptRequestSnapshot? snapshot = null,
+        IReadOnlyList<AITool>? fallbackTools = null)
     {
         if (!TryGetProvider(session, out var provider))
             return new CompactionStatus(
@@ -342,7 +342,8 @@ public sealed class CompactionPipeline
             lastAssistantTimestampUtc,
             cancellationToken,
             inputTokenHint,
-            snapshot);
+            snapshot,
+            fallbackTools);
         ApplyHistoryReplacement(session, provider, result.Messages);
         return result.Status;
     }
@@ -359,7 +360,8 @@ public sealed class CompactionPipeline
         DateTimeOffset? lastAssistantTimestampUtc,
         CancellationToken cancellationToken,
         long? inputTokenHint = null,
-        PromptRequestSnapshot? snapshot = null)
+        PromptRequestSnapshot? snapshot = null,
+        IReadOnlyList<AITool>? fallbackTools = null)
     {
         var before = inputTokenHint is > 0
             ? (int)Math.Min(int.MaxValue, inputTokenHint.Value)
@@ -396,6 +398,7 @@ public sealed class CompactionPipeline
             lastAssistantTimestampUtc,
             cancellationToken,
             snapshot: snapshot,
+            fallbackTools: fallbackTools,
             forcePartial: true);
         if (partial.Status.Success)
             return partial;
@@ -406,7 +409,8 @@ public sealed class CompactionPipeline
             beforeThreshold,
             threadId,
             cancellationToken,
-            snapshot);
+            snapshot,
+            fallbackTools);
     }
 
     /// <summary>
@@ -422,6 +426,7 @@ public sealed class CompactionPipeline
         DateTimeOffset? lastAssistantTimestampUtc,
         CancellationToken cancellationToken,
         PromptRequestSnapshot? snapshot = null,
+        IReadOnlyList<AITool>? fallbackTools = null,
         bool forcePartial = false)
     {
         var microResult = _micro.Run(history, lastAssistantTimestampUtc);
@@ -453,7 +458,12 @@ public sealed class CompactionPipeline
         PartialCompactAttempt partial;
         try
         {
-            partial = await _partial.CompactAsync(historyForPartial, snapshot, threadId, cancellationToken);
+            partial = await _partial.CompactAsync(
+                historyForPartial,
+                snapshot,
+                threadId,
+                fallbackTools,
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -531,12 +541,13 @@ public sealed class CompactionPipeline
         CompactionThreshold beforeThreshold,
         string threadId,
         CancellationToken cancellationToken,
-        PromptRequestSnapshot? snapshot)
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools)
     {
         FullCompactAttempt full;
         try
         {
-            full = await _full.CompactAsync(history, snapshot, threadId, cancellationToken);
+            full = await _full.CompactAsync(history, snapshot, threadId, fallbackTools, cancellationToken);
         }
         catch (OperationCanceledException)
         {

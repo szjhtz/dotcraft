@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DotCraft.Context.Compaction;
 using DotCraft.State;
 
 namespace DotCraft.Protocol;
@@ -536,19 +537,67 @@ internal sealed class ThreadMetadataStore(StateRuntime stateRuntime)
         return value == null || value == DBNull.Value ? null : Convert.ToInt64(value);
     }
 
+    public ContextUsageAnchor? LoadContextUsageAnchor(string threadId)
+    {
+        using var connection = stateRuntime.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT context_usage_tokens, message_count, prefix_fingerprint
+            FROM thread_context_usage
+            WHERE thread_id = $thread_id
+            LIMIT 1
+            """;
+        command.Parameters.AddWithValue("$thread_id", threadId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read() || reader.IsDBNull(1) || reader.IsDBNull(2))
+            return null;
+
+        var fingerprint = reader.GetString(2);
+        if (string.IsNullOrWhiteSpace(fingerprint))
+            return null;
+
+        return new ContextUsageAnchor(
+            Tokens: reader.GetInt64(0),
+            MessageCount: reader.GetInt32(1),
+            PrefixFingerprint: fingerprint);
+    }
+
     public void SaveContextUsageTokens(string threadId, long tokens)
     {
         using var connection = stateRuntime.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO thread_context_usage(thread_id, context_usage_tokens, updated_at)
-            VALUES ($thread_id, $tokens, $updated_at)
+            INSERT INTO thread_context_usage(thread_id, context_usage_tokens, message_count, prefix_fingerprint, updated_at)
+            VALUES ($thread_id, $tokens, NULL, NULL, $updated_at)
             ON CONFLICT(thread_id) DO UPDATE SET
                 context_usage_tokens = excluded.context_usage_tokens,
+                message_count = NULL,
+                prefix_fingerprint = NULL,
                 updated_at = excluded.updated_at
             """;
         command.Parameters.AddWithValue("$thread_id", threadId);
         command.Parameters.AddWithValue("$tokens", Math.Max(0, tokens));
+        command.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.UtcDateTime.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public void SaveContextUsageAnchor(string threadId, ContextUsageAnchor anchor)
+    {
+        using var connection = stateRuntime.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO thread_context_usage(thread_id, context_usage_tokens, message_count, prefix_fingerprint, updated_at)
+            VALUES ($thread_id, $tokens, $message_count, $prefix_fingerprint, $updated_at)
+            ON CONFLICT(thread_id) DO UPDATE SET
+                context_usage_tokens = excluded.context_usage_tokens,
+                message_count = excluded.message_count,
+                prefix_fingerprint = excluded.prefix_fingerprint,
+                updated_at = excluded.updated_at
+            """;
+        command.Parameters.AddWithValue("$thread_id", threadId);
+        command.Parameters.AddWithValue("$tokens", Math.Max(0, anchor.Tokens));
+        command.Parameters.AddWithValue("$message_count", Math.Max(0, anchor.MessageCount));
+        command.Parameters.AddWithValue("$prefix_fingerprint", (object?)anchor.PrefixFingerprint ?? DBNull.Value);
         command.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.UtcDateTime.ToString("O"));
         command.ExecuteNonQuery();
     }

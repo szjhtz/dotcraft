@@ -1,0 +1,6 @@
+interface:
+  display_name: "DotCraft LLM Error Diagnosis"
+  short_description: "Diagnose DotCraft LLM failures from thread rollout and state DB"
+  icon_small: "./assets/dotcraft-llm-error-diagnosis-small.svg"
+  icon_large: "./assets/dotcraft-llm-error-diagnosis-small.svg"
+  default_prompt: "Use $dotcraft-llm-error-diagnosis to inspect DotCraft .craft thread JSONL and state.db evidence for LLM/tool failures."

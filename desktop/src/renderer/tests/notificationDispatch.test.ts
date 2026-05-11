@@ -171,6 +171,7 @@ function dispatch(payload: { method: string; params: unknown }): void {
     case 'system/event':
       if (shouldUpdateActiveConversation((p.threadId as string | undefined) ?? '')) {
         conv.onSystemEvent((p.kind as string) ?? '', {
+          turnId: typeof p.turnId === 'string' ? (p.turnId as string) : null,
           tokenCount: typeof p.tokenCount === 'number' ? (p.tokenCount as number) : null,
           percentLeft: typeof p.percentLeft === 'number' ? (p.percentLeft as number) : null
         })
@@ -1071,11 +1072,17 @@ describe('notification dispatch payload format', () => {
 
   it('dispatches system/event and sets systemLabel', () => {
     dispatch({ method: 'turn/started', params: { turn: makeTurnPayload('turn_1') } })
-    dispatch({ method: 'system/event', params: { kind: 'compacting' } })
+    dispatch({ method: 'system/event', params: { kind: 'compacting', turnId: 'turn_1' } })
     expect(s().systemLabel).toBe('systemStatus.compacting')
 
     dispatch({ method: 'system/event', params: { kind: 'compacted' } })
     expect(s().systemLabel).toBeNull()
+  })
+
+  it('dispatches manual compacting system/event with manual label', () => {
+    dispatch({ method: 'turn/started', params: { turn: makeTurnPayload('turn_1') } })
+    dispatch({ method: 'system/event', params: { kind: 'compacting', turnId: null } })
+    expect(s().systemLabel).toBe('systemStatus.compacting.manual')
   })
 
   it('dispatches consolidationSkipped and clears systemLabel', () => {

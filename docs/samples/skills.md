@@ -10,6 +10,7 @@
 |------|------|
 | [dev-guide](https://github.com/DotHarness/dotcraft/tree/master/samples/skills/dev-guide) | 项目开发规范示例，包含模块开发参考文档。 |
 | [feature-workflow](https://github.com/DotHarness/dotcraft/tree/master/samples/skills/feature-workflow) | 大型功能开发工作流示例，用于拆解、实现和验证复杂需求。 |
+| [dotcraft-llm-error-diagnosis](https://github.com/DotHarness/dotcraft/tree/master/samples/skills/llm-error-diagnosis) | LLM 请求、agent turn、工具调用或 session 恢复失败时的只读诊断流程示例，用于关联 `.craft/state.db` 与 thread JSONL。 |
 
 ## 使用方式
 

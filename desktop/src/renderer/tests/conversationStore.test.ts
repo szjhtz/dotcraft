@@ -549,10 +549,16 @@ describe('token usage accumulation', () => {
 })
 
 describe('system events', () => {
-  it('sets compacting label on "compacting" event', () => {
+  it('sets auto-compacting label on turn-scoped "compacting" event', () => {
+    s().onTurnStarted(makeTurn())
+    s().onSystemEvent('compacting', { turnId: 'turn-1' })
+    expect(s().systemLabel).toBe('systemStatus.compacting')
+  })
+
+  it('sets manual compacting label on thread-scoped "compacting" event', () => {
     s().onTurnStarted(makeTurn())
     s().onSystemEvent('compacting')
-    expect(s().systemLabel).toBe('systemStatus.compacting')
+    expect(s().systemLabel).toBe('systemStatus.compacting.manual')
   })
 
   it('clears label on "compacted" event', () => {

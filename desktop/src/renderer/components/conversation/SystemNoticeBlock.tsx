@@ -33,35 +33,18 @@ export function SystemNoticeBlock({ item }: SystemNoticeBlockProps): JSX.Element
 
   if (notice.kind !== 'compacted') return null
 
-  const title =
-    notice.trigger === 'manual'
-      ? t('systemNotice.compacted.manual')
-      : notice.trigger === 'reactive'
-        ? t('systemNotice.compacted.reactive')
-        : t('systemNotice.compacted.auto')
-
-  const before = typeof notice.tokensBefore === 'number' ? notice.tokensBefore : 0
-  const after = typeof notice.tokensAfter === 'number' ? notice.tokensAfter : 0
-  const freed = Math.max(0, before - after)
-  const percentLeft =
-    typeof notice.percentLeftAfter === 'number'
-      ? Math.round(notice.percentLeftAfter * 100)
-      : null
-
-  const detail =
-    percentLeft !== null
-      ? t('systemNotice.compacted.detail', {
-          freed: formatTokens(freed),
-          percent: percentLeft
-        })
-      : null
+  const titleKey =
+    notice.trigger === 'auto'
+      ? 'systemNotice.compacted.auto'
+      : notice.trigger === 'manual'
+        ? 'systemNotice.compacted.manual'
+        : 'systemNotice.compacted.reactive'
 
   return (
     <NoticeDivider
-      ariaLabel={t('systemNotice.compacted.title')}
+      ariaLabel={t(titleKey)}
       icon={<ChevronsDown size={12} aria-hidden />}
-      title={title}
-      detail={detail}
+      title={t(titleKey)}
     />
   )
 }
@@ -125,9 +108,3 @@ function NoticeDivider({ ariaLabel, icon, title, detail }: NoticeDividerProps): 
   )
 }
 
-function formatTokens(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '0'
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(Math.round(n))
-}

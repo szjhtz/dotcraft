@@ -1,3 +1,4 @@
+using DotCraft.Agents;
 using DotCraft.Context;
 using DotCraft.Tracing;
 using Microsoft.Extensions.AI;
@@ -35,15 +36,18 @@ public sealed class FullCompactor
     private readonly IChatClient _chatClient;
     private readonly MaintenanceForkRunner? _maintenanceForkRunner;
     private readonly TraceCollector? _traceCollector;
+    private readonly CompactionConfig _config;
 
     public FullCompactor(
         IChatClient chatClient,
         MaintenanceForkRunner? maintenanceForkRunner = null,
-        TraceCollector? traceCollector = null)
+        TraceCollector? traceCollector = null,
+        CompactionConfig? config = null)
     {
         _chatClient = chatClient;
         _maintenanceForkRunner = maintenanceForkRunner;
         _traceCollector = traceCollector;
+        _config = config ?? new CompactionConfig();
     }
 
     /// <summary>
@@ -63,6 +67,16 @@ public sealed class FullCompactor
         IReadOnlyList<ChatMessage> messages,
         PromptRequestSnapshot? snapshot,
         string? threadId,
+        CancellationToken cancellationToken = default)
+    {
+        return await CompactAsync(messages, snapshot, threadId, fallbackTools: null, cancellationToken);
+    }
+
+    public async Task<FullCompactAttempt> CompactAsync(
+        IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        string? threadId,
+        IReadOnlyList<AITool>? fallbackTools,
         CancellationToken cancellationToken = default)
     {
         if (messages.Count == 0)
@@ -86,7 +100,7 @@ public sealed class FullCompactor
         }
         else
         {
-            rawSummary = await RunLegacySummaryAsync(paired, threadId, cancellationToken);
+            rawSummary = await RunLegacySummaryAsync(paired, snapshot, fallbackTools, threadId, cancellationToken);
         }
 
         if (string.IsNullOrWhiteSpace(rawSummary))
@@ -125,23 +139,33 @@ public sealed class FullCompactor
 
     private async Task<string?> RunLegacySummaryAsync(
         IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools,
         string? threadId,
         CancellationToken cancellationToken)
     {
-        return await RunLegacySummaryWithRetriesAsync(messages, threadId, cancellationToken);
+        return await RunLegacySummaryWithRetriesAsync(messages, snapshot, fallbackTools, threadId, cancellationToken);
     }
 
     private async Task<string?> RunLegacySummaryWithRetriesAsync(
         IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools,
         string? threadId,
         CancellationToken cancellationToken)
     {
-        var candidate = messages.ToList();
+        var summaryPrompt = BuildFullContextCompactionTaskInstructions();
+        var taskMessage = BuildLegacyContextCompactionTaskMessage();
+        var candidate = CompactionPreflightTrimmer.TrimSummaryInput(
+            messages,
+            summaryPrompt,
+            _config,
+            taskMessage);
         for (var attempt = 0; attempt <= MaxPromptTooLongRetries; attempt++)
         {
             try
             {
-                return await RunLegacySummaryOnceAsync(candidate, threadId, cancellationToken);
+                return await RunLegacySummaryOnceAsync(candidate, snapshot, fallbackTools, threadId, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -167,15 +191,18 @@ public sealed class FullCompactor
 
     private async Task<string?> RunLegacySummaryOnceAsync(
         IReadOnlyList<ChatMessage> messages,
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools,
         string? threadId,
         CancellationToken cancellationToken)
     {
         var summaryPrompt = BuildFullContextCompactionTaskInstructions();
-        var summaryMessages = new List<ChatMessage>(messages.Count + 1)
+        var summaryMessages = new List<ChatMessage>(messages.Count + 2)
         {
             new(ChatRole.System, summaryPrompt)
         };
         summaryMessages.AddRange(messages);
+        summaryMessages.Add(BuildLegacyContextCompactionTaskMessage());
 
         var sessionKey = CompactionTrace.ResolveSessionKey(threadId);
         _traceCollector?.RecordMaintenanceForkRequest(
@@ -189,7 +216,7 @@ public sealed class FullCompactor
             providerId: null,
             snapshotMessageCount: messages.Count,
             extraTailMessageCount: 0,
-            tools: null,
+            tools: SelectLegacyTools(snapshot, fallbackTools),
             baseInstructionsFingerprint: null,
             toolFingerprint: null);
 
@@ -197,7 +224,7 @@ public sealed class FullCompactor
         {
             var response = await _chatClient.GetResponseAsync(
                 summaryMessages,
-                new ChatOptions { Tools = null },
+                BuildLegacyOptions(snapshot, fallbackTools),
                 cancellationToken);
             _traceCollector?.RecordMaintenanceForkResponse(
                 sessionKey,
@@ -218,6 +245,35 @@ public sealed class FullCompactor
                 ex.Message);
             throw;
         }
+    }
+
+    private static ChatMessage BuildLegacyContextCompactionTaskMessage() =>
+        MaintenanceForkRunner.BuildTaskMessage(new MaintenanceForkTask(
+            MaintenanceForkTaskKind.ContextCompaction,
+            "Summarize the complete conversation visible above according to the system instructions. "
+            + "Return the requested <analysis> then <summary> structure. Do not call tools."));
+
+    private static ChatOptions BuildLegacyOptions(
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools)
+    {
+        var tools = SelectLegacyTools(snapshot, fallbackTools);
+        var options = new ChatOptions { Tools = tools };
+        if (tools is { Count: > 0 })
+            ChatOptionsToolChoice.DisableOpenAIToolChoice(options);
+        return options;
+    }
+
+    private static List<AITool>? SelectLegacyTools(
+        PromptRequestSnapshot? snapshot,
+        IReadOnlyList<AITool>? fallbackTools)
+    {
+        if (snapshot?.Tools is { Count: > 0 })
+            return snapshot.Tools.ToList();
+
+        return fallbackTools is { Count: > 0 }
+            ? fallbackTools.ToList()
+            : null;
     }
 
     private static bool TryBuildSnapshotTail(

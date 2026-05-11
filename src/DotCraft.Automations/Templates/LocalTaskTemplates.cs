@@ -4,7 +4,7 @@ namespace DotCraft.Automations.Templates;
 
 /// <summary>
 /// Built-in local automation task templates. Each template is a pre-filled preset for <c>task.md</c> + <c>workflow.md</c>
-/// used by the desktop "New Task" dialog (Codex-style template gallery).
+/// used by the desktop "New Task" dialog template gallery.
 /// </summary>
 public static class LocalTaskTemplates
 {

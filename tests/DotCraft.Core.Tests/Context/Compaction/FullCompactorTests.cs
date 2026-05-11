@@ -64,7 +64,106 @@ public sealed class FullCompactorTests
         Assert.Equal(ChatRole.System, client.Messages[0].Role);
         Assert.Contains("Summarize the complete conversation visible above", client.Messages[0].Text);
         Assert.Contains("replace the current model-visible history", client.Messages[0].Text);
+        AssertLegacyContextCompactionTask(client.Messages[^1]);
         Assert.Null(client.Options?.Tools);
+    }
+
+    [Fact]
+    public async Task CompactAsync_LegacyPathWithSnapshotPassesSnapshotTools()
+    {
+        var client = new RecordingChatClient("<analysis>ok</analysis><summary>legacy full summary</summary>");
+        var full = new FullCompactor(client, new MaintenanceForkRunner(client));
+        var tool = AIFunctionFactory.Create(() => "ok", name: "ReadFile", description: "Read a file.");
+        var snapshot = PromptRequestSnapshot.Capture(
+            [new ChatMessage(ChatRole.User, "different prefix")],
+            new ChatOptions
+            {
+                Instructions = "stable base instructions",
+                ModelId = "gpt-test",
+                Tools = [tool]
+            });
+        var history = new List<ChatMessage>
+        {
+            new(ChatRole.User, "first user"),
+            new(ChatRole.Assistant, "first assistant")
+        };
+
+        var result = await full.CompactAsync(history, snapshot);
+
+        Assert.NotNull(result.Result);
+        Assert.Contains("legacy full summary", result.Result!.FormattedSummary);
+        Assert.Equal(ChatRole.System, client.Messages[0].Role);
+        AssertLegacyContextCompactionTask(client.Messages[^1]);
+        var capturedTool = Assert.Single(client.Options?.Tools ?? []);
+        Assert.Equal("ReadFile", capturedTool.Name);
+        Assert.Null(client.Options?.ToolMode);
+        Assert.NotNull(client.Options?.RawRepresentationFactory);
+    }
+
+    [Fact]
+    public async Task CompactAsync_LegacyPathWithoutSnapshotPassesFallbackTools()
+    {
+        var client = new RecordingChatClient("<analysis>ok</analysis><summary>legacy full summary</summary>");
+        var full = new FullCompactor(client);
+        var tool = AIFunctionFactory.Create(() => "ok", name: "GetStatus", description: "Get status.");
+        var history = new List<ChatMessage>
+        {
+            new(ChatRole.User, "first user"),
+            new(ChatRole.Assistant, "first assistant")
+        };
+
+        var result = await full.CompactAsync(
+            history,
+            snapshot: null,
+            threadId: "thread-1",
+            fallbackTools: [tool]);
+
+        Assert.NotNull(result.Result);
+        Assert.Contains("legacy full summary", result.Result!.FormattedSummary);
+        Assert.Equal(ChatRole.System, client.Messages[0].Role);
+        AssertLegacyContextCompactionTask(client.Messages[^1]);
+        var capturedTool = Assert.Single(client.Options?.Tools ?? []);
+        Assert.Equal("GetStatus", capturedTool.Name);
+        Assert.Null(client.Options?.ToolMode);
+        Assert.NotNull(client.Options?.RawRepresentationFactory);
+    }
+
+    [Fact]
+    public async Task CompactAsync_PreflightTrimsOversizedLegacySummaryInput()
+    {
+        var client = new RecordingChatClient("<analysis>ok</analysis><summary>trimmed full summary</summary>");
+        var config = new CompactionConfig
+        {
+            ContextWindow = 1_200,
+            SummaryReserveTokens = 0,
+            AutoCompactBufferTokens = 0,
+        };
+        var full = new FullCompactor(client, config: config);
+        var history = new List<ChatMessage>();
+        for (var round = 0; round < 8; round++)
+        {
+            history.Add(new ChatMessage(ChatRole.User, $"first user {round} " + new string('u', 1200)));
+            history.Add(new ChatMessage(ChatRole.Assistant, $"assistant {round} " + new string('a', 1200))
+            {
+                MessageId = $"response-{round}",
+            });
+        }
+
+        var result = await full.CompactAsync(history, snapshot: null);
+
+        Assert.NotNull(result.Result);
+        Assert.DoesNotContain(client.Messages, m => m.Text?.Contains("first user 0", StringComparison.Ordinal) == true);
+        Assert.Contains(client.Messages, m => m.Text?.Contains("assistant 7", StringComparison.Ordinal) == true);
+        AssertLegacyContextCompactionTask(client.Messages[^1]);
+    }
+
+    private static void AssertLegacyContextCompactionTask(ChatMessage message)
+    {
+        Assert.Equal(ChatRole.User, message.Role);
+        Assert.Contains("<system-reminder>", message.Text);
+        Assert.Contains("## Maintenance Task", message.Text);
+        Assert.Contains("Task: context_compaction", message.Text);
+        Assert.Contains("Do not call tools", message.Text);
     }
 
     private sealed class RecordingChatClient(string responseText) : IChatClient

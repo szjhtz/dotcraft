@@ -3,26 +3,23 @@ using Microsoft.Extensions.AI;
 namespace DotCraft.Context.Compaction;
 
 /// <summary>
-/// A contiguous span of messages that forms a single API round (one user turn +
-/// the assistant's response, including any tool-call / tool-result pairs).
+/// A contiguous span of messages that forms a single API response round.
 /// </summary>
 public sealed record MessageGroup(IReadOnlyList<ChatMessage> Messages, int EstimatedTokens);
 
 /// <summary>
 /// Groups <see cref="ChatMessage"/> sequences into API-round groups so that
 /// compaction never splits a <see cref="FunctionCallContent"/> from its
-/// matching <see cref="FunctionResultContent"/>. Mirrors openclaude's
-/// <c>groupMessagesByApiRound</c>.
+/// matching <see cref="FunctionResultContent"/>.
 /// </summary>
 public static class MessageGrouper
 {
     /// <summary>
     /// Splits <paramref name="messages"/> into API-round groups.
-    /// Boundary rule: a new group begins at a user message that does not carry
-    /// a <see cref="FunctionResultContent"/> (i.e. a real user turn, not the
-    /// tool-result envelope some providers surface as role=User). Tool-result
-    /// user messages and the subsequent assistant reply stay in the previous
-    /// group so call/result pairs are preserved.
+    /// Boundary rule: a new group begins when a new assistant response starts.
+    /// Streaming chunks from the same API response normally share
+    /// <see cref="ChatMessage.MessageId"/> and stay in one group; messages
+    /// without ids conservatively start a new assistant group.
     /// </summary>
     public static IReadOnlyList<MessageGroup> GroupByApiRound(IReadOnlyList<ChatMessage> messages)
     {
@@ -31,24 +28,25 @@ public static class MessageGrouper
 
         var groups = new List<MessageGroup>();
         var current = new List<ChatMessage>();
-        int currentTokens = 0;
+        string? lastAssistantMessageId = null;
 
         foreach (var msg in messages)
         {
-            var startsNewGroup = IsUserTurnBoundary(msg) && current.Count > 0;
+            var startsNewGroup = IsAssistantResponseBoundary(msg, lastAssistantMessageId)
+                && current.Count > 0;
             if (startsNewGroup)
             {
-                groups.Add(new MessageGroup(current, currentTokens));
+                groups.Add(CreateGroup(current));
                 current = new List<ChatMessage>();
-                currentTokens = 0;
             }
 
             current.Add(msg);
-            currentTokens += MessageTokenEstimator.EstimateMessage(msg);
+            if (msg.Role == ChatRole.Assistant)
+                lastAssistantMessageId = string.IsNullOrEmpty(msg.MessageId) ? null : msg.MessageId;
         }
 
         if (current.Count > 0)
-            groups.Add(new MessageGroup(current, currentTokens));
+            groups.Add(CreateGroup(current));
 
         return groups;
     }
@@ -57,9 +55,8 @@ public static class MessageGrouper
     /// Filters <paramref name="messages"/> so that any dangling
     /// <see cref="FunctionCallContent"/> — a tool call whose matching
     /// <see cref="FunctionResultContent"/> was dropped — is removed before the
-    /// slice is handed to the summarizer. This mirrors openclaude's
-    /// <c>ensureToolUseResultPairing</c> so the summary call never sees
-    /// half a tool-use pair.
+    /// slice is handed to the summarizer so the summary call never sees half a
+    /// tool-use pair.
     /// </summary>
     public static List<ChatMessage> EnsurePairing(IReadOnlyList<ChatMessage> messages)
     {
@@ -119,17 +116,17 @@ public static class MessageGrouper
         return result;
     }
 
-    private static bool IsUserTurnBoundary(ChatMessage msg)
+    private static MessageGroup CreateGroup(List<ChatMessage> messages) =>
+        new(messages.ToArray(), MessageTokenEstimator.Estimate(messages));
+
+    private static bool IsAssistantResponseBoundary(ChatMessage msg, string? lastAssistantMessageId)
     {
-        if (msg.Role != ChatRole.User)
+        if (msg.Role != ChatRole.Assistant)
             return false;
 
-        foreach (var content in msg.Contents)
-        {
-            if (content is FunctionResultContent)
-                return false;
-        }
+        if (string.IsNullOrEmpty(msg.MessageId))
+            return true;
 
-        return true;
+        return !string.Equals(msg.MessageId, lastAssistantMessageId, StringComparison.Ordinal);
     }
 }

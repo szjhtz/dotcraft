@@ -12,7 +12,56 @@ public sealed class MessageGrouperTests
     }
 
     [Fact]
-    public void GroupByApiRound_StartsNewGroupOnUserTurn()
+    public void GroupByApiRound_StartsNewGroupOnAssistantResponse()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "first"),
+            new(ChatRole.Assistant, "reply 1") { MessageId = "response-1" },
+            new(ChatRole.User, "second"),
+            new(ChatRole.Assistant, "reply 2") { MessageId = "response-2" },
+        };
+
+        var groups = MessageGrouper.GroupByApiRound(messages);
+        Assert.Equal(3, groups.Count);
+        Assert.Single(groups[0].Messages);
+        Assert.Equal(2, groups[1].Messages.Count);
+        Assert.Single(groups[2].Messages);
+    }
+
+    [Fact]
+    public void GroupByApiRound_KeepsSameAssistantResponseChunksTogether()
+    {
+        var callId = "call-1";
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "question"),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new FunctionCallContent(callId, "ReadFile", new Dictionary<string, object?> { ["path"] = "x" }),
+            })
+            {
+                MessageId = "response-1",
+            },
+            // Tool-result envelope surfaces as role=User but carries FunctionResultContent.
+            new(ChatRole.User, new List<AIContent>
+            {
+                new FunctionResultContent(callId, "result text"),
+            }),
+            new(ChatRole.Assistant, "final answer")
+            {
+                MessageId = "response-1",
+            },
+        };
+
+        var groups = MessageGrouper.GroupByApiRound(messages);
+        Assert.Equal(2, groups.Count);
+        Assert.Single(groups[0].Messages);
+        Assert.Equal(3, groups[1].Messages.Count);
+    }
+
+    [Fact]
+    public void GroupByApiRound_MissingAssistantIdsUseEachAssistantAsBoundary()
     {
         var messages = new List<ChatMessage>
         {
@@ -23,33 +72,24 @@ public sealed class MessageGrouperTests
         };
 
         var groups = MessageGrouper.GroupByApiRound(messages);
-        Assert.Equal(2, groups.Count);
-        Assert.Equal(2, groups[0].Messages.Count);
+        Assert.Equal(3, groups.Count);
+        Assert.Single(groups[0].Messages);
         Assert.Equal(2, groups[1].Messages.Count);
+        Assert.Single(groups[2].Messages);
     }
 
     [Fact]
-    public void GroupByApiRound_ToolResultUserMessageDoesNotSplit()
+    public void GroupByApiRound_UsesPaddedEstimateForGroupTokens()
     {
-        var callId = "call-1";
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.User, "question"),
-            new(ChatRole.Assistant, new List<AIContent>
-            {
-                new FunctionCallContent(callId, "ReadFile", new Dictionary<string, object?> { ["path"] = "x" }),
-            }),
-            // Tool-result envelope surfaces as role=User but carries FunctionResultContent.
-            new(ChatRole.User, new List<AIContent>
-            {
-                new FunctionResultContent(callId, "result text"),
-            }),
-            new(ChatRole.Assistant, "final answer"),
+            new(ChatRole.User, "first"),
+            new(ChatRole.Assistant, "reply") { MessageId = "response-1" },
         };
 
         var groups = MessageGrouper.GroupByApiRound(messages);
-        Assert.Single(groups);
-        Assert.Equal(4, groups[0].Messages.Count);
+        Assert.Equal(MessageTokenEstimator.Estimate(groups[0].Messages), groups[0].EstimatedTokens);
+        Assert.Equal(MessageTokenEstimator.Estimate(groups[1].Messages), groups[1].EstimatedTokens);
     }
 
     [Fact]

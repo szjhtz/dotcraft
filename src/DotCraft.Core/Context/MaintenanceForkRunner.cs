@@ -126,9 +126,12 @@ public sealed class MaintenanceForkRunner(IChatClient chatClient, TraceCollector
         var messages = snapshot.Messages.Select(message => message.Clone()).ToList();
         if (messagesBeforeTask is { Count: > 0 })
             messages.AddRange(messagesBeforeTask.Select(message => message.Clone()));
-        messages.Add(new ChatMessage(ChatRole.User, FormatTask(task)));
+        messages.Add(BuildTaskMessage(task));
         return messages;
     }
+
+    internal static ChatMessage BuildTaskMessage(MaintenanceForkTask task) =>
+        new(ChatRole.User, FormatTask(task));
 
     internal static ChatOptions BuildOptions(PromptRequestSnapshot snapshot)
     {

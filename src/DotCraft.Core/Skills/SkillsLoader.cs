@@ -276,7 +276,7 @@ public sealed class SkillsLoader(string workspaceRoot, string? userSkillsPath = 
     }
 
     /// <summary>
-    /// Reads optional Codex-compatible display metadata from <c>agents/openai.yaml</c>.
+    /// Reads optional display metadata from <c>agents/openai.yaml</c>.
     /// Missing or invalid interface metadata is treated as absent.
     /// </summary>
     public SkillInterfaceInfo? GetSkillInterface(string name)

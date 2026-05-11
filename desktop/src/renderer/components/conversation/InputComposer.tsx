@@ -9,7 +9,8 @@ import { useCustomCommandCatalog } from '../../hooks/useCustomCommandCatalog'
 import { useSkillsStore } from '../../stores/skillsStore'
 import { useSubAgentStore } from '../../stores/subAgentStore'
 import { useThreadStore } from '../../stores/threadStore'
-import type { ContextUsageSnapshotWire, ThreadGoal } from '../../types/thread'
+import type { ContextUsageSnapshotWire, Thread, ThreadGoal } from '../../types/thread'
+import { wireTurnToConversationTurn } from '../../types/conversation'
 import type { ComposerFileAttachment, ImageAttachment, QueuedTurnInput } from '../../types/conversation'
 import { startTurnWithOptimisticUI } from '../../utils/startTurn'
 import { buildComposerInputParts } from '../../utils/composeInputParts'
@@ -684,6 +685,7 @@ export function InputComposer({
       }
       const outcome = String(result.outcome ?? '').toLowerCase()
       if (outcome === 'micro' || outcome === 'partial') {
+        await refreshThreadAfterManualCompact()
         addToast(t('composer.compact.succeeded'), 'success')
       } else if (outcome === 'skipped') {
         addToast(t('composer.compact.skipped'), 'info')
@@ -696,6 +698,28 @@ export function InputComposer({
       return false
     } finally {
       setCompactBusy(false)
+    }
+  }
+
+  async function refreshThreadAfterManualCompact(): Promise<void> {
+    try {
+      const response = (await window.api.appServer.sendRequest(
+        'thread/read',
+        { threadId, includeTurns: true }
+      )) as { thread?: Thread }
+      const refreshed = response.thread
+      if (!refreshed || useThreadStore.getState().activeThreadId !== threadId) return
+
+      useThreadStore.getState().setActiveThread(refreshed)
+      useConversationStore.getState().setTurns(
+        (refreshed.turns ?? []).map((turn) =>
+          wireTurnToConversationTurn(turn as unknown as Record<string, unknown>)
+        )
+      )
+      useConversationStore.getState().setQueuedInputs(refreshed.queuedInputs ?? [])
+      useConversationStore.getState().setContextUsage(refreshed.contextUsage ?? null)
+    } catch (err) {
+      console.warn('thread/read after manual compaction failed:', err)
     }
   }
 

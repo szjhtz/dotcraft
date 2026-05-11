@@ -17,7 +17,6 @@ public static class CompactableToolNames
 
     /// <summary>
     /// Placeholder text substituted for a cleared tool-result payload.
-    /// Mirrors openclaude's <c>TIME_BASED_MC_CLEARED_MESSAGE</c>.
     /// </summary>
     public const string ClearedResultMarker = "[Old tool result content cleared]";
 

@@ -24,9 +24,8 @@ public enum MicroCompactTrigger
 /// <summary>
 /// Pre-summary pass that replaces the payload of stale tool results with a
 /// cleared-marker so the prefix shrinks before the full partial compaction
-/// runs. Ports the relevant half of openclaude's <c>microCompact.ts</c>
-/// (count- and time-based triggers; the provider cache-editing path is
-/// intentionally not ported — see <c>plan.md</c>).
+/// runs. Handles count- and time-based triggers while leaving provider-cache
+/// mutation to the normal history rewrite path.
 /// </summary>
 public sealed class MicroCompactor
 {

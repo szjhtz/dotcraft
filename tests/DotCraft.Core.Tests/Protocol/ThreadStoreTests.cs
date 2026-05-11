@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DotCraft.Context.Compaction;
 using DotCraft.Protocol;
 using Microsoft.Agents.AI;
 using Microsoft.Data.Sqlite;
@@ -81,6 +82,27 @@ public sealed class ThreadStoreTests : IDisposable
         Assert.NotNull(loaded);
         Assert.True(loaded.Metadata.TryGetValue("customKey", out var v));
         Assert.Equal("test-value", v);
+    }
+
+    [Fact]
+    public async Task ContextUsageAnchor_RoundTripsAndFallsBackToTokenOnly()
+    {
+        var thread = CreateThread();
+        await _store.SaveThreadAsync(thread);
+        var anchor = new ContextUsageAnchor(
+            Tokens: 1234,
+            MessageCount: 2,
+            PrefixFingerprint: "abc123");
+
+        await _store.SaveContextUsageAnchorAsync(thread.Id, anchor);
+
+        Assert.Equal(anchor, _store.LoadContextUsageAnchor(thread.Id));
+        Assert.Equal(1234, _store.LoadContextUsageTokens(thread.Id));
+
+        await _store.SaveContextUsageTokensAsync(thread.Id, 42);
+
+        Assert.Null(_store.LoadContextUsageAnchor(thread.Id));
+        Assert.Equal(42, _store.LoadContextUsageTokens(thread.Id));
     }
 
     [Fact]

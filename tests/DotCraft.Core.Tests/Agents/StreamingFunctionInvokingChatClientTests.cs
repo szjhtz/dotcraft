@@ -247,7 +247,7 @@ public sealed partial class StreamingFunctionInvokingChatClientTests
     }
 
     [Fact]
-    public async Task GetStreamingResponseAsync_RemovesFunctionToolsOnLastIteration()
+    public async Task GetStreamingResponseAsync_PreservesFunctionToolsOnLastIterationAndDisablesToolChoice()
     {
         var inner = new AlwaysCallsToolFakeChatClient();
         var tool = AIFunctionFactory.Create(() => "tool ok", name: "GetStatus");
@@ -264,7 +264,44 @@ public sealed partial class StreamingFunctionInvokingChatClientTests
 
         Assert.Equal(2, inner.Options.Count);
         Assert.NotEmpty(inner.Options[0]?.Tools ?? []);
-        Assert.Empty(inner.Options[1]?.Tools ?? []);
+        Assert.NotEmpty(inner.Options[1]?.Tools ?? []);
+        Assert.Null(inner.Options[1]?.ToolMode);
+        AssertToolChoiceNone(inner.Options[1]);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_MaxRoundPreSamplingSnapshotRetainsTools()
+    {
+        var inner = new AlwaysCallsToolFakeChatClient();
+        var tool = AIFunctionFactory.Create(() => "tool ok", name: "GetStatus");
+        var client = new StreamingFunctionInvokingChatClient(inner)
+        {
+            MaximumIterationsPerRequest = 1
+        };
+        var snapshots = new List<PromptRequestSnapshot>();
+
+        using var scope = PreSamplingCompactionRuntimeScope.Set(new PreSamplingCompactionRuntimeContext
+        {
+            ThreadId = "thread_1",
+            TurnId = "turn_1",
+            Mode = "agent",
+            TryCompactWithSnapshotAsync = (_, snapshot, _) =>
+            {
+                snapshots.Add(snapshot);
+                return Task.FromResult<IReadOnlyList<ChatMessage>?>(null);
+            },
+            TryCompactAsync = (_, _) => throw new InvalidOperationException("legacy callback should not run")
+        });
+
+        await foreach (var _ in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "start")],
+            new ChatOptions { Tools = [tool] }))
+        {
+        }
+
+        Assert.True(snapshots.Count >= 2);
+        var finalSnapshot = snapshots[^1];
+        Assert.Equal("GetStatus", Assert.Single(finalSnapshot.Tools).Name);
     }
 
     [Fact]
@@ -494,6 +531,16 @@ public sealed partial class StreamingFunctionInvokingChatClientTests
         await foreach (var update in updates)
             result.Add(update);
         return result;
+    }
+
+    private static void AssertToolChoiceNone(ChatOptions? options)
+    {
+        Assert.NotNull(options);
+        var factory = options.RawRepresentationFactory;
+        Assert.NotNull(factory);
+        var raw = Assert.IsType<OpenAI.Chat.ChatCompletionOptions>(factory.Invoke(null!));
+        using var document = JsonDocument.Parse(ModelReaderWriter.Write(raw).ToString());
+        Assert.Equal("none", document.RootElement.GetProperty("tool_choice").GetString());
     }
 
     private sealed class RoundTripFakeChatClient : IChatClient

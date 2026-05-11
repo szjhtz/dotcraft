@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DotCraft.Context.Compaction;
 using DotCraft.State;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -170,12 +171,29 @@ public sealed class ThreadStore
         => _metadataStore.LoadContextUsageTokens(threadId);
 
     /// <summary>
+    /// Loads the persisted provider-usage anchor metadata for a thread.
+    /// Returns null when the metadata is absent or predates anchor support.
+    /// </summary>
+    public ContextUsageAnchor? LoadContextUsageAnchor(string threadId)
+        => _metadataStore.LoadContextUsageAnchor(threadId);
+
+    /// <summary>
     /// Persists the current context-window usage token count for a thread.
     /// </summary>
     public Task SaveContextUsageTokensAsync(string threadId, long tokens, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         _metadataStore.SaveContextUsageTokens(threadId, tokens);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Persists a context-window usage token count with anchor validation metadata.
+    /// </summary>
+    public Task SaveContextUsageAnchorAsync(string threadId, ContextUsageAnchor anchor, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _metadataStore.SaveContextUsageAnchor(threadId, anchor);
         return Task.CompletedTask;
     }
 

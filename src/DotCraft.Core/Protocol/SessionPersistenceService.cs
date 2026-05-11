@@ -1,5 +1,6 @@
 using DotCraft.State;
 using DotCraft.Tracing;
+using DotCraft.Context.Compaction;
 using Microsoft.Agents.AI;
 
 namespace DotCraft.Protocol;
@@ -70,8 +71,14 @@ public sealed class SessionPersistenceService(
     public long? LoadContextUsageTokens(string threadId)
         => threadStore.LoadContextUsageTokens(threadId);
 
+    public ContextUsageAnchor? LoadContextUsageAnchor(string threadId)
+        => threadStore.LoadContextUsageAnchor(threadId);
+
     public Task SaveContextUsageTokensAsync(string threadId, long tokens, CancellationToken ct = default)
         => threadStore.SaveContextUsageTokensAsync(threadId, tokens, ct);
+
+    public Task SaveContextUsageAnchorAsync(string threadId, ContextUsageAnchor anchor, CancellationToken ct = default)
+        => threadStore.SaveContextUsageAnchorAsync(threadId, anchor, ct);
 
     public Task<ThreadGoal?> GetThreadGoalAsync(string threadId, CancellationToken ct = default)
         => threadStore.GetThreadGoalAsync(threadId, ct);

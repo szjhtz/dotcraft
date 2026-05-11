@@ -861,6 +861,7 @@ export function App(): JSX.Element {
             if (!shouldUpdateActiveConversation(tid)) break
             const kind = (p.kind as string) ?? ''
             conv.onSystemEvent(kind, {
+              turnId: typeof p.turnId === 'string' ? (p.turnId as string) : null,
               tokenCount: typeof p.tokenCount === 'number' ? (p.tokenCount as number) : null,
               percentLeft: typeof p.percentLeft === 'number' ? (p.percentLeft as number) : null
             })

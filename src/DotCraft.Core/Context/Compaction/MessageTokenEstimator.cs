@@ -1,26 +1,29 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace DotCraft.Context.Compaction;
 
 /// <summary>
-/// Rough token estimator for <see cref="ChatMessage"/> sequences. Models
-/// openclaude's <c>estimateMessageTokens</c> / <c>roughTokenCountEstimation</c>.
+/// Rough token estimator for <see cref="ChatMessage"/> sequences.
 /// The estimate pads by 4/3 so callers can use it as a conservative upper bound.
 /// </summary>
 public static class MessageTokenEstimator
 {
     /// <summary>
-    /// Approximate tokens-per-character ratio for latin-plus-CJK text.
-    /// Lifted from openclaude; the 4/3 pad applied in <see cref="Estimate"/>
-    /// offsets the typical underestimate for tokenizer-heavy payloads.
+    /// Approximate UTF-8 bytes-per-token ratio used by the rough estimator.
+    /// The 4/3 pad applied in <see cref="Estimate"/> offsets the
+    /// typical underestimate for tokenizer-heavy payloads.
     /// </summary>
-    private const double CharsPerToken = 4.0;
+    private const double BytesPerToken = 4.0;
 
     /// <summary>
     /// Fixed token cost for an image or document content part.
     /// </summary>
     private const int ImageTokenCost = 2000;
+
+    private const int MediaReplacementBytes = ImageTokenCost * 4;
 
     /// <summary>
     /// Returns the estimated token count for a single content block.
@@ -29,15 +32,9 @@ public static class MessageTokenEstimator
     {
         return content switch
         {
-            TextContent tc => RoughTokenCount(tc.Text),
-            DataContent dc when IsImage(dc) => ImageTokenCost,
-            UriContent uc when IsImage(uc) => ImageTokenCost,
-            FunctionCallContent fc =>
-                RoughTokenCount(fc.Name)
-                + RoughTokenCount(SerializeArguments(fc.Arguments)),
-            FunctionResultContent fr =>
-                RoughTokenCount(SerializeResult(fr.Result)),
-            _ => RoughTokenCount(content.ToString() ?? string.Empty),
+            DataContent dc when IsImageOrDocument(dc.MediaType) => ImageTokenCost,
+            UriContent uc when IsImageOrDocument(uc.MediaType) => ImageTokenCost,
+            _ => TokensFromBytes(EstimateContentModelVisibleBytes(content)),
         };
     }
 
@@ -46,90 +43,217 @@ public static class MessageTokenEstimator
     /// </summary>
     public static int EstimateMessage(ChatMessage message)
     {
-        var total = 0;
-        if (!string.IsNullOrEmpty(message.AuthorName))
-            total += RoughTokenCount(message.AuthorName);
-
-        foreach (var content in message.Contents)
-            total += EstimateContent(content);
-
-        return total;
+        return TokensFromBytes(EstimateModelVisibleBytes(message));
     }
 
     /// <summary>
-    /// Estimates the token cost of a message sequence with a 4/3 safety pad
-    /// (matching openclaude's <c>estimateMessageTokens</c>).
+    /// Estimates the token cost of a message sequence with a 4/3 safety pad.
     /// </summary>
     public static int Estimate(IReadOnlyList<ChatMessage> messages)
     {
         var total = 0L;
         foreach (var message in messages)
-            total += EstimateMessage(message);
+            total += EstimateModelVisibleBytes(message);
 
-        return (int)Math.Min(int.MaxValue, Math.Ceiling(total * 4.0 / 3.0));
+        return ApplySafetyPad(TokensFromBytes(total));
     }
 
     /// <summary>
-    /// Unpadded character-based token estimate for a raw string. Exposed so
-    /// the microcompact path can compare content deltas without the 4/3 pad.
+    /// Estimates only the messages appended after a provider usage anchor. The
+    /// provider already counted the prefix, so avoid re-padding the delta.
+    /// </summary>
+    public static int EstimateDelta(IReadOnlyList<ChatMessage> messages)
+    {
+        var total = 0L;
+        foreach (var message in messages)
+            total += EstimateModelVisibleBytes(message);
+
+        return TokensFromBytes(total);
+    }
+
+    internal static long EstimateModelVisibleBytes(ChatMessage message)
+    {
+        long total = Utf8ByteCount("role") + Utf8ByteCount(message.Role.ToString()) + 8;
+        if (!string.IsNullOrEmpty(message.AuthorName))
+            total += Utf8ByteCount("author") + Utf8ByteCount(message.AuthorName) + 8;
+        if (!string.IsNullOrEmpty(message.MessageId))
+            total += Utf8ByteCount("message_id") + Utf8ByteCount(message.MessageId) + 8;
+
+        total += Utf8ByteCount("content") + 4;
+        foreach (var content in message.Contents)
+            total += EstimateContentModelVisibleBytes(content) + 1;
+
+        return total;
+    }
+
+    internal static string ComputePrefixFingerprint(
+        IReadOnlyList<ChatMessage> messages,
+        int messageCount)
+    {
+        if (messageCount < 0 || messageCount > messages.Count)
+            throw new ArgumentOutOfRangeException(nameof(messageCount));
+
+        using var sha = SHA256.Create();
+        for (var i = 0; i < messageCount; i++)
+        {
+            var canonical = CanonicalizeMessage(messages[i]);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical);
+            sha.TransformBlock(bytes, 0, bytes.Length, null, 0);
+            sha.TransformBlock([0], 0, 1, null, 0);
+        }
+
+        sha.TransformFinalBlock([], 0, 0);
+        return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Unpadded byte-based token estimate for a raw string. Exposed so the
+    /// microcompact path can compare content deltas without the 4/3 pad.
     /// </summary>
     public static int RoughTokenCount(string? text)
     {
         if (string.IsNullOrEmpty(text))
             return 0;
 
-        return (int)Math.Ceiling(text.Length / CharsPerToken);
+        return (int)Math.Ceiling(Encoding.UTF8.GetByteCount(text) / BytesPerToken);
     }
 
-    private static bool IsImage(DataContent content)
+    private static int TokensFromBytes(long bytes)
     {
-        var mediaType = content.MediaType;
-        return !string.IsNullOrEmpty(mediaType) &&
-               mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        if (bytes <= 0)
+            return 0;
+
+        return (int)Math.Min(int.MaxValue, (bytes + 3) / 4);
     }
 
-    private static bool IsImage(UriContent content)
+    private static int ApplySafetyPad(int tokens) =>
+        (int)Math.Min(int.MaxValue, Math.Ceiling(tokens * 4.0 / 3.0));
+
+    private static long EstimateContentModelVisibleBytes(AIContent content)
     {
-        var mediaType = content.MediaType;
-        return !string.IsNullOrEmpty(mediaType) &&
-               mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        return content switch
+        {
+            TextContent tc => Utf8ByteCount(tc.Text),
+            DataContent dc when IsImageOrDocument(dc.MediaType) => EstimateMediaBytes(dc.MediaType),
+            UriContent uc when IsImageOrDocument(uc.MediaType) => EstimateMediaBytes(uc.MediaType),
+            FunctionCallContent fc => Utf8ByteCount(SerializeFunctionCall(fc)),
+            FunctionResultContent fr => Utf8ByteCount(SerializeFunctionResult(fr)),
+            _ => Utf8ByteCount(SerializeUnknownContent(content)),
+        };
     }
 
-    private static string SerializeArguments(IDictionary<string, object?>? arguments)
+    private static long EstimateMediaBytes(string? mediaType)
     {
-        if (arguments is null || arguments.Count == 0)
+        return Utf8ByteCount("media")
+               + Utf8ByteCount(mediaType)
+               + MediaReplacementBytes;
+    }
+
+    private static int Utf8ByteCount(string? text)
+    {
+        return string.IsNullOrEmpty(text) ? 0 : Encoding.UTF8.GetByteCount(text);
+    }
+
+    private static bool IsImageOrDocument(string? mediaType)
+    {
+        if (string.IsNullOrEmpty(mediaType))
+            return false;
+
+        return mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || mediaType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string SerializeFunctionCall(FunctionCallContent content)
+    {
+        return SerializeForEstimate(new
+        {
+            type = "tool_use",
+            id = content.CallId,
+            name = content.Name,
+            input = content.Arguments
+        });
+    }
+
+    private static string SerializeFunctionResult(FunctionResultContent content)
+    {
+        return SerializeForEstimate(new
+        {
+            type = "tool_result",
+            tool_use_id = content.CallId,
+            content = content.Result
+        });
+    }
+
+    private static string SerializeUnknownContent(AIContent content)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(content);
+        }
+        catch
+        {
+            return content.ToString() ?? string.Empty;
+        }
+    }
+
+    private static string SerializeForEstimate(object? value)
+    {
+        if (value is null)
             return string.Empty;
 
         try
         {
-            return JsonSerializer.Serialize(arguments);
+            return JsonSerializer.Serialize(value);
         }
         catch
         {
-            // Fall back to a character-only estimate of the dict keys so an
-            // unserializable payload still contributes to the total.
-            var total = 0;
-            foreach (var key in arguments.Keys)
-                total += key.Length + 2;
-            return new string('x', total);
+            return value.ToString() ?? string.Empty;
         }
     }
 
-    private static string SerializeResult(object? result)
+    private static object CanonicalizeMessage(ChatMessage message)
     {
-        if (result is null)
-            return string.Empty;
-
-        if (result is string s)
-            return s;
-
-        try
+        return new
         {
-            return JsonSerializer.Serialize(result);
-        }
-        catch
+            role = message.Role.ToString(),
+            author = message.AuthorName,
+            message_id = message.MessageId,
+            content = message.Contents.Select(CanonicalizeContent).ToArray()
+        };
+    }
+
+    private static object CanonicalizeContent(AIContent content)
+    {
+        return content switch
         {
-            return result.ToString() ?? string.Empty;
-        }
+            TextContent tc => new { type = "text", text = tc.Text },
+            DataContent dc => new
+            {
+                type = IsImageOrDocument(dc.MediaType) ? "media" : "data",
+                media_type = dc.MediaType,
+                length = dc.Data.Length,
+                hash = Convert.ToHexString(SHA256.HashData(dc.Data.ToArray())).ToLowerInvariant()
+            },
+            UriContent uc => new
+            {
+                type = IsImageOrDocument(uc.MediaType) ? "media_uri" : "uri",
+                media_type = uc.MediaType,
+                uri = uc.Uri?.ToString()
+            },
+            FunctionCallContent fc => new
+            {
+                type = "tool_use",
+                id = fc.CallId,
+                name = fc.Name,
+                input = SerializeForEstimate(fc.Arguments)
+            },
+            FunctionResultContent fr => new
+            {
+                type = "tool_result",
+                tool_use_id = fr.CallId,
+                content = SerializeForEstimate(fr.Result)
+            },
+            _ => new { type = content.GetType().FullName, content = SerializeUnknownContent(content) }
+        };
     }
 }

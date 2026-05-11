@@ -5,9 +5,7 @@ namespace DotCraft.Context.Compaction;
 
 /// <summary>
 /// Bilingual (Chinese/English) prompt templates and formatting helpers for the
-/// compaction pipeline. Ports openclaude's <c>prompt.ts</c>
-/// (<c>BASE_COMPACT_PROMPT</c>, <c>PARTIAL_COMPACT_UP_TO_PROMPT</c>,
-/// <c>formatCompactSummary</c>, <c>getCompactUserSummaryMessage</c>).
+/// compaction pipeline.
 /// </summary>
 public static class CompactionPrompts
 {
@@ -326,7 +324,6 @@ Please provide your summary following this structure, ensuring precision and tho
     /// <summary>
     /// Strips the <c>&lt;analysis&gt;</c> scratchpad and unwraps the
     /// <c>&lt;summary&gt;</c> block, returning a plain-text summary.
-    /// Mirrors openclaude's <c>formatCompactSummary</c>.
     /// </summary>
     public static string FormatCompactSummary(string summary)
     {

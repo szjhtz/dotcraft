@@ -46,7 +46,7 @@ public sealed class CompactionConfig
 
     /// <summary>
     /// Additional safety buffer below (ContextWindow - SummaryReserve) at which
-    /// auto-compact fires. Mirrors openclaude's AUTOCOMPACT_BUFFER_TOKENS (13k).
+    /// auto-compact fires.
     /// </summary>
     [ConfigField(Min = 0, Hint = "Auto-compact fires when tokens reach ContextWindow - SummaryReserve - AutoCompactBuffer.")]
     public int AutoCompactBufferTokens { get; set; } = 13_000;

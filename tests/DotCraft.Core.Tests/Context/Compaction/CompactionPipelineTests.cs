@@ -321,6 +321,32 @@ public sealed class CompactionPipelineTests
         Assert.Contains("\"mode\":\"legacy\"", request.MetadataJson);
     }
 
+    [Fact]
+    public async Task TryManualCompactHistoryAsync_LegacyPathWithoutSnapshotPassesFallbackTools()
+    {
+        var cfg = DefaultConfig();
+        cfg.MicrocompactEnabled = false;
+        var chat = new SummaryChatClient("<summary>legacy summary</summary>");
+        var pipeline = new CompactionPipeline(cfg, chat);
+        var tool = AIFunctionFactory.Create(() => "ok", name: "GetStatus", description: "Get status.");
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "user " + new string('u', 1200)),
+            new(ChatRole.Assistant, "assistant " + new string('a', 1200)),
+        };
+
+        var result = await pipeline.TryManualCompactHistoryAsync(
+            messages,
+            "thread-1",
+            lastAssistantTimestampUtc: null,
+            CancellationToken.None,
+            fallbackTools: [tool]);
+
+        Assert.Equal(CompactionOutcome.Partial, result.Status.Outcome);
+        var capturedTool = Assert.Single(chat.Options?.Tools ?? []);
+        Assert.Equal("GetStatus", capturedTool.Name);
+    }
+
     private static List<ChatMessage> BuildMultiRoundMessages()
     {
         var messages = new List<ChatMessage>();
