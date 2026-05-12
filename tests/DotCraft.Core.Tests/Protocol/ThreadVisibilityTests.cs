@@ -1,3 +1,4 @@
+using DotCraft.Dreams;
 using DotCraft.Protocol;
 
 namespace DotCraft.Tests.Sessions.Protocol;
@@ -24,6 +25,7 @@ public sealed class ThreadVisibilityTests
 
     [Theory]
     [InlineData(WelcomeSuggestionConstants.ChannelName)]
+    [InlineData(DreamsConstants.ChannelName)]
     [InlineData(CommitMessageSuggestConstants.ChannelName)]
     public void IsInternal_WhenKnownInternalOriginIsSet_ReturnsTrue(string originChannel)
     {

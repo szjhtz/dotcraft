@@ -2,9 +2,9 @@
 
 | Field | Value |
 |-------|-------|
-| **Version** | 0.2.10 |
+| **Version** | 0.2.11 |
 | **Status** | Living |
-| **Date** | 2026-04-21 |
+| **Date** | 2026-05-11 |
 | **Parent Spec** | [Session Core](session-core.md) (Section 20) |
 
 Purpose: Define a language-neutral JSON-RPC wire protocol that exposes Session Core (`ISessionService`) and related AppServer capabilities to out-of-process clients, enabling them to create and resume threads, submit turns, stream events, participate in approval flows, and call server-level management methods through one transport-stable contract.
@@ -46,7 +46,8 @@ Purpose: Define a language-neutral JSON-RPC wire protocol that exposes Session C
 - [24. SubAgent Profile Management Methods](#24-subagent-profile-management-methods)
 - [25. Workspace Config Methods](#25-workspace-config-methods)
 - [26. Memory Management Methods](#26-memory-management-methods)
-- [27. Design Inspiration](#27-design-inspiration)
+- [27. Dreams Management Methods](#27-dreams-management-methods)
+- [28. Design Inspiration](#28-design-inspiration)
 
 ---
 
@@ -73,7 +74,7 @@ The current v1 contract is based on the refactored Session Core, not on the earl
 
 | Bucket | V1 Items |
 |-------|----------|
-| **Guaranteed in v1** | Rich approval decisions (`accept`, `acceptForSession`, `acceptAlways`, `decline`, `cancel`), thread-scoped event subscription, accurate per-turn origin/initiator metadata, strict `historyMode` rules, separate wire DTO serialization with camelCase enums and lossless delta typing. Cron management methods (`cron/list`, `cron/remove`, `cron/enable`, `cron/run`) with the `cronManagement` server capability flag. Heartbeat trigger method (`heartbeat/trigger`) with the `heartbeatManagement` capability flag. Skills management methods (`skills/list`, `skills/read`, `skills/view`, `skills/restoreOriginal`, `skills/setEnabled`, `skills/uninstall`) with the `skillsManagement` / `skillVariants` capability flags. Command management methods (`command/list`, `command/execute`) with the `commandManagement` capability flag. Channel status method (`channel/status`) with the `channelStatus` capability flag. Model catalog method (`model/list`) with the `modelCatalogManagement` capability flag. MCP management methods (`mcp/list`, `mcp/get`, `mcp/upsert`, `mcp/remove`, `mcp/status/list`, `mcp/test`) with the `mcpManagement` / `mcpStatus` capability flags. External channel management methods (`externalChannel/list`, `externalChannel/get`, `externalChannel/upsert`, `externalChannel/remove`) with the `externalChannelManagement` capability flag. SubAgent profile management methods (`subagent/profiles/list`, `subagent/settings/update`, `subagent/profiles/setEnabled`, `subagent/profiles/upsert`, `subagent/profiles/remove`) with the `subAgentManagement` capability flag. Session-backed SubAgent child-thread listing/close/resume with the `subAgentSessions` capability flag. Workspace config update method (`workspace/config/update`) with the `workspaceConfigManagement` capability flag. |
+| **Guaranteed in v1** | Rich approval decisions (`accept`, `acceptForSession`, `acceptAlways`, `decline`, `cancel`), thread-scoped event subscription, accurate per-turn origin/initiator metadata, strict `historyMode` rules, separate wire DTO serialization with camelCase enums and lossless delta typing. Cron management methods (`cron/list`, `cron/remove`, `cron/enable`, `cron/run`) with the `cronManagement` server capability flag. Heartbeat trigger method (`heartbeat/trigger`) with the `heartbeatManagement` capability flag. Skills management methods (`skills/list`, `skills/read`, `skills/view`, `skills/restoreOriginal`, `skills/setEnabled`, `skills/uninstall`) with the `skillsManagement` / `skillVariants` capability flags. Command management methods (`command/list`, `command/execute`) with the `commandManagement` capability flag. Channel status method (`channel/status`) with the `channelStatus` capability flag. Model catalog method (`model/list`) with the `modelCatalogManagement` capability flag. MCP management methods (`mcp/list`, `mcp/get`, `mcp/upsert`, `mcp/remove`, `mcp/status/list`, `mcp/test`) with the `mcpManagement` / `mcpStatus` capability flags. External channel management methods (`externalChannel/list`, `externalChannel/get`, `externalChannel/upsert`, `externalChannel/remove`) with the `externalChannelManagement` capability flag. SubAgent profile management methods (`subagent/profiles/list`, `subagent/settings/update`, `subagent/profiles/setEnabled`, `subagent/profiles/upsert`, `subagent/profiles/remove`) with the `subAgentManagement` capability flag. Session-backed SubAgent child-thread listing/close/resume with the `subAgentSessions` capability flag. Workspace config update method (`workspace/config/update`) with the `workspaceConfigManagement` capability flag. Dreams workspace memory methods (`dreams/status`, `dreams/run`, `dreams/create`, `dreams/get`, `dreams/list`, `dreams/cancel`, `dreams/apply`, `dreams/discard`, `dreams/archive`) with the `dreams` capability flag. |
 | **Guaranteed with narrowed semantics** | `thread/list` is deterministic but **not cursor-paginated** in v1; archived threads are excluded by default and included only via an explicit filter. |
 | **Deferred from v1** | Structured extension capability registry beyond a flat namespace advertisement. Clients must treat extension namespaces as optional and discoverable, not required for core Session behavior. |
 
@@ -381,6 +382,7 @@ Built-in channels do not negotiate these capabilities over `initialize`; they pr
 | `capabilities.modelCatalogManagement` | boolean | Server supports model catalog methods (`model/list`). |
 | `capabilities.workspaceConfigManagement` | boolean | Server supports workspace configuration methods (`workspace/config/schema`, `workspace/config/update`). |
 | `capabilities.memoryManagement` | boolean | Server supports workspace memory management methods (`memory/reset`). |
+| `capabilities.dreams` | boolean | Server supports workspace Dreams status, manual/create run requests, review lifecycle, and Dreams settings. |
 | `capabilities.mcpManagement` | boolean | Server supports MCP configuration management methods (`mcp/list`, `mcp/get`, `mcp/upsert`, `mcp/remove`). |
 | `capabilities.mcpServerOrigins` | boolean | Server annotates MCP config/status DTOs with `origin` and `readOnly` so clients can show plugin-bundled MCP servers as read-only runtime entries. |
 | `capabilities.externalChannelManagement` | boolean | Server supports external channel configuration management methods (`externalChannel/list`, `externalChannel/get`, `externalChannel/upsert`, `externalChannel/remove`). |
@@ -927,11 +929,11 @@ Manually compact the model-visible context for an idle server-managed thread.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `outcome` | string | `"micro"`, `"partial"`, `"skipped"`, or `"failed"`. |
+| `outcome` | string | `"micro"`, `"partial"`, `"skipped"`, `"failed"`, or `"cancelled"`. |
 | `message` | string? | Optional skip/failure reason. |
 | `contextUsage` | ContextUsageSnapshot? | Updated snapshot when available. |
 
-Servers advertise this method with `capabilities.manualCompaction = true`. The method is valid only for Active, server-managed threads that have history and no `Running` / `WaitingApproval` turn. The server emits `system/event` in the order `compacting` → `compacted` / `compactSkipped` / `compactFailed`. Manual compaction first tries partial compaction; if there is no older prefix, or the partial attempt cannot produce a summary, it falls back to full-history compaction so short histories can still be compacted. On success it persists the compacted agent session and appends a `SystemNotice` item with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
+Servers advertise this method with `capabilities.manualCompaction = true`. The method is valid only for Active, server-managed threads that have history and no `Running` / `WaitingApproval` turn or active thread maintenance. The server emits `system/event` in the order `compacting` → `compacted` / `compactSkipped` / `compactFailed` / `compactCancelled`. While running, the thread reports `maintenanceKind = "compacting"` through `thread/runtimeChanged`; new input must be queued instead of submitted with `turn/start`. Manual compaction first tries partial compaction; if there is no older prefix, or the partial attempt cannot produce a summary, it falls back to full-history compaction so short histories can still be compacted. On success it persists the compacted agent session and appends a `SystemNotice` item with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
 
 ### 4.17 `thread/memory/consolidate/start`
 
@@ -949,12 +951,18 @@ Manually consolidate the current thread's model-visible history into workspace l
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `outcome` | string | `"succeeded"`, `"skipped"`, or `"failed"`. |
+| `outcome` | string | `"succeeded"`, `"skipped"`, `"failed"`, or `"cancelled"`. |
 | `message` | string? | Optional skip/failure reason. |
 | `memoryWritten` | boolean | Whether `MEMORY.md` was updated. |
 | `historyWritten` | boolean | Whether `HISTORY.md` was appended. |
 
-Servers advertise this method with `capabilities.manualMemoryConsolidation = true`. The method is valid only for Active, server-managed, idle threads with at least one completed turn and non-empty model-visible history. Manual consolidation bypasses `Memory.AutoConsolidateEnabled` because it is an explicit user action, but it still requires the server to have a memory consolidator. The server emits `system/event` in the order `consolidating` → `consolidated` / `consolidationSkipped` / `consolidationFailed`. On success it persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the latest completed turn.
+Servers advertise this method with `capabilities.manualMemoryConsolidation = true`. The method is valid only for Active, server-managed, idle threads with at least one completed turn, no active thread maintenance, and non-empty model-visible history. Manual consolidation bypasses `Memory.AutoConsolidateEnabled` because it is an explicit user action, but it still requires the server to have a memory consolidator. The server emits `system/event` in the order `consolidating` → `consolidated` / `consolidationSkipped` / `consolidationFailed` / `consolidationCancelled`. While running, the thread reports `maintenanceKind = "consolidating"` through `thread/runtimeChanged`; new input must be queued instead of submitted with `turn/start`. On success it persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the latest completed turn.
+
+### 4.18 `thread/maintenance/interrupt`
+
+Interrupts active thread-level maintenance such as manual compaction or memory consolidation. This method is advertised with `capabilities.threadMaintenanceInterrupt = true`.
+
+If no maintenance is active, the request succeeds as a no-op. If maintenance is active, the server signals its cancellation token and later emits the matching terminal `system/event` (`compactCancelled` or `consolidationCancelled`). Cancelling maintenance does not cancel any completed turn and does not remove queued inputs.
 
 ---
 
@@ -970,6 +978,8 @@ Before starting the agent, the server **must** ensure the in-memory thread is lo
 
 The response is returned **immediately** with the initial Turn object (status `"running"`, empty `items`). The agent's output then streams as notifications: `turn/started`, followed by `item/*` events, and finally `turn/completed` (or `turn/failed` / `turn/cancelled`).
 
+Clients must not call `turn/start` while the thread has a running/waiting turn or active thread maintenance. The server rejects both cases with `TurnInProgress`; clients should use `turn/enqueue` so the input runs after the active turn or maintenance terminal event.
+
 For persisted server-managed threads, the execution lifecycle of a started turn is owned by the AppServer, not by the single request transport that submitted it. If the client WebSocket disconnects after `turn/start` has begun, the server must continue consuming the turn event stream so the turn can complete or fail normally. The disconnected client may miss notifications and should recover by reconnecting and calling `thread/read` or `thread/subscribe`.
 
 **Interaction with `thread/subscribe`**: If the calling connection already holds an active subscription for the target thread (via `thread/subscribe`), the server MUST use the subscription path to deliver all turn-scoped notifications instead of creating a separate inline dispatch path. The `turn/start` JSON-RPC response is still sent before the first `turn/started` notification. The server must still keep an internal active-turn drain for the submitted turn so connection loss does not stop execution or strand approvals after the passive subscription is cancelled. See [Section 6.10](#610-notification-delivery-guarantees) for the at-most-once delivery guarantee.
@@ -980,7 +990,7 @@ For persisted server-managed threads, the execution lifecycle of a started turn 
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `threadId` | string | yes | Target thread. Must be `"active"` with no running turn. |
+| `threadId` | string | yes | Target thread. Must be `"active"` with no running turn or active maintenance. |
 | `input` | InputPart[] | yes | User input. At least one part required. |
 | `sender` | SenderContext | no | Sender identity for group sessions. |
 | `messages` | ChatMessage[] | conditional | Required when the thread uses `historyMode = "client"`. Forbidden when the thread uses `historyMode = "server"`. |
@@ -1312,7 +1322,8 @@ The server emits `thread/runtimeChanged` when any of the following state transit
 - an approval request is created;
 - an approval request is resolved;
 - a turn finishes in plan mode with a successful terminal `CreatePlan` tool call, setting `waitingOnPlanConfirmation = true`;
-- the next `turn/start` for that thread clears the pending plan confirmation state.
+- the next `turn/start` for that thread clears the pending plan confirmation state;
+- thread maintenance starts or completes.
 
 The server SHOULD broadcast this notification only when the effective snapshot actually changes. Duplicate deliveries are allowed; clients should treat the latest payload as authoritative and replace any prior cached snapshot for that `threadId`.
 
@@ -1324,7 +1335,9 @@ The server SHOULD broadcast this notification only when the effective snapshot a
   "runtime": {
     "running": true,
     "waitingOnApproval": false,
-    "waitingOnPlanConfirmation": false
+    "waitingOnPlanConfirmation": false,
+    "busy": true,
+    "maintenanceKind": "consolidating"
   }
 }
 ```
@@ -1335,6 +1348,8 @@ The server SHOULD broadcast this notification only when the effective snapshot a
 | `runtime.running` | boolean | Whether a turn is currently executing for the thread. |
 | `runtime.waitingOnApproval` | boolean | Whether the thread currently has one or more unresolved approval requests. |
 | `runtime.waitingOnPlanConfirmation` | boolean | Whether the previous turn ended in plan mode with a successful terminal `CreatePlan` call and has not yet been cleared by the next `turn/start`. |
+| `runtime.busy` | boolean | Whether the thread is currently unable to start a new turn because a turn, approval, or maintenance operation is active. |
+| `runtime.maintenanceKind` | string? | Current thread maintenance kind (`"compacting"` or `"consolidating"`), or omitted/null when no maintenance is active. |
 
 Forward-compatibility rule: future server versions may add additional boolean flags under `runtime` (for example `waitingOnUserInput`). Clients MUST ignore unknown fields.
 
@@ -1845,7 +1860,7 @@ Emitted when a system-level maintenance operation occurs during a Turn's post-pr
 |-------|------|-------------|
 | `threadId` | string | Parent thread. |
 | `turnId` | string? | Active turn. May be null for asynchronous thread-scoped maintenance events such as `consolidated`, `consolidationSkipped`, and `consolidationFailed`. |
-| `kind` | string | Event kind. One of: `"compactWarning"`, `"compactError"`, `"compacting"`, `"compacted"`, `"compactSkipped"`, `"compactFailed"`, `"consolidating"`, `"consolidated"`, `"consolidationSkipped"`, `"consolidationFailed"`. |
+| `kind` | string | Event kind. One of: `"compactWarning"`, `"compactError"`, `"compacting"`, `"compacted"`, `"compactSkipped"`, `"compactFailed"`, `"compactCancelled"`, `"consolidating"`, `"consolidated"`, `"consolidationSkipped"`, `"consolidationFailed"`, `"consolidationCancelled"`. |
 | `message` | string? | Human-readable description (or machine-readable reason on `compactSkipped` / `compactFailed` / `consolidationSkipped` / `consolidationFailed`). May be null. |
 | `percentLeft` | number? | Fraction of the effective context window still unused (`0.0`-`1.0`). Populated for compaction-related events. |
 | `tokenCount` | number? | Current estimated prompt token usage. Populated for compaction-related events. |
@@ -1859,11 +1874,13 @@ Emitted when a system-level maintenance operation occurs during a Turn's post-pr
 | `compacting` | A compaction attempt (auto or reactive) is starting. |
 | `compacted` | Compaction completed successfully. Token tracker has been reset. |
 | `compactSkipped` | Compaction was evaluated but not executed (below threshold, nothing new to summarize, or circuit breaker tripped). |
-| `compactFailed` | Compaction attempted but failed (LLM error, cancellation). Repeated failures trip the circuit breaker. |
+| `compactFailed` | Compaction attempted but failed (LLM error). Repeated failures trip the circuit breaker. |
+| `compactCancelled` | Thread-scoped manual compaction was interrupted by the user. |
 | `consolidating` | Memory consolidation is starting (fire-and-forget, driven by Session Core after a configured number of successful Turns). |
 | `consolidated` | Memory consolidation completed successfully. MEMORY.md / HISTORY.md have been updated. |
 | `consolidationSkipped` | Memory consolidation completed without writing MEMORY.md or HISTORY.md (for example, the model did not call `save_memory` or produced no valid changes). Clients should dismiss any active consolidation status and should not show a success marker. |
 | `consolidationFailed` | Memory consolidation failed. Clients should dismiss any active consolidation status and may surface `message`. |
+| `consolidationCancelled` | Memory consolidation was interrupted by the user. Clients should dismiss any active consolidation status. |
 
 **Emission rules**:
 
@@ -4788,6 +4805,10 @@ Update workspace-level config values.
 | `welcomeSuggestionsEnabled` | boolean \| null | no | Workspace-level override for personalized welcome suggestions. `true` enables, `false` disables, and `null` removes the explicit override so server defaults apply. |
 | `skillsSelfLearningEnabled` | boolean \| null | no | Workspace-level override for `Skills.SelfLearning.Enabled`. `true` enables the SkillManage tool surface and skill-authoring built-in skill, `false` disables, and `null` removes the explicit override so server defaults apply (`true` by default). Takes effect on next AppServer restart (`Skills.SelfLearning.Enabled` is a `ProcessRestart` field). |
 | `memoryAutoConsolidateEnabled` | boolean \| null | no | Workspace-level override for `Memory.AutoConsolidateEnabled`. `true` enables turn-count-based long-term memory consolidation, `false` disables it, and `null` removes the explicit override so server defaults apply (`true` by default). Takes effect for future successful turns without restart. |
+| `dreamsEnabled` | boolean \| null | no | Workspace-level override for `Dreams.Enabled`. `true` enables scheduled Dreams, `false` disables scheduled Dreams, and `null` removes the explicit override so server defaults apply (`true` by default). |
+| `dreamsInterval` | string \| null | no | Workspace-level override for `Dreams.Interval` as a positive `TimeSpan` string. `null` removes the explicit override. |
+| `dreamsThreadLookbackCount` | number \| null | no | Workspace-level override for `Dreams.ThreadLookbackCount`, which limits how many eligible candidate threads are listed in each Dreams source manifest. Must be a positive integer when provided; `null` removes the explicit override. |
+| `dreamsAutoApply` | boolean \| null | no | Workspace-level override for `Dreams.AutoApply`. `true` makes future successful Dreams runs active immediately, `false` keeps them pending for Dashboard review, and `null` removes the explicit override. |
 | `defaultApprovalPolicy` | string \| null | no | Workspace default approval policy for threads whose `ThreadConfiguration.approvalPolicy` is `default` or unset. Supported values are `default` and `autoApprove`; `null` removes the explicit workspace override so server defaults apply. |
 
 **Result**:
@@ -4800,6 +4821,10 @@ Update workspace-level config values.
   "welcomeSuggestionsEnabled": true,
   "skillsSelfLearningEnabled": true,
   "memoryAutoConsolidateEnabled": true,
+  "dreamsEnabled": true,
+  "dreamsInterval": "24:00:00",
+  "dreamsThreadLookbackCount": 20,
+  "dreamsAutoApply": false,
   "defaultApprovalPolicy": "default"
 }
 ```
@@ -4817,12 +4842,13 @@ If `model` is removed, the result returns:
 - This method updates **workspace default** only, not any active thread state.
 - Clients that need immediate effect in a running thread should additionally call `thread/config/update`.
 - Server preserves unrelated configuration state.
-- At least one of `model`, `apiKey`, `endPoint`, `welcomeSuggestionsEnabled`, `skillsSelfLearningEnabled`, `memoryAutoConsolidateEnabled`, or `defaultApprovalPolicy` must be provided.
+- At least one of `model`, `apiKey`, `endPoint`, `welcomeSuggestionsEnabled`, `skillsSelfLearningEnabled`, `memoryAutoConsolidateEnabled`, `dreamsEnabled`, `dreamsInterval`, `dreamsThreadLookbackCount`, `dreamsAutoApply`, or `defaultApprovalPolicy` must be provided.
 - Key matching is case-insensitive and normalized in-place (`Model`, `ApiKey`, `EndPoint`).
 - When `skillsSelfLearningEnabled` is provided, the server writes the boolean to the nested `Skills.SelfLearning.Enabled` key. Setting it to `null` removes the leaf, and the server prunes empty `Skills.SelfLearning` / `Skills` objects when no other keys remain.
 - When `memoryAutoConsolidateEnabled` is provided, the server writes the boolean to `Memory.AutoConsolidateEnabled`. Setting it to `null` removes the leaf, and the server prunes the empty `Memory` object when no other keys remain.
+- When Dreams fields are provided, the server writes them to `Dreams.Enabled`, `Dreams.Interval`, `Dreams.ThreadLookbackCount`, and `Dreams.AutoApply`. Setting a field to `null` removes that leaf, and the server prunes the empty `Dreams` object when no other keys remain.
 - When `defaultApprovalPolicy` is provided, the server writes the value to `Permissions.DefaultApprovalPolicy`. Setting it to `null` removes the leaf, and the server prunes the empty `Permissions` object when no other keys remain.
-- On success, the server emits `workspace/configChanged` (see [Section 24.5](#245-workspaceconfigchanged)) with `source: "workspace/config/update"` and one or more regions from `workspace.model`, `workspace.apiKey`, `workspace.endpoint`, `welcomeSuggestions`, `skills`, `memory`, `workspace.defaultApprovalPolicy`.
+- On success, the server emits `workspace/configChanged` (see [Section 25.5](#255-workspaceconfigchanged)) with `source: "workspace/config/update"` and one or more regions from `workspace.model`, `workspace.apiKey`, `workspace.endpoint`, `welcomeSuggestions`, `skills`, `memory`, `workspace.defaultApprovalPolicy`.
 
 ### 25.4 Capability Advertisement
 
@@ -4901,7 +4927,7 @@ Clear the current workspace's durable memory artifacts.
 
 **Semantics**:
 
-- The server clears the contents of the current workspace memory root, including `MEMORY.md`, `HISTORY.md`, and derived memory files, while preserving the memory directory itself.
+- The server clears the contents of the current workspace memory root, including `MEMORY.md`, `HISTORY.md`, and derived memory files, and clears Dreams-derived memory under `.craft/dreams`, while preserving the memory and Dreams directories themselves.
 - The operation does not delete sessions, archived sessions, thread history, skills, plugins, automation tasks, or configuration.
 - The operation preserves `Memory.AutoConsolidateEnabled`; future successful turns may create new memory according to the current configuration.
 - The server clears memory-derived welcome suggestion caches so clients do not continue displaying suggestions generated from deleted memory.
@@ -4911,7 +4937,178 @@ Clear the current workspace's durable memory artifacts.
 
 Clients must check `capabilities.memoryManagement` before calling `memory/reset`.
 
-## 27. Design Inspiration
+## 27. Dreams Management Methods
+
+Dreams methods expose workspace-level background memory organization, pending output stores, and review actions. Actual Dreams model runs are Session-backed internal maintenance threads with two turns: pruning pass and consolidation pass. Those threads are trace-visible for Dashboard users, but ordinary thread lists omit them by default.
+
+Clients must check `capabilities.dreams` in `initialize` before calling Dreams methods. If absent or `false`, the server returns `-32601` (Method not found).
+
+### 27.1 `dreams/status`
+
+Return current Dreams configuration and latest run state for the connected workspace.
+
+**Direction**: client -> server (request)
+
+**Params**: omitted, `null`, or `{}`
+
+**Result**:
+
+```json
+{
+  "enabled": true,
+  "interval": "24:00:00",
+  "threadLookbackCount": 20,
+  "autoApply": false,
+  "historyTailChars": 20000,
+  "minCompletedTurnsSinceLastRun": 5,
+  "nextRunAt": "2026-05-12T00:00:00Z",
+  "running": false,
+  "activeDreamStoreId": "store_20260510000000_active",
+  "lastRun": {
+    "id": "dream_20260511000000_abc123",
+    "status": "succeeded",
+    "startedAt": "2026-05-11T00:00:00Z",
+    "endedAt": "2026-05-11T00:00:28Z",
+    "processedThreadCount": 18,
+    "candidateThreadCount": 18,
+    "evidenceThreadIds": ["thread_abc"],
+    "writtenPaths": ["stores/store_20260511000000_pending/INDEX.md"],
+    "evidenceSearchCount": 3,
+    "evidenceReadCount": 4,
+    "dreamWritten": true,
+    "historyWritten": false,
+    "outputStoreId": "store_20260511000000_pending",
+    "reviewStatus": "pending",
+    "autoApplied": false,
+    "threadId": "thread_20260511_abcd",
+    "turnId": "turn_002",
+    "turnIds": ["turn_001", "turn_002"],
+    "trigger": "manual",
+    "message": null,
+    "inputManifestPath": ".craft/dreams/runs/dream_20260511000000_abc123/input/MANIFEST.md"
+  }
+}
+```
+
+If Dreams has never run, `lastRun` is `null`. Run status values are `running`, `succeeded`, `skipped`, `failed`, and `canceled`. Review status values are `pending`, `applied`, `discarded`, and `archived`.
+
+`threadLookbackCount` limits the number of eligible candidate sessions listed in the Dream Run source manifest. Raw transcripts are not inlined into the initial Dreams request; the internal Dreams session uses its file-tool sandbox to read/search eligible input snapshots, repo evidence, and the candidate output store.
+
+### 27.2 `dreams/run`
+
+Shortcut for requesting an immediate Dream Run with default manual parameters.
+
+**Direction**: client -> server (request)
+
+**Params**: omitted, `null`, or `{}`
+
+**Result**: same shape as `dreams/status`.
+
+**Semantics**:
+
+- If Dreams is enabled and idle, the server persists a `running` state, starts one forced Dream Run in the background, and returns a status snapshot quickly.
+- If a Dream Run is already active, the server returns the active status snapshot without starting a duplicate run.
+- If Dreams is disabled, the server returns a skipped or disabled status without starting a run.
+- With `Dreams.AutoApply = false`, successful runs generate pending output stores and do not affect prompts until `dreams/apply`. With `Dreams.AutoApply = true`, future successful runs immediately switch the active Dream Store, record `reviewStatus = "applied"`, and set `autoApplied = true`; existing pending runs are unchanged.
+- Actual model runs create a new internal Session Core thread with `originChannel = "dreams"` and `dotcraft.internal = "dreams"` metadata. The Dashboard may surface the trace/session for that thread; default `thread/list` responses continue to hide it unless `includeInternal = true`.
+- Skipped attempts before model generation do not create Session threads.
+- The baseline protocol does not require streaming progress or a completion notification. Clients may poll `dreams/status`.
+
+### 27.3 `dreams/create`
+
+Request an immediate Dream Run with optional input selection and additional instructions.
+
+**Params**:
+
+```json
+{
+  "threadIds": ["thread_abc"],
+  "threadLookbackCount": 20,
+  "instructions": "Focus protocol decisions.",
+  "model": "gpt-5.2"
+}
+```
+
+**Result**:
+
+```json
+{
+  "run": {
+    "id": "dream_20260511000000_abc123",
+    "status": "running"
+  },
+  "activeDreamStoreId": "store_20260510000000_active"
+}
+```
+
+`threadLookbackCount`, when present, must be positive. `threadIds` narrows the candidate sessions. `model`, when present, overrides the model recorded and used for the internal Dreams session.
+
+### 27.4 `dreams/get`
+
+Read one Dream Run plus preview data for detailed Dashboard review.
+
+**Params**:
+
+```json
+{ "runId": "dream_20260511000000_abc123" }
+```
+
+**Result**:
+
+```json
+{
+  "run": {
+    "id": "dream_20260511000000_abc123",
+    "status": "succeeded",
+    "reviewStatus": "pending",
+    "outputStoreId": "store_20260511000000_pending"
+  },
+  "activeDreamStoreId": "store_20260510000000_active",
+  "preview": {
+    "activeStoreId": "store_20260510000000_active",
+    "outputStoreId": "store_20260511000000_pending",
+    "activeIndexMarkdown": "# Dream Store\n\n...",
+    "outputIndexMarkdown": "# Dream Store\n\n...",
+    "activeTopicPaths": [],
+    "outputTopicPaths": ["api-conventions.md"]
+  }
+}
+```
+
+### 27.5 `dreams/list`
+
+List Dream Runs for the connected workspace.
+
+**Params**:
+
+```json
+{ "includeArchived": false }
+```
+
+**Result**:
+
+```json
+{ "runs": [] }
+```
+
+### 27.6 Review Actions
+
+`dreams/cancel`, `dreams/apply`, `dreams/discard`, and `dreams/archive` all take:
+
+```json
+{ "runId": "dream_20260511000000_abc123" }
+```
+
+They return the same run-result envelope as `dreams/create` without preview.
+
+Review semantics:
+
+- `dreams/apply` switches `activeDreamStoreId` to the run's `outputStoreId` and emits a memory-region config change.
+- `dreams/discard` marks non-applied runs discarded without deleting the output store.
+- `dreams/archive` hides runs from default list results without deleting the output store.
+- `dreams/cancel` is best-effort for running jobs.
+
+## 28. Design Inspiration
 
 The DotCraft AppServer Protocol's architecture references the Codex App Server
 design. The overall structural approach - a JSON-RPC 2.0 surface layered around

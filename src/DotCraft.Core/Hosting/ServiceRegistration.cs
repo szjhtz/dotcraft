@@ -10,6 +10,7 @@ using DotCraft.Localization;
 using DotCraft.Lsp;
 using DotCraft.Mcp;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Modules;
 using DotCraft.Plugins;
 using DotCraft.Protocol;
@@ -84,6 +85,8 @@ public static class ServiceRegistration
                 config.Tools.Shell.Background,
                 sp.GetService<ILoggerFactory>()?.CreateLogger<BackgroundTerminalService>()));
         services.AddSingleton(new MemoryStore(botPath));
+        services.AddSingleton(new DreamStore(botPath));
+        services.AddSingleton<DreamsStateStore>();
         services.AddSingleton(new ApprovalStore(botPath));
         var skillsLoader = new SkillsLoader(botPath);
         skillsLoader.DeployBuiltInSkills();
@@ -128,9 +131,19 @@ public static class ServiceRegistration
         services.AddSingleton(new SessionGate(config.MaxSessionQueueSize));
         services.AddSingleton<ActiveRunRegistry>();
         services.AddSingleton(sp => new ThreadStore(botPath, sp.GetRequiredService<StateRuntime>()));
+        services.AddSingleton(sp => new DreamsInputCollector(
+            sp.GetRequiredService<AppConfig>(),
+            workspacePath,
+            sp.GetRequiredService<MemoryStore>(),
+            sp.GetRequiredService<DreamStore>(),
+            sp.GetRequiredService<ThreadStore>()));
+        services.AddSingleton<DreamsRunRegistry>();
         services.AddSingleton<IToolProfileRegistry>(sp =>
         {
             var reg = new ToolProfileRegistry();
+            reg.Register(
+                DreamsConstants.ToolProfileName,
+                new[] { new DreamsToolProvider(sp.GetRequiredService<DreamsRunRegistry>()) });
             reg.Register(
                 CommitMessageSuggestConstants.ToolProfileName,
                 new[] { new CommitSuggestToolProvider() });

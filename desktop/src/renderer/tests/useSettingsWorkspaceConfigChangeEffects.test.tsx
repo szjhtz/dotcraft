@@ -11,6 +11,7 @@ function HookHost(props: {
   subAgentEnabled?: boolean
   onExternalLlmChangeNotice?: () => void
   reloadWorkspaceCore?: () => Promise<void> | void
+  reloadDreamsStatus?: () => Promise<void> | void
   reloadMcpData?: () => Promise<void> | void
   reloadSubAgentData?: () => Promise<void> | void
   clearServerChannels?: () => void
@@ -23,6 +24,7 @@ function HookHost(props: {
     subAgentEnabled: props.subAgentEnabled ?? false,
     onExternalLlmChangeNotice: props.onExternalLlmChangeNotice ?? vi.fn(),
     reloadWorkspaceCore: props.reloadWorkspaceCore ?? vi.fn(),
+    reloadDreamsStatus: props.reloadDreamsStatus,
     reloadMcpData: props.reloadMcpData ?? vi.fn(),
     reloadSubAgentData: props.reloadSubAgentData ?? vi.fn(),
     clearServerChannels: props.clearServerChannels ?? vi.fn()
@@ -205,13 +207,15 @@ describe('useSettingsWorkspaceConfigChangeEffects', () => {
     expect(onExternalLlmChangeNotice).not.toHaveBeenCalled()
   })
 
-  it('reloads workspace core when memory config changes', async () => {
+  it('reloads workspace core and Dreams status when memory config changes', async () => {
     const reloadWorkspaceCore = vi.fn()
+    const reloadDreamsStatus = vi.fn()
     const { rerender } = render(
       <HookHost
         change={null}
         changeSeq={0}
         reloadWorkspaceCore={reloadWorkspaceCore}
+        reloadDreamsStatus={reloadDreamsStatus}
       />
     )
 
@@ -224,11 +228,13 @@ describe('useSettingsWorkspaceConfigChangeEffects', () => {
         }}
         changeSeq={1}
         reloadWorkspaceCore={reloadWorkspaceCore}
+        reloadDreamsStatus={reloadDreamsStatus}
       />
     )
 
     await waitFor(() => {
       expect(reloadWorkspaceCore).toHaveBeenCalledTimes(1)
+      expect(reloadDreamsStatus).toHaveBeenCalledTimes(1)
     })
   })
 

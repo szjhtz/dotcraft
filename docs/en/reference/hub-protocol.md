@@ -236,7 +236,9 @@ Notification request:
   "body": "The agent finished the requested change.",
   "severity": "success",
   "source": "appserver",
-  "actionUrl": "dotcraft://workspace/open?path=/Users/me/project"
+  "threadId": "thread_abc",
+  "actionUrl": "dotcraft://workspace/open?path=/Users/me/project&threadId=thread_abc",
+  "openDesktopOnClick": true
 }
 ```
 
@@ -249,6 +251,8 @@ Response:
 ```
 
 `severity` is normalized to `info`, `success`, `warning`, or `error`.
+
+`threadId`, `actionUrl`, and `openDesktopOnClick` are optional. AppServer turn notifications use `dotcraft://workspace/open` only for threads that originated in Desktop. Notifications for other origins should set `openDesktopOnClick: false` so a click does not launch Desktop.
 
 ## Events
 

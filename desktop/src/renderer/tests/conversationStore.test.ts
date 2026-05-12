@@ -29,6 +29,32 @@ describe('conversationStore — initial state', () => {
     expect(state.turnStatus).toBe('idle')
     expect(state.streamingMessage).toBe('')
     expect(state.pendingMessage).toBeNull()
+    expect(state.maintenanceKind).toBeNull()
+  })
+})
+
+describe('maintenance state', () => {
+  it('tracks consolidation maintenance from system events', () => {
+    s().onSystemEvent('consolidating')
+
+    expect(s().maintenanceKind).toBe('consolidating')
+    expect(s().systemLabel).toBe('systemStatus.consolidating')
+
+    s().onSystemEvent('consolidationCancelled')
+
+    expect(s().maintenanceKind).toBeNull()
+    expect(s().systemLabel).toBeNull()
+  })
+
+  it('tracks only thread-level compaction as maintenance', () => {
+    s().onSystemEvent('compacting', { turnId: 'turn-1' })
+    expect(s().maintenanceKind).toBeNull()
+
+    s().onSystemEvent('compacting', { turnId: null })
+    expect(s().maintenanceKind).toBe('compacting')
+
+    s().onSystemEvent('compactCancelled')
+    expect(s().maintenanceKind).toBeNull()
   })
 })
 

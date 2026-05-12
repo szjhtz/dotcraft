@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from 'react'
 import { FileText, Globe, Link2 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { Components } from 'react-markdown'
@@ -54,6 +54,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={customComponents}
+        urlTransform={markdownUrlTransform}
       >
         {content}
       </ReactMarkdown>
@@ -432,6 +433,18 @@ function InlineReferenceLink({
       </span>
     </a>
   )
+}
+
+function markdownUrlTransform(url: string, key: string): string | null | undefined {
+  const trimmed = url.trim()
+  if (key === 'href' && isLocalFileLinkTarget(trimmed)) return trimmed
+  return defaultUrlTransform(url)
+}
+
+function isLocalFileLinkTarget(value: string): boolean {
+  return value.toLowerCase().startsWith('file://') ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.startsWith('/')
 }
 
 function resolveExternalMarkdownUrl(href: string): string | null {

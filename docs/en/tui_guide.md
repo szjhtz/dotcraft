@@ -13,7 +13,7 @@ cargo build --release
 
 The output binary is `target/release/dotcraft-tui`, or `dotcraft-tui.exe` on Windows.
 
-### Local Subprocess Mode
+### Hub-Managed Local Mode
 
 Start from a project directory:
 
@@ -21,7 +21,7 @@ Start from a project directory:
 dotcraft-tui
 ```
 
-TUI starts `dotcraft` as an AppServer child process and communicates over stdio.
+TUI starts or discovers DotCraft Hub, asks Hub to ensure the workspace AppServer, then connects to the returned AppServer WebSocket endpoint.
 
 ### Specify Workspace or Binary
 
@@ -36,7 +36,7 @@ DOTCRAFT_BIN=/usr/local/bin/dotcraft dotcraft-tui
 | Argument | Description |
 |----------|-------------|
 | `--workspace` | Workspace directory |
-| `--server-bin` | `dotcraft` / AppServer binary path |
+| `--server-bin` | `dotcraft` binary used to start Hub |
 | `--remote` | Connect to an existing WebSocket AppServer |
 | `--lang zh|en` | UI language |
 | `--theme` | Custom TOML theme |
@@ -61,7 +61,7 @@ Common slash commands include `/new`, `/compact`, `/clear`, and `/quit`. See `tu
 
 ## Advanced Topics
 
-- Default mode is best for local use; remote mode is best for shared AppServer or multiple clients.
+- Default mode is Hub-managed local mode; remote mode is for explicitly hosted AppServers.
 - Enable logs with `DOTCRAFT_TUI_LOG=debug dotcraft-tui 2>tui.log`.
 - Build system clipboard support with `cargo build --release --features clipboard`.
 
@@ -69,7 +69,7 @@ Common slash commands include `/new`, `/compact`, `/clear`, and `/quit`. See `tu
 
 ### TUI cannot find `dotcraft`
 
-Put `dotcraft` on `PATH`, or use `--server-bin` / `DOTCRAFT_BIN` to specify the binary path.
+Put `dotcraft` next to `dotcraft-tui` or on `PATH`, or use `--server-bin` / `DOTCRAFT_BIN` to specify the binary path.
 
 ### Remote connection fails
 

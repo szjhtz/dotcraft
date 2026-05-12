@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type CSSProperties } from 'react'
 import { ExternalLink, FileText, Globe2 } from 'lucide-react'
 import { useT } from '../../contexts/LocaleContext'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -24,9 +24,11 @@ export const TurnArtifacts = memo(function TurnArtifacts({ turnId }: TurnArtifac
   const changedFiles = useConversationStore((s) => s.changedFiles)
   const workspacePath = useConversationStore((s) => s.workspacePath)
   const currentThreadId = useViewerTabStore((s) => s.currentThreadId)
+  const openFile = useViewerTabStore((s) => s.openFile)
   const openBrowser = useViewerTabStore((s) => s.openBrowser)
   const focusBrowserTabByUrl = useViewerTabStore((s) => s.focusBrowserTabByUrl)
   const setActiveViewerTab = useUIStore((s) => s.setActiveViewerTab)
+  const setDetailPanelVisible = useUIStore((s) => s.setDetailPanelVisible)
 
   const artifacts = Array.from(changedFiles.values())
     .filter((file) => file.status === 'written' && turnIncludesFile(file, turnId))
@@ -63,49 +65,59 @@ export const TurnArtifacts = memo(function TurnArtifacts({ turnId }: TurnArtifac
     }
   }
 
+  async function openLocalFile(diff: FileDiff): Promise<void> {
+    if (!currentThreadId || !workspacePath) return
+    const absPath = toAbsPath(diff.filePath, workspacePath)
+    try {
+      const classified = await window.api.workspace.viewer.classify({ absolutePath: absPath })
+      const tabId = openFile({
+        threadId: currentThreadId,
+        absolutePath: absPath,
+        relativePath: diff.filePath,
+        contentClass: classified.contentClass,
+        sizeBytes: classified.sizeBytes
+      })
+      setActiveViewerTab(tabId)
+      setDetailPanelVisible(true)
+    } catch (err) {
+      console.error('Failed to open file artifact:', err)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
       {artifacts.map(({ kind, diff }) => {
         const name = basename(diff.filePath)
         const absPath = workspacePath ? toAbsPath(diff.filePath, workspacePath) : diff.filePath
         const isHtml = kind === 'html'
+        const handleCardOpen = (): void => {
+          void (isHtml ? openLocalHtml(diff) : openLocalFile(diff))
+        }
         return (
           <div
             key={`${kind}:${diff.filePath}`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '12px 14px',
-              border: '1px solid var(--border-default)',
-              borderRadius: '8px',
-              background: 'var(--bg-primary)',
-              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)'
-            }}
+            style={artifactCardStyle}
           >
-            <div
-              style={{
-                width: '44px',
-                height: '44px',
-                borderRadius: '10px',
-                background: 'var(--bg-secondary)',
-                color: 'var(--text-secondary)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}
+            <button
+              type="button"
+              aria-label={isHtml
+                ? t('turnArtifacts.openHtmlInBrowserAria', { file: name })
+                : t('turnArtifacts.openInViewerAria', { file: name })}
+              onClick={handleCardOpen}
+              style={artifactBodyButtonStyle}
             >
-              {isHtml ? <Globe2 size={22} strokeWidth={1.8} /> : <FileText size={22} strokeWidth={1.8} />}
-            </div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {name}
-              </div>
-              <div style={{ marginTop: '2px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                {isHtml ? t('turnArtifacts.htmlSubtitle') : t('turnArtifacts.markdownSubtitle')}
-              </div>
-            </div>
+              <span style={artifactIconStyle}>
+                {isHtml ? <Globe2 size={22} strokeWidth={1.8} /> : <FileText size={22} strokeWidth={1.8} />}
+              </span>
+              <span style={artifactTextWrapStyle}>
+                <span style={artifactTitleStyle}>
+                  {name}
+                </span>
+                <span style={artifactSubtitleStyle}>
+                  {isHtml ? t('turnArtifacts.htmlSubtitle') : t('turnArtifacts.markdownSubtitle')}
+                </span>
+              </span>
+            </button>
             {isHtml ? (
               <button
                 type="button"
@@ -166,4 +178,67 @@ function extensionOf(filePath: string): string {
   const name = basename(filePath).toLowerCase()
   const dot = name.lastIndexOf('.')
   return dot >= 0 ? name.slice(dot) : ''
+}
+
+const artifactCardStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12px',
+  padding: '0 14px 0 0',
+  border: '1px solid var(--border-default)',
+  borderRadius: '8px',
+  background: 'var(--bg-primary)',
+  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+  overflow: 'hidden'
+}
+
+const artifactBodyButtonStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: '68px',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12px',
+  padding: '12px 0 12px 14px',
+  border: 'none',
+  background: 'transparent',
+  color: 'inherit',
+  cursor: 'pointer',
+  textAlign: 'left',
+  font: 'inherit'
+}
+
+const artifactIconStyle: CSSProperties = {
+  width: '44px',
+  height: '44px',
+  borderRadius: '10px',
+  background: 'var(--bg-secondary)',
+  color: 'var(--text-secondary)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0
+}
+
+const artifactTextWrapStyle: CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  display: 'block'
+}
+
+const artifactTitleStyle: CSSProperties = {
+  display: 'block',
+  fontSize: '14px',
+  fontWeight: 600,
+  color: 'var(--text-primary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+
+const artifactSubtitleStyle: CSSProperties = {
+  display: 'block',
+  marginTop: '2px',
+  fontSize: '12px',
+  color: 'var(--text-secondary)'
 }

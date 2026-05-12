@@ -163,6 +163,10 @@ export interface ServerRequestPayload {
   params: unknown
 }
 
+export interface OpenThreadPayload {
+  threadId: string
+}
+
 export interface WorkspaceStatusPayload {
   status: WorkspaceSetupState
   workspacePath: string
@@ -350,6 +354,12 @@ ipcRenderer.on('app:open-chrome-settings', () => {
   activeOpenChromeSettingsCallback?.()
 })
 
+let openThreadToken = 0
+let activeOpenThreadCallback: ((payload: OpenThreadPayload) => void) | null = null
+ipcRenderer.on('app:open-thread', (_event: Electron.IpcRendererEvent, payload: OpenThreadPayload) => {
+  activeOpenThreadCallback?.(payload)
+})
+
 /**
  * Typed API exposed to the Renderer via contextBridge.
  * The Renderer accesses this as `window.api`.
@@ -477,6 +487,10 @@ const api = {
         welcomeSuggestionsEnabled: boolean | null
         skillsSelfLearningEnabled: boolean | null
         memoryAutoConsolidateEnabled: boolean | null
+        dreamsEnabled: boolean | null
+        dreamsInterval: string | null
+        dreamsThreadLookbackCount: number | null
+        dreamsAutoApply: boolean | null
         defaultApprovalPolicy: 'default' | 'autoApprove' | null
       }
       userDefaults: {
@@ -485,6 +499,10 @@ const api = {
         welcomeSuggestionsEnabled: boolean | null
         skillsSelfLearningEnabled: boolean | null
         memoryAutoConsolidateEnabled: boolean | null
+        dreamsEnabled: boolean | null
+        dreamsInterval: string | null
+        dreamsThreadLookbackCount: number | null
+        dreamsAutoApply: boolean | null
         defaultApprovalPolicy: 'default' | 'autoApprove' | null
       }
     }> {
@@ -579,6 +597,16 @@ const api = {
       return () => {
         if (openChromeSettingsToken === token) {
           activeOpenChromeSettingsCallback = null
+        }
+      }
+    },
+
+    onOpenThread(callback: (payload: OpenThreadPayload) => void): () => void {
+      const token = ++openThreadToken
+      activeOpenThreadCallback = callback
+      return () => {
+        if (openThreadToken === token) {
+          activeOpenThreadCallback = null
         }
       }
     }
@@ -816,6 +844,10 @@ const api = {
         limitBytes?: number
       }): Promise<{ text: string; truncated: boolean; encoding: string }> {
         return ipcRenderer.invoke('workspace:viewer:read-text', params)
+      },
+
+      authorizeFile(params: { absolutePath: string }): Promise<{ absolutePath: string }> {
+        return ipcRenderer.invoke('workspace:viewer:authorize-file', params)
       },
 
       toViewerUrl(params: { absolutePath: string }): Promise<{ url: string }> {

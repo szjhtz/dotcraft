@@ -279,9 +279,7 @@ function FileDiffSection({
         >
           {relativePath}
           {file.isNewFile && (
-            <span style={{ color: 'var(--info)', marginLeft: '6px', fontSize: '10px' }}>
-              {t('changesFile.newBadge')}
-            </span>
+            <NewFileDot label={t('diffViewer.newFile')} />
           )}
           {isReverted && (
             <span style={{ color: 'var(--text-dimmed)', marginLeft: '6px', fontSize: '10px' }}>
@@ -387,6 +385,27 @@ function FileStats({
       {deletions > 0 && <span style={{ color: dim ? 'var(--text-dimmed)' : 'var(--error)' }}>-{deletions}</span>}
     </span>
   )
+}
+
+function NewFileDot({ label }: { label: string }): JSX.Element {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      style={newFileDotStyle}
+    />
+  )
+}
+
+const newFileDotStyle: CSSProperties = {
+  display: 'inline-block',
+  width: '7px',
+  height: '7px',
+  marginLeft: '6px',
+  borderRadius: '999px',
+  background: 'var(--success)',
+  verticalAlign: 'middle'
 }
 
 function toRelativePath(filePath: string, workspacePath: string): string {

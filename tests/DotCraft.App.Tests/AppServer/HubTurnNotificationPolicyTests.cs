@@ -20,6 +20,26 @@ public sealed class HubTurnNotificationPolicyTests
 
         Assert.True(decision.ShouldNotify);
         Assert.Equal("User task", decision.DisplayName);
+        Assert.True(decision.OpenDesktopOnClick);
+        Assert.Equal("thread_user", decision.ThreadId);
+    }
+
+    [Fact]
+    public async Task ResolveDecision_ForNonDesktopOrigin_DoesNotOpenDesktopOnClick()
+    {
+        var service = new FakeSessionService(new SessionThread
+        {
+            Id = "thread_cli",
+            OriginChannel = "cli",
+            DisplayName = "CLI task"
+        });
+
+        var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_cli");
+
+        Assert.True(decision.ShouldNotify);
+        Assert.Equal("CLI task", decision.DisplayName);
+        Assert.False(decision.OpenDesktopOnClick);
+        Assert.Null(decision.ThreadId);
     }
 
     [Fact]
@@ -37,6 +57,8 @@ public sealed class HubTurnNotificationPolicyTests
         var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_internal");
 
         Assert.False(decision.ShouldNotify);
+        Assert.False(decision.OpenDesktopOnClick);
+        Assert.Null(decision.ThreadId);
     }
 
     [Fact]
@@ -52,6 +74,8 @@ public sealed class HubTurnNotificationPolicyTests
         var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_welcome");
 
         Assert.False(decision.ShouldNotify);
+        Assert.False(decision.OpenDesktopOnClick);
+        Assert.Null(decision.ThreadId);
     }
 
     [Fact]
@@ -72,6 +96,8 @@ public sealed class HubTurnNotificationPolicyTests
         var decision = await HubTurnNotificationPolicy.ResolveDecisionAsync(service, "thread_child");
 
         Assert.False(decision.ShouldNotify);
+        Assert.False(decision.OpenDesktopOnClick);
+        Assert.Null(decision.ThreadId);
     }
 
     [Fact]
@@ -83,6 +109,18 @@ public sealed class HubTurnNotificationPolicyTests
 
         Assert.True(decision.ShouldNotify);
         Assert.False(string.IsNullOrWhiteSpace(decision.DisplayName));
+        Assert.False(decision.OpenDesktopOnClick);
+        Assert.Null(decision.ThreadId);
+    }
+
+    [Fact]
+    public void BuildDesktopOpenActionUrl_EncodesWorkspaceAndThread()
+    {
+        var url = HubTurnNotificationPolicy.BuildDesktopOpenActionUrl(
+            @"E:\Git\dotcraft",
+            "thread 1");
+
+        Assert.Equal("dotcraft://workspace/open?path=E%3A%5CGit%5Cdotcraft&threadId=thread%201", url);
     }
 
     private sealed class FakeSessionService(SessionThread? thread, bool throwOnGet = false) : ISessionService

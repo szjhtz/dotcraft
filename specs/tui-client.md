@@ -9,12 +9,6 @@
 
 Purpose: Define the architecture, interaction model, event mapping, and behavioral contract for `dotcraft-tui`, a terminal client that connects to the DotCraft AppServer via the Wire Protocol.
 
-## Credits
-
-The DotCraft TUI interface design is inspired by [OpenAI Codex CLI](https://github.com/openai/codex), an excellent open-source terminal AI agent by OpenAI. 
-
-We thank the Codex team for their pioneering work in terminal AI agent UX.
-
 ---
 
 ## Table of Contents
@@ -192,24 +186,26 @@ Terminal KeyEvent ──► InputRouter ────────┘
 
 ## 5. Connection Modes
 
-The TUI supports two connection modes, matching the transports defined in [appserver-protocol.md §2.2](appserver-protocol.md#22-transports).
+The TUI supports two connection modes. Local mode uses Hub discovery as defined in [hub-architecture.md](hub-architecture.md); both modes speak the AppServer WebSocket transport defined in [appserver-protocol.md §15](appserver-protocol.md#15-websocket-transport).
 
-### 5.1 Subprocess Mode (Default)
+### 5.1 Hub-Managed Local Mode (Default)
 
-The TUI spawns the DotCraft AppServer as a child process and communicates over stdin/stdout:
+The TUI starts or discovers DotCraft Hub, asks Hub to ensure the workspace AppServer, and connects directly to the returned AppServer WebSocket endpoint:
 
 ```
 dotcraft-tui
 ```
 
 Startup sequence:
-1. Locate `dotcraft` binary (configurable via `--server-bin` or `DOTCRAFT_BIN` env var; defaults to `dotcraft` on PATH).
-2. Spawn: `dotcraft app-server` with stdout/stderr piped.
-3. Read stdout lines as JSONL. Write requests to stdin as JSONL.
-4. Send `initialize` request → receive response → send `initialized` notification.
-5. Ready for user interaction.
+1. Resolve the target workspace.
+2. Resolve the `dotcraft` binary used to start Hub (`--server-bin` / `DOTCRAFT_BIN`, then a sibling of `dotcraft-tui`, then `dotcraft` on PATH).
+3. Initialize the terminal UI and render the chat surface immediately (top status card, transcript/tip area, and composer).
+4. In the background, locate or start Hub and call `POST /v1/appservers/ensure`.
+5. Connect to `endpoints.appServerWebSocket`.
+6. Send `initialize` request → receive response → send `initialized` notification.
+7. Mark the UI connected and load server-backed command/model data.
 
-On TUI exit: close stdin → the AppServer receives EOF and shuts down gracefully.
+On TUI exit: close the WebSocket connection. The Hub-managed AppServer continues running.
 
 ### 5.2 Remote Mode
 
@@ -336,12 +332,14 @@ The terminal interaction model contains two logical regions:
 | Composer region | Handles drafting and submission, context hints, queued follow-up input, and global run/system status. |
 
 This spec defines behavior and state transitions, not fixed pixel/row layout or specific widget implementation.
+The default layout is content-flow oriented: when transcript content is short, the composer follows the latest visible content instead of pinning to the terminal bottom; when transcript content exceeds the available viewport, the transcript becomes scrollable and the composer naturally sits near the bottom.
 
 ### 7.2 Startup to Ready Transition
 
-- Startup state is shown immediately after terminal initialization.
-- Startup state exits when initialization handshake is complete, or on first user interaction.
-- After transition, transcript and composer interactions become available.
+- Startup state is shown immediately after terminal initialization inside the normal chat surface.
+- The top status card communicates model, workspace, optional thread, and connection state while the composer remains visible.
+- Composer editing is available during connection startup and reconnect attempts.
+- If the AppServer is not connected, `Enter` must not submit, queue, or clear the current draft. The client should show a contextual connection hint/error near the composer and let the user submit after connection succeeds.
 
 ### 7.3 Resize and Compact Constraints
 
@@ -359,10 +357,12 @@ Overlays have strict input priority when present.
 |--------------|---------|
 | Approval | `item/approval/request` |
 | Thread/session picker | Slash commands that manage threads/sessions |
-| Help | `/help`, `F1`, or `?` (scope per keybinding rules) |
+| Skills picker | `/skills` |
+| Permissions picker | `/permissions` |
 | Notification | server-side job/result notifications |
 
 When an overlay is active, base transcript/composer input must not be mutated unless the overlay explicitly delegates it.
+Inline slash-command and `$skill` completion popups are composer-local panes, not modal overlays.
 
 ---
 
@@ -372,23 +372,26 @@ When an overlay is active, base transcript/composer input must not be mutated un
 
 During startup, the client must communicate:
 - current connection progress;
-- minimal onboarding hints (for example, how to access help and sessions).
+- minimal onboarding hints (for example, how to access sessions, skills, and permissions).
 
 Visual assets (logos, glyphs, color emphasis, animation style) are implementation details.
 
 ### 8.2 Context Hint Contract
 
-The composer-adjacent hint area exposes state-sensitive guidance with deterministic priority:
+The composer-adjacent hint area exposes state-sensitive guidance with deterministic priority. It is on-demand and may occupy zero rows when the client is connected, idle, and the draft is empty.
 
 | Priority (high → low) | Condition | Required hint intent |
 |-----------------------|-----------|----------------------|
 | 1 | Quit confirmation window active | Explain second-step exit action |
-| 2 | Active turn + draft exists | Explain queue behavior |
-| 3 | Idle + draft exists | Explain submit/newline behavior |
-| 4 | Active turn + empty draft | Explain interrupt behavior |
-| 5 | Idle + empty draft | Show help/mode-switch discoverability |
+| 2 | Slash command popup open | Explain navigation, completion, execution, and close controls |
+| 3 | `$skill` popup open | Explain navigation, insertion, and close controls |
+| 4 | Disconnected/reconnecting/error | Explain connection state or show the latest connection error |
+| 5 | Active turn + draft exists | Explain queue behavior |
+| 6 | Idle + draft exists | Explain submit/newline behavior |
+| 7 | Active turn + empty draft | Explain interrupt behavior |
+| 8 | Queued follow-up exists | Show queued follow-up context |
 
-Connection and token context may be displayed when space allows, but behavior must not rely on their visibility.
+Persistent connection/thread/model/workspace context belongs in the top status card. Token context should appear only when relevant, such as during active turns or queue/interrupt states.
 
 ### 8.3 Transcript Contract
 
@@ -412,8 +415,11 @@ Composer must support:
 - mode switching between Agent and Plan;
 - input history recall semantics (`↑/↓` trigger history recall when draft is empty or history recall is already active; otherwise they remain input-local);
 - slash command entry and completion/dispatch;
+- `$skill` mention completion, inserted from the enabled skills returned by `skills/list`;
 - queued follow-up input during active turns;
 - interrupt controls during active turns.
+
+The composer stack follows the transcript in content-flow layout and consists of status indicator, queued-input preview, input editor, optional slash command or `$skill` popup, and optional contextual footer/hint line.
 
 If both turn status and system status exist, status messaging may be merged, but interrupt discoverability must remain explicit.
 
@@ -423,16 +429,32 @@ Slash commands are typed in the InputEditor and processed locally (not sent to t
 
 | Command | Action |
 |---------|--------|
-| `/help` | Show help overlay with all commands and key bindings. |
 | `/sessions` | Open ThreadPicker overlay. List threads via `thread/list`. |
 | `/new` | Start a new thread via `thread/start`. |
 | `/load <id>` | Resume a thread via `thread/resume`. |
 | `/plan` | Switch to Plan mode via `thread/mode/set`. |
 | `/agent` | Switch to Agent mode via `thread/mode/set`. |
+| `/model [name\|default]` | Open the model picker or update the workspace/thread model override. |
+| `/skills` | Open the skills picker. Toggle skills through `skills/setEnabled`. |
+| `/permissions` | Open the permissions picker. Apply thread approval policy through `thread/config/update`, or queue it for the next thread before one exists. |
 | `/clear` | Clear the chat history display (does not affect server state). |
 | `/cron` | List cron jobs via `cron/list`. Display in chat as a formatted table. |
 | `/heartbeat` | Trigger heartbeat via `heartbeat/trigger`. |
 | `/quit` | Exit the TUI. |
+
+### 8.6 Skill Mentions and Permissions
+
+Typing `$` followed by a skill name opens a skill completion list below the composer. The list uses enabled, available skills from `skills/list`; disabled skills are hidden from mention completion until re-enabled through `/skills`. Selecting a row inserts `$skill-name ` into the draft.
+
+When a turn is submitted, the client should split recognized enabled `$skill` tokens into native input parts:
+
+```json
+{ "type": "skillRef", "name": "browser" }
+```
+
+Unrecognized tokens remain normal text. This keeps the user-visible draft compatible with plain text while allowing the AppServer to materialize skill context precisely.
+
+`/permissions` presents approval presets for the current thread. If no thread exists, the selected preset is stored locally and sent in the next `thread/start.config`.
 
 ---
 
@@ -446,7 +468,7 @@ The TUI has three interaction states:
 |-------|---------------------|----------|
 | `InputEditor` | Default state. All printable keys, Enter, Backspace, and input-editing keys. | Draft editing and submission. Input context remains available in both `Idle` and active turn states. |
 | `TranscriptBrowse` | Entered by explicit browse actions (`Esc`, `PageUp`, `PageDown`, `Home`, `End`) when no overlay is active. | Transcript navigation. `Enter`, `i`, or any printable input returns to `InputEditor`. |
-| `Overlay` | Any modal overlay (`ApprovalOverlay`, `ThreadPicker`, `HelpOverlay`, etc.). | Overlay owns all input until dismissed/resolved. |
+| `Overlay` | Any modal overlay (`ApprovalOverlay`, `ThreadPicker`, `SkillsPicker`, `PermissionsPicker`, etc.). | Overlay owns all input until dismissed/resolved. |
 
 Additional constraints:
 
@@ -465,7 +487,7 @@ Additional constraints:
 | `PageUp` / `PageDown` / `Home` / `End` | Enter/continue transcript browsing | Navigate transcript | Overlay-local or ignored |
 | Mouse wheel | Scroll transcript and enter/continue browse | Scroll transcript | Overlay-local or ignored |
 | `↑` / `↓` | History recall when draft is empty or recall is active; otherwise input-local caret/history behavior | Scroll transcript by line | Overlay-local navigation |
-| `Tab` / `Shift+Tab` | Completion/queue and mode toggle | No state switch side effects | Overlay-local or ignored |
+| `Tab` / `Shift+Tab` | Slash or `$skill` completion, queue, and mode toggle | No state switch side effects | Overlay-local or ignored |
 
 ### 9.2 Global Key Bindings
 
@@ -478,10 +500,8 @@ These bindings are active regardless of focus:
 | `Ctrl+L` | Redraw the terminal. |
 | `Shift+Tab` | Toggle between Agent and Plan mode. |
 | `PageUp` / `PageDown` / `Home` / `End` | Enter/continue transcript browsing when no overlay is active. |
-| `F1` | Show HelpOverlay (global). |
-| `?` (in transcript browse context) | Show HelpOverlay. |
 
-`Tab` behavior in `InputEditor` is reserved for slash completion or queueing follow-up input during active turns (§8.4).
+`Tab` behavior in `InputEditor` is reserved for slash/skill completion or queueing follow-up input during active turns (§8.4).
 
 ### 9.3 Terminal Compatibility
 
@@ -584,7 +604,7 @@ The TUI crate is organized into five top-level modules:
 | `pulldown-cmark` | 0.12+ | Markdown parsing |
 | `syntect` | 5.x | Code syntax highlighting |
 | `clap` | 4.x | CLI argument parsing (`derive`) |
-| `tokio-tungstenite` | 0.24+ | WebSocket client (for remote mode) |
+| `tokio-tungstenite` | 0.24+ | WebSocket client (for Hub-managed local and remote modes) |
 | `chrono` | 0.4+ | Timestamp formatting |
 | `unicode-width` | 0.2+ | Correct CJK character width calculation |
 

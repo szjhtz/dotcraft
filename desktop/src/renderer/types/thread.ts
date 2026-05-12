@@ -34,8 +34,10 @@ export interface ThreadGoal {
 
 export interface ThreadRuntimeSnapshot {
   running: boolean
+  busy?: boolean
   waitingOnApproval: boolean
   waitingOnPlanConfirmation: boolean
+  maintenanceKind?: 'compacting' | 'consolidating' | string | null
 }
 
 export interface SubAgentThreadSourceWire {

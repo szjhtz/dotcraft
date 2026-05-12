@@ -13,7 +13,7 @@ cargo build --release
 
 构建产物位于 `target/release/dotcraft-tui`，Windows 下为 `dotcraft-tui.exe`。
 
-### 本地子进程模式
+### Hub 托管本地模式
 
 在项目目录中启动：
 
@@ -21,7 +21,7 @@ cargo build --release
 dotcraft-tui
 ```
 
-TUI 会自动启动 `dotcraft` 作为 AppServer 子进程，并通过 stdio 通信。
+TUI 会启动或发现 DotCraft Hub，让 Hub 为当前工作区确保 AppServer 已运行，然后连接 Hub 返回的 AppServer WebSocket 端点。
 
 ### 指定工作区或二进制
 
@@ -36,7 +36,7 @@ DOTCRAFT_BIN=/usr/local/bin/dotcraft dotcraft-tui
 | 参数 | 说明 |
 |------|------|
 | `--workspace` | 指定工作区目录 |
-| `--server-bin` | 指定 `dotcraft` / AppServer 二进制 |
+| `--server-bin` | 指定用于启动 Hub 的 `dotcraft` 二进制 |
 | `--remote` | 连接已有 WebSocket AppServer |
 | `--lang zh|en` | 指定界面语言 |
 | `--theme` | 加载自定义主题 TOML |
@@ -61,7 +61,7 @@ dotcraft-tui --remote ws://127.0.0.1:9100/ws
 
 ## 进阶
 
-- 默认模式适合本地使用；远程模式适合共享 AppServer 或多客户端接入。
+- 默认模式是 Hub 托管本地模式；远程模式适合显式托管的 AppServer。
 - 可通过 `DOTCRAFT_TUI_LOG=debug dotcraft-tui 2>tui.log` 打开日志。
 - 可用 `cargo build --release --features clipboard` 构建系统剪贴板支持。
 
@@ -69,7 +69,7 @@ dotcraft-tui --remote ws://127.0.0.1:9100/ws
 
 ### TUI 找不到 `dotcraft`
 
-把 `dotcraft` 加入 `PATH`，或使用 `--server-bin` / `DOTCRAFT_BIN` 指定二进制路径。
+把 `dotcraft` 放在 `dotcraft-tui` 同目录或加入 `PATH`，也可以使用 `--server-bin` / `DOTCRAFT_BIN` 指定二进制路径。
 
 ### 远程连接失败
 

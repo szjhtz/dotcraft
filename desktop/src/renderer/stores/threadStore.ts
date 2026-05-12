@@ -151,8 +151,10 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
 
         const snapshot: ThreadRuntimeSnapshot = {
           running: runtime.running === true,
+          busy: runtime.busy === true,
           waitingOnApproval: runtime.waitingOnApproval === true,
-          waitingOnPlanConfirmation: runtime.waitingOnPlanConfirmation === true
+          waitingOnPlanConfirmation: runtime.waitingOnPlanConfirmation === true,
+          maintenanceKind: runtime.maintenanceKind ?? null
         }
         const previous = runtimeSnapshots.get(thread.id)
         const isActive = state.activeThreadId === thread.id
@@ -242,8 +244,10 @@ export const useThreadStore = create<ThreadStore>((set, _get) => ({
         if (!runtime) continue
         const snapshot: ThreadRuntimeSnapshot = {
           running: runtime.running === true,
+          busy: runtime.busy === true,
           waitingOnApproval: runtime.waitingOnApproval === true,
-          waitingOnPlanConfirmation: runtime.waitingOnPlanConfirmation === true
+          waitingOnPlanConfirmation: runtime.waitingOnPlanConfirmation === true,
+          maintenanceKind: runtime.maintenanceKind ?? null
         }
         runtimeSnapshots.set(thread.id, snapshot)
         if (snapshot.running) {

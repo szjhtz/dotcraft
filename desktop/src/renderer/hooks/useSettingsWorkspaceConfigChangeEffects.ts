@@ -12,6 +12,7 @@ interface UseSettingsWorkspaceConfigChangeEffectsArgs {
   subAgentEnabled?: boolean
   onExternalLlmChangeNotice: () => void
   reloadWorkspaceCore: () => Promise<void> | void
+  reloadDreamsStatus?: () => Promise<void> | void
   reloadMcpData: () => Promise<void> | void
   reloadSubAgentData?: () => Promise<void> | void
   clearServerChannels: () => void
@@ -25,6 +26,7 @@ export function useSettingsWorkspaceConfigChangeEffects({
   subAgentEnabled = false,
   onExternalLlmChangeNotice,
   reloadWorkspaceCore,
+  reloadDreamsStatus,
   reloadMcpData,
   reloadSubAgentData,
   clearServerChannels
@@ -54,6 +56,9 @@ export function useSettingsWorkspaceConfigChangeEffects({
         onExternalLlmChangeNotice()
       }
       void reloadWorkspaceCore()
+      if (changedRegions.has('memory')) {
+        void reloadDreamsStatus?.()
+      }
     }
 
     if (changedRegions.has('mcp') && mcpEnabled) {
@@ -74,6 +79,7 @@ export function useSettingsWorkspaceConfigChangeEffects({
     llmDirty,
     mcpEnabled,
     onExternalLlmChangeNotice,
+    reloadDreamsStatus,
     reloadMcpData,
     reloadSubAgentData,
     reloadWorkspaceCore,

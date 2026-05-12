@@ -236,7 +236,9 @@ Desktop 可以要求 Hub 在托管 AppServer 之前启动 APIProxy 辅助进程�
   "body": "Agent 已完成请求的更改。",
   "severity": "success",
   "source": "appserver",
-  "actionUrl": "dotcraft://workspace/open?path=/Users/me/project"
+  "threadId": "thread_abc",
+  "actionUrl": "dotcraft://workspace/open?path=/Users/me/project&threadId=thread_abc",
+  "openDesktopOnClick": true
 }
 ```
 
@@ -249,6 +251,8 @@ Desktop 可以要求 Hub 在托管 AppServer 之前启动 APIProxy 辅助进程�
 ```
 
 `severity` 会被规范化为 `info`、`success`、`warning` 或 `error`。
+
+`threadId`、`actionUrl` 和 `openDesktopOnClick` 是可选字段。AppServer 发送的 turn 通知只有在线程来源为 Desktop 时才会使用 `dotcraft://workspace/open`；其他来源的通知应设置 `openDesktopOnClick: false`，避免点击通知拉起 Desktop。
 
 ## 事件
 

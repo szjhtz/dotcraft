@@ -1,4 +1,5 @@
 using DotCraft.Configuration;
+using DotCraft.Dreams;
 using DotCraft.Hosting;
 using DotCraft.Tracing;
 using Microsoft.AspNetCore.Builder;
@@ -23,7 +24,9 @@ public sealed class DashBoardServer : IAsyncDisposable
         IEnumerable<IOrchestratorSnapshotProvider>? orchestratorProviders = null,
         IEnumerable<Type>? configTypes = null,
         IDashBoardSessionHandler? sessionHandler = null,
-        bool refreshTraceFromDiskBeforeRead = false)
+        bool refreshTraceFromDiskBeforeRead = false,
+        DreamStore? dreamStore = null,
+        DreamsService? dreamsService = null)
     {
         var dashBoardConfig = config.DashBoard;
         var builder = WebApplication.CreateBuilder();
@@ -56,7 +59,9 @@ public sealed class DashBoardServer : IAsyncDisposable
             orchestratorProviders,
             configTypes,
             sessionHandler: sessionHandler,
-            refreshTraceFromDiskBeforeRead: refreshTraceFromDiskBeforeRead);
+            refreshTraceFromDiskBeforeRead: refreshTraceFromDiskBeforeRead,
+            dreamStore: dreamStore,
+            dreamsService: dreamsService);
 
         var url = $"http://{dashBoardConfig.Host}:{dashBoardConfig.Port}";
         _app = app;

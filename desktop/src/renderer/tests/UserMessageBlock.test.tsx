@@ -1,10 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LocaleProvider } from '../contexts/LocaleContext'
 import { UserMessageBlock } from '../components/conversation/UserMessageBlock'
 import { GoalControlPopover } from '../components/conversation/GoalControlPopover'
+import { useConversationStore } from '../stores/conversationStore'
+import { useThreadStore } from '../stores/threadStore'
+import { useUIStore } from '../stores/uiStore'
+import { useViewerTabStore } from '../stores/viewerTabStore'
 
 const settingsGet = vi.fn()
+const readImageAsDataUrl = vi.fn()
+const authorizeFile = vi.fn()
+const classify = vi.fn()
 
 function renderWithLocale(ui: JSX.Element): void {
   render(
@@ -16,11 +23,36 @@ function renderWithLocale(ui: JSX.Element): void {
 
 describe('UserMessageBlock trigger source pills', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     settingsGet.mockResolvedValue({ locale: 'en' })
+    readImageAsDataUrl.mockResolvedValue({ dataUrl: '' })
+    authorizeFile.mockImplementation(async ({ absolutePath }: { absolutePath: string }) => ({ absolutePath }))
+    classify.mockResolvedValue({ contentClass: 'text', mime: 'text/plain', sizeBytes: 10 })
+    useConversationStore.getState().reset()
+    useConversationStore.setState({ workspacePath: 'F:/workspace' })
+    useThreadStore.setState({ activeThreadId: 'thread-1' })
+    useViewerTabStore.setState({
+      byThread: new Map(),
+      currentThreadId: 'thread-1',
+      currentWorkspacePath: 'F:/workspace'
+    })
+    useUIStore.setState({
+      activeDetailTab: { kind: 'system', id: 'changes' },
+      detailPanelPreferredVisible: false,
+      detailPanelVisible: false
+    })
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
-        settings: { get: settingsGet }
+        settings: { get: settingsGet },
+        workspace: {
+          readImageAsDataUrl,
+          viewer: {
+            authorizeFile,
+            classify
+          }
+        },
+        shell: { openExternal: vi.fn() }
       }
     })
   })
@@ -50,6 +82,66 @@ describe('UserMessageBlock trigger source pills', () => {
     )
 
     expect(screen.getByRole('button', { name: 'Sent via automation · Automation · Nightly checks' })).toBeInTheDocument()
+  })
+
+  it('opens workspace-external file chips in the internal viewer', async () => {
+    renderWithLocale(
+      <UserMessageBlock
+        text=""
+        nativeInputParts={[
+          { type: 'fileRef', path: 'C:\\temp\\notes.txt', displayPath: 'notes.txt' }
+        ]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open notes.txt in DotCraft viewer' }))
+
+    await waitFor(() => {
+      expect(authorizeFile).toHaveBeenCalledWith({ absolutePath: 'C:/temp/notes.txt' })
+      expect(classify).toHaveBeenCalledWith({ absolutePath: 'C:/temp/notes.txt' })
+    })
+    const activeTab = useUIStore.getState().activeDetailTab
+    expect(activeTab.kind).toBe('viewer')
+    if (activeTab.kind === 'viewer') {
+      const tab = useViewerTabStore.getState().getThreadState('thread-1').tabs.find((entry) => entry.id === activeTab.id)
+      expect(tab).toMatchObject({
+        kind: 'file',
+        absolutePath: 'C:/temp/notes.txt',
+        relativePath: 'C:/temp/notes.txt',
+        contentClass: 'text'
+      })
+    }
+  })
+
+  it('keeps failed external image rehydration clickable for the internal viewer', async () => {
+    readImageAsDataUrl.mockRejectedValue(new Error('outside workspace'))
+    authorizeFile.mockResolvedValue({ absolutePath: 'D:/pics/photo.png' })
+    classify.mockResolvedValue({ contentClass: 'image', mime: 'image/png', sizeBytes: 20 })
+
+    renderWithLocale(
+      <UserMessageBlock
+        text=""
+        images={[{ path: 'D:/pics/photo.png', fileName: 'photo.png', mimeType: 'image/png' }]}
+      />
+    )
+
+    const button = await screen.findByRole('button', { name: 'Open image photo.png in DotCraft viewer' })
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(authorizeFile).toHaveBeenCalledWith({ absolutePath: 'D:/pics/photo.png' })
+      expect(classify).toHaveBeenCalledWith({ absolutePath: 'D:/pics/photo.png' })
+    })
+    const activeTab = useUIStore.getState().activeDetailTab
+    expect(activeTab.kind).toBe('viewer')
+    if (activeTab.kind === 'viewer') {
+      const tab = useViewerTabStore.getState().getThreadState('thread-1').tabs.find((entry) => entry.id === activeTab.id)
+      expect(tab).toMatchObject({
+        kind: 'file',
+        absolutePath: 'D:/pics/photo.png',
+        contentClass: 'image'
+      })
+    }
   })
 })
 

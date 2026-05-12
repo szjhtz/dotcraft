@@ -7,6 +7,7 @@ using DotCraft.Cron;
 using DotCraft.Heartbeat;
 using DotCraft.Lsp;
 using DotCraft.Mcp;
+using DotCraft.Dreams;
 using DotCraft.Memory;
 using DotCraft.Modules;
 using DotCraft.Protocol;
@@ -35,6 +36,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
         AgentRunner agentRunner,
         CronService cronService,
         HeartbeatService heartbeatService,
+        DreamsService dreamsService,
         IAutomationsRequestHandler? automationsHandler,
         IAppServerChannelListContributor channelListContributor,
         IReadOnlyList<ConfigSchemaSection> configSchema,
@@ -60,6 +62,8 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
         public CronService CronService { get; } = cronService;
 
         public HeartbeatService HeartbeatService { get; } = heartbeatService;
+
+        public DreamsService DreamsService { get; } = dreamsService;
 
         public IAutomationsRequestHandler? AutomationsHandler { get; } = automationsHandler;
 
@@ -127,6 +131,8 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
     public CronService CronService => EnsureStarted().CronService;
 
     public HeartbeatService HeartbeatService => EnsureStarted().HeartbeatService;
+
+    public DreamsService DreamsService => EnsureStarted().DreamsService;
 
     public IAutomationsRequestHandler? AutomationsHandler => EnsureStarted().AutomationsHandler;
 
@@ -211,6 +217,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
             HeartbeatService? heartbeatService = null;
             IWorkspaceRuntimeAppServerFeature? appServerFeature = null;
             WelcomeSuggestionService? welcomeSuggestionService = null;
+            DreamsService? dreamsService = null;
             try
             {
                 agentFactory = new AgentFactory(
@@ -228,6 +235,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                         WorkspacePath = Paths.WorkspacePath,
                         BotPath = Paths.CraftPath,
                         MemoryStore = MemoryStore,
+                        DreamStore = Services.GetRequiredService<DreamStore>(),
                         SkillsLoader = SkillsLoader,
                         ContextPageManager = contextPageManager,
                         ApprovalService = scopedApproval,
@@ -309,6 +317,25 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                 var channelListContributor =
                     new ModuleRegistryChannelListContributor(moduleRegistry, cronService, heartbeatService);
                 var configSchema = BuildConfigSchema();
+                var dreamsRunner = new DreamsSessionRunner(
+                    sessionService,
+                    Services.GetRequiredService<SessionPersistenceService>(),
+                    openAIClientProvider,
+                    Config,
+                    Paths.WorkspacePath,
+                    Services.GetRequiredService<DreamsRunRegistry>(),
+                    Services.GetRequiredService<DreamStore>(),
+                    Services.GetService<ILoggerFactory>()
+                        ?.CreateLogger<DreamsSessionRunner>());
+                dreamsService = new DreamsService(
+                    Config,
+                    Services.GetRequiredService<DreamsInputCollector>(),
+                    dreamsRunner,
+                    Services.GetRequiredService<DreamStore>(),
+                    Services.GetRequiredService<DreamsStateStore>(),
+                    Services.GetService<ILoggerFactory>()
+                        ?.CreateLogger<DreamsService>());
+                await dreamsService.StartAsync(ct);
 
                 if (_appServerFeatureFactory != null)
                 {
@@ -324,6 +351,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                             agentRunner,
                             cronService,
                             heartbeatService,
+                            dreamsService,
                             emitCronStateChanged: (job, id, removed) =>
                                 CronStateChanged?.Invoke(job, id, removed),
                             emitBackgroundJobResult: result =>
@@ -342,6 +370,7 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                     agentRunner,
                     cronService,
                     heartbeatService,
+                    dreamsService,
                     Services.GetService<IAutomationsRequestHandler>(),
                     channelListContributor,
                     configSchema,
@@ -371,6 +400,18 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                     try
                     {
                         await welcomeSuggestionService.DisposeAsync();
+                    }
+                    catch
+                    {
+                        // ignored during failed startup cleanup
+                    }
+                }
+
+                if (dreamsService != null)
+                {
+                    try
+                    {
+                        await dreamsService.DisposeAsync();
                     }
                     catch
                     {
@@ -472,6 +513,15 @@ public sealed class WorkspaceRuntime : IAsyncDisposable
                 {
                     (errors ??= []).Add(ex);
                 }
+            }
+
+            try
+            {
+                await started.DreamsService.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                (errors ??= []).Add(ex);
             }
 
             try

@@ -106,6 +106,23 @@ public sealed class PromptBuilderSubAgentTests : IDisposable
     }
 
     [Fact]
+    public void Prompt_IncludesResponseStyleGuidance()
+    {
+        var mainPrompt = CreateMainBuilder(
+                toolNames: ["ReadFile", "GrepFiles", "FindFiles"])
+            .BuildSystemPrompt();
+        var subAgentPrompt = CreateBuilder(
+                toolNames: ["ReadFile", "GrepFiles", "FindFiles"],
+                roleInstructions: "Role-specific guidance.")
+            .BuildSystemPrompt();
+
+        Assert.Contains("## Response Style", mainPrompt, StringComparison.Ordinal);
+        Assert.Contains("Be concise, direct, and useful", mainPrompt, StringComparison.Ordinal);
+        Assert.Contains("## Response Style", subAgentPrompt, StringComparison.Ordinal);
+        Assert.Contains("Be concise, direct, and useful", subAgentPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AgentPrompt_WithExistingTodoList_DoesNotInjectTodoState()
     {
         var planStore = new PlanStore(_craftDir);

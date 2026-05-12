@@ -6,6 +6,7 @@ import { useViewerTabStore } from '../stores/viewerTabStore'
 import { useToastStore } from '../stores/toastStore'
 
 const classifyMock = vi.fn()
+const authorizeFileMock = vi.fn()
 const shellOpenExternalMock = vi.fn()
 
 function t(key: string): string {
@@ -20,12 +21,14 @@ describe('openConversationLink', () => {
       mime: 'text/plain',
       sizeBytes: 12
     })
+    authorizeFileMock.mockImplementation(async ({ absolutePath }: { absolutePath: string }) => ({ absolutePath }))
     shellOpenExternalMock.mockResolvedValue(undefined)
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
         workspace: {
           viewer: {
+            authorizeFile: authorizeFileMock,
             classify: classifyMock
           }
         },
@@ -58,6 +61,7 @@ describe('openConversationLink', () => {
       t
     })
     expect(ok).toBe(true)
+    expect(authorizeFileMock).toHaveBeenCalledWith({ absolutePath: 'C:/repo/README.md' })
     expect(classifyMock).toHaveBeenCalledWith({ absolutePath: 'C:/repo/README.md' })
     const tabs = useViewerTabStore.getState().getThreadState('thread-1').tabs
     expect(tabs).toHaveLength(1)
@@ -98,6 +102,32 @@ describe('openConversationLink', () => {
     })
     const tabs = useViewerTabStore.getState().getThreadState('thread-1').tabs
     expect(tabs).toHaveLength(2)
+  })
+
+  it('opens workspace-external file links after authorizing the exact file', async () => {
+    authorizeFileMock.mockResolvedValue({ absolutePath: 'D:/reference/outside.png' })
+    classifyMock.mockResolvedValue({
+      contentClass: 'image',
+      mime: 'image/png',
+      sizeBytes: 20
+    })
+
+    const ok = await openConversationLink({
+      target: 'D:/reference/outside.png',
+      workspacePath: 'C:/repo',
+      threadId: 'thread-1',
+      t
+    })
+
+    expect(ok).toBe(true)
+    expect(authorizeFileMock).toHaveBeenCalledWith({ absolutePath: 'D:/reference/outside.png' })
+    const tab = useViewerTabStore.getState().getThreadState('thread-1').tabs[0]
+    expect(tab).toMatchObject({
+      kind: 'file',
+      absolutePath: 'D:/reference/outside.png',
+      relativePath: 'D:/reference/outside.png',
+      contentClass: 'image'
+    })
   })
 
   it('hands off external links without opening panel', async () => {

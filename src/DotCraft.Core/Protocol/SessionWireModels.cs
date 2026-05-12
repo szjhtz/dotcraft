@@ -135,7 +135,7 @@ public sealed record ContextUsageSnapshot
 public sealed record ThreadCompactResult
 {
     /// <summary>
-    /// Lowercase compaction outcome: <c>micro</c>, <c>partial</c>, <c>skipped</c>, or <c>failed</c>.
+    /// Lowercase compaction outcome: <c>micro</c>, <c>partial</c>, <c>skipped</c>, <c>failed</c>, or <c>cancelled</c>.
     /// </summary>
     public string Outcome { get; init; } = "skipped";
 
@@ -152,7 +152,7 @@ public sealed record ThreadCompactResult
 public sealed record ThreadMemoryConsolidationResult
 {
     /// <summary>
-    /// Lowercase consolidation outcome: <c>succeeded</c>, <c>skipped</c>, or <c>failed</c>.
+    /// Lowercase consolidation outcome: <c>succeeded</c>, <c>skipped</c>, <c>failed</c>, or <c>cancelled</c>.
     /// </summary>
     public string Outcome { get; init; } = "skipped";
 
@@ -408,7 +408,8 @@ public static class SessionWireMapper
             Running = runningTurn != null,
             WaitingOnApproval = runningTurn?.Status == TurnStatus.WaitingApproval,
             WaitingOnPlanConfirmation = lastTurn?.Status == TurnStatus.Completed
-                && EndsWithSuccessfulCreatePlanInPlanMode(thread, lastTurn)
+                && EndsWithSuccessfulCreatePlanInPlanMode(thread, lastTurn),
+            Busy = runningTurn != null
         };
     }
 

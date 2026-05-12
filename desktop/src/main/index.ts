@@ -47,7 +47,22 @@ import {
   type ProxyOAuthProvider
 } from './settings'
 import { mergeUpdatedSettings } from './settingsMerge'
-import { acquireWorkspaceLock, releaseWorkspaceLock } from './workspaceLock'
+import {
+  acquireWorkspaceLock,
+  releaseWorkspaceLock,
+  updateWorkspaceLockActivation,
+  type WorkspaceActivationEndpoint
+} from './workspaceLock'
+import {
+  requestWorkspaceActivation,
+  startWorkspaceActivationServer,
+  type WorkspaceActivationHandle
+} from './desktopActivation'
+import {
+  findWorkspaceOpenDeepLink,
+  parseWorkspaceOpenDeepLink,
+  type WorkspaceOpenDeepLink
+} from './desktopDeepLink'
 import {
   getWorkspaceStatus,
   runWorkspaceSetup,
@@ -97,7 +112,7 @@ import {
   ensureMacProxyOAuthCallbackForwarder,
   stopMacProxyOAuthCallbackForwarders
 } from './proxyOAuthCallbackForwarder'
-import { ensureTrayProcess, runTrayProcess } from './trayManager'
+import { ensureTrayProcess, openDesktopWindow, runTrayProcess } from './trayManager'
 import { configureAppIdentity } from './appIdentity'
 import { resolveDotCraftRuntimeTools } from './ripgrepRuntime'
 
@@ -127,7 +142,13 @@ let proxyStatus: ProxyStatusPayload = { status: 'stopped' }
 let pendingProxyOverrideCleanup: Promise<void> = Promise.resolve()
 let hubEventAbortController: AbortController | null = null
 let pendingChromeSettingsDeepLink = process.argv.some(isChromeSettingsDeepLink)
+let pendingWorkspaceOpenThreadId = findWorkspaceOpenDeepLink(process.argv)?.threadId ?? null
 let chromeSettingsDeepLinkServer: net.Server | null = null
+let workspaceActivation:
+  | { workspacePath: string; handle: WorkspaceActivationHandle }
+  | null = null
+let workspaceActivationStartingFor = ''
+let workspaceActivationGeneration = 0
 const isTrayMode = process.argv.includes('--tray')
 const CHROME_SETTINGS_DEEP_LINK_PORT = Number.parseInt(process.env.DOTCRAFT_DESKTOP_DEEPLINK_PORT || '32178', 10)
 
@@ -230,6 +251,11 @@ browserUseManager.setPolicyHost({
 })
 
 function resolveWorkspacePath(settings: AppSettings): string | null {
+  const workspaceOpen = findWorkspaceOpenDeepLink(process.argv)
+  if (workspaceOpen) {
+    return workspaceOpen.workspacePath
+  }
+
   const argIdx = process.argv.indexOf('--workspace')
   if (argIdx !== -1 && process.argv[argIdx + 1]) {
     return process.argv[argIdx + 1]
@@ -390,6 +416,7 @@ function updateProxyStatusFromHubResponse(
 
 function releaseCurrentWorkspaceLock(): void {
   if (!currentWorkspacePath) return
+  stopWorkspaceActivation()
   releaseWorkspaceLock(currentWorkspacePath)
   currentWorkspacePath = ''
 }
@@ -510,6 +537,10 @@ function showWindowSafely(win: BrowserWindow): void {
   win.focus()
 }
 
+function isSameWorkspacePath(a: string, b: string): boolean {
+  return resolvePath(a) === resolvePath(b)
+}
+
 function isChromeSettingsDeepLink(value: string): boolean {
   try {
     const parsed = new URL(value)
@@ -520,6 +551,45 @@ function isChromeSettingsDeepLink(value: string): boolean {
     )
   } catch {
     return false
+  }
+}
+
+function sendOpenThread(win: BrowserWindow, threadId: string): void {
+  const id = threadId.trim()
+  if (!id || win.isDestroyed()) return
+  const send = (): void => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('app:open-thread', { threadId: id })
+    }
+  }
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', send)
+  } else {
+    send()
+  }
+}
+
+function flushPendingWorkspaceOpenThread(win: BrowserWindow): void {
+  const threadId = pendingWorkspaceOpenThreadId?.trim()
+  if (!threadId) return
+  pendingWorkspaceOpenThreadId = null
+  sendOpenThread(win, threadId)
+}
+
+function openCurrentWorkspaceThread(threadId?: string | null): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) {
+    if (threadId?.trim()) pendingWorkspaceOpenThreadId = threadId.trim()
+    return
+  }
+
+  showWindowSafely(win)
+  if (!threadId?.trim()) return
+
+  if (lastConnectionStatus.status === 'connected') {
+    sendOpenThread(win, threadId)
+  } else {
+    pendingWorkspaceOpenThreadId = threadId.trim()
   }
 }
 
@@ -546,6 +616,68 @@ function openChromeSettingsFromDeepLink(): void {
   pendingChromeSettingsDeepLink = false
   showWindowSafely(win)
   sendOpenChromeSettings(win)
+}
+
+function stopWorkspaceActivation(): void {
+  workspaceActivationGeneration++
+  workspaceActivationStartingFor = ''
+  workspaceActivation?.handle.close()
+  workspaceActivation = null
+}
+
+function ensureWorkspaceActivation(workspacePath: string): void {
+  const win = mainWindow
+  if (!workspacePath || !win || win.isDestroyed()) return
+  if (workspaceActivation?.workspacePath === workspacePath) {
+    updateWorkspaceLockActivation(workspacePath, workspaceActivation.handle.endpoint)
+    return
+  }
+  if (workspaceActivationStartingFor === workspacePath) return
+
+  stopWorkspaceActivation()
+  const generation = workspaceActivationGeneration
+  workspaceActivationStartingFor = workspacePath
+  void startWorkspaceActivationServer({
+    workspacePath,
+    getWindow: () => mainWindow,
+    onActivate: (request) => {
+      openCurrentWorkspaceThread(request.threadId)
+    }
+  }).then((handle) => {
+    if (generation !== workspaceActivationGeneration || currentWorkspacePath !== workspacePath || isAppQuitting) {
+      handle.close()
+      return
+    }
+    workspaceActivation = { workspacePath, handle }
+    updateWorkspaceLockActivation(workspacePath, handle.endpoint)
+  }).catch((error) => {
+    console.warn('[desktop] failed to start workspace activation server', error)
+  }).finally(() => {
+    if (workspaceActivationStartingFor === workspacePath) {
+      workspaceActivationStartingFor = ''
+    }
+  })
+}
+
+async function activateExistingWorkspace(
+  workspacePath: string,
+  threadId: string | null | undefined,
+  activation: WorkspaceActivationEndpoint | undefined
+): Promise<boolean> {
+  if (!activation) return false
+  return await requestWorkspaceActivation(activation, {
+    workspacePath,
+    threadId: threadId ?? null
+  })
+}
+
+function handleWorkspaceOpenDeepLink(link: WorkspaceOpenDeepLink): void {
+  if (currentWorkspacePath && isSameWorkspacePath(currentWorkspacePath, link.workspacePath)) {
+    openCurrentWorkspaceThread(link.threadId)
+    return
+  }
+
+  void openDesktopWindow(link.workspacePath, link.threadId)
 }
 
 function startChromeSettingsDeepLinkServer(): void {
@@ -766,6 +898,7 @@ async function connectViaWebSocket(
         capabilities: result.capabilities as Record<string, unknown>,
         dashboardUrl: result.dashboardUrl
       })
+      flushPendingWorkspaceOpenThread(mainWindow)
     }
     void autoStartEnabledModules()
   }
@@ -1009,11 +1142,13 @@ async function openWorkspaceWithoutConnection(workspacePath: string): Promise<vo
   }
 
   if (currentWorkspacePath && currentWorkspacePath !== workspacePath) {
+    stopWorkspaceActivation()
     releaseWorkspaceLock(currentWorkspacePath)
   }
 
   await teardownRuntime('switch to setup-required workspace')
   currentWorkspacePath = workspacePath
+  ensureWorkspaceActivation(workspacePath)
   reregisterIpcForWorkspace(workspacePath)
 
   const win = mainWindow
@@ -1068,6 +1203,7 @@ async function connectToAppServer(workspacePath: string): Promise<void> {
 
   // Release lock on previous workspace after the new lock is secured
   if (currentWorkspacePath && currentWorkspacePath !== workspacePath) {
+    stopWorkspaceActivation()
     releaseWorkspaceLock(currentWorkspacePath)
   }
 
@@ -1075,6 +1211,7 @@ async function connectToAppServer(workspacePath: string): Promise<void> {
   await teardownRuntime('switch/reconnect before new connect')
 
   currentWorkspacePath = workspacePath
+  ensureWorkspaceActivation(workspacePath)
   if (mainWindow && !mainWindow.isDestroyed()) {
     emitWorkspaceStatus(mainWindow, getWorkspaceStatus(workspacePath))
   }
@@ -1283,14 +1420,19 @@ function registerMenuPopupIpc(): void {
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.on('open-url', (event, url) => {
-  if (!isChromeSettingsDeepLink(url)) {
+  const workspaceOpen = parseWorkspaceOpenDeepLink(url)
+  if (workspaceOpen) {
+    event.preventDefault()
+    handleWorkspaceOpenDeepLink(workspaceOpen)
     return
   }
+
+  if (!isChromeSettingsDeepLink(url)) return
   event.preventDefault()
   openChromeSettingsFromDeepLink()
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   isAppQuitting = false
   if (isTrayMode) {
     Menu.setApplicationMenu(null)
@@ -1331,6 +1473,7 @@ app.whenReady().then(() => {
     })
   }
 
+  const initialWorkspaceOpenDeepLink = findWorkspaceOpenDeepLink(process.argv)
   let workspacePath = resolveWorkspacePath(sharedSettings)
 
   // If another process is already using this workspace, start without one
@@ -1338,6 +1481,14 @@ app.whenReady().then(() => {
   if (workspacePath) {
     const lockCheck = acquireWorkspaceLock(workspacePath)
     if (!lockCheck.ok) {
+      if (
+        initialWorkspaceOpenDeepLink &&
+        isSameWorkspacePath(initialWorkspaceOpenDeepLink.workspacePath, workspacePath) &&
+        await activateExistingWorkspace(workspacePath, initialWorkspaceOpenDeepLink.threadId, lockCheck.activation)
+      ) {
+        app.quit()
+        return
+      }
       workspacePath = null
     } else {
       addRecentWorkspace(sharedSettings, workspacePath)
@@ -1350,6 +1501,9 @@ app.whenReady().then(() => {
   const win = createWindow(workspacePath)
   mainWindow = win
   currentWorkspacePath = workspacePath ?? ''
+  if (workspacePath) {
+    ensureWorkspaceActivation(workspacePath)
+  }
   setViewerWorkspaceRoot(workspacePath ?? '')
 
   registerDesktopIpcHandlers(workspacePath ?? '', () => wireClient)
@@ -1396,6 +1550,9 @@ app.whenReady().then(() => {
       const newWin = createWindow(wsPath)
       mainWindow = newWin
       currentWorkspacePath = wsPath ?? ''
+      if (wsPath) {
+        ensureWorkspaceActivation(wsPath)
+      }
 
       if (wsPath) {
         reregisterIpcForWorkspace(wsPath)

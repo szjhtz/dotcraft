@@ -22,4 +22,16 @@ public enum SessionThreadRuntimeSignal
     /// Hosts may use this to trigger memory-derived follow-up maintenance.
     /// </summary>
     MemoryConsolidated,
+    /// <summary>
+    /// Thread-scoped manual context compaction is active.
+    /// </summary>
+    MaintenanceCompactingStarted,
+    /// <summary>
+    /// Thread-scoped memory consolidation is active.
+    /// </summary>
+    MaintenanceConsolidatingStarted,
+    /// <summary>
+    /// Thread-scoped maintenance reached a terminal state.
+    /// </summary>
+    MaintenanceCompleted,
 }

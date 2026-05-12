@@ -4,6 +4,7 @@ using DotCraft.Common;
 using DotCraft.Configuration;
 using DotCraft.Cron;
 using DotCraft.DashBoard;
+using DotCraft.Dreams;
 using DotCraft.ExternalChannel;
 using DotCraft.Gateway;
 using DotCraft.Heartbeat;
@@ -41,6 +42,7 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider, IE
     private ISessionService? _sessionService;
     private HeartbeatService? _heartbeatService;
     private CronService? _cronService;
+    private DreamsService? _dreamsService;
     private PathBlacklist? _pathBlacklist;
 
     private WebHostPool? _pool;
@@ -214,7 +216,8 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider, IE
     public void CompleteAfterSession(
         ISessionService sessionService,
         HeartbeatService heartbeatService,
-        CronService cronService)
+        CronService cronService,
+        DreamsService? dreamsService = null)
     {
         if (_pool == null)
             throw new InvalidOperationException("Call BuildPoolThroughBuildAll first.");
@@ -225,6 +228,7 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider, IE
         _sessionService = sessionService;
         _heartbeatService = heartbeatService;
         _cronService = cronService;
+        _dreamsService = dreamsService;
         _pathBlacklist = _sp.GetRequiredService<PathBlacklist>();
 
         if (ExternalChannelManager.HasEnabledChannels(_config))
@@ -277,13 +281,16 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider, IE
             dashApp.UseDashBoardAuth(_config);
             var capturedSvc = sessionService;
             var persistence = _sp.GetRequiredService<SessionPersistenceService>();
+            var dreamStore = _sp.GetService<DreamStore>();
             dashApp.MapDashBoard(traceStore, _paths, tokenUsageStore,
                 orchestratorProviders: capturedOrchestrators,
                 configTypes: ConfigSchemaRegistrations.GetAllConfigTypes(),
                 persistence: persistence,
                 deleteThreadAsync: (threadId, cancellationToken) => capturedSvc.DeleteThreadPermanentlyAsync(threadId, cancellationToken),
                 sessionHandler: new DelegateDashBoardSessionHandler(id => capturedSvc.DeleteThreadPermanentlyAsync(id)),
-                refreshTraceFromDiskBeforeRead: false);
+                refreshTraceFromDiskBeforeRead: false,
+                dreamStore: dreamStore,
+                dreamsService: _dreamsService);
 
             var baseUrl = $"http://{_config.DashBoard.Host}:{_config.DashBoard.Port}";
             DashBoardUrl = $"{baseUrl}/dashboard";
@@ -302,10 +309,11 @@ public sealed class ChannelRunner : IAsyncDisposable, IChannelStatusProvider, IE
     public void Initialize(
         ISessionService sessionService,
         HeartbeatService heartbeatService,
-        CronService cronService)
+        CronService cronService,
+        DreamsService dreamsService)
     {
         BuildPoolThroughBuildAll();
-        CompleteAfterSession(sessionService, heartbeatService, cronService);
+        CompleteAfterSession(sessionService, heartbeatService, cronService, dreamsService);
     }
 
     /// <summary>

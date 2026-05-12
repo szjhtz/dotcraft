@@ -13,6 +13,7 @@ using DotCraft.Logging;
 using DotCraft.Hosting;
 using DotCraft.Lsp;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Mcp;
 using DotCraft.Modules;
 using DotCraft.Protocol;
@@ -60,13 +61,16 @@ public sealed class AppServerHost(
     private readonly record struct RuntimeFacts(
         int PendingApprovals,
         bool Running,
-        bool WaitingOnPlanConfirmation)
+        bool WaitingOnPlanConfirmation,
+        string? MaintenanceKind)
     {
         public ThreadRuntimeState ToWire() => new()
         {
             Running = Running,
             WaitingOnApproval = PendingApprovals > 0,
-            WaitingOnPlanConfirmation = WaitingOnPlanConfirmation
+            WaitingOnPlanConfirmation = WaitingOnPlanConfirmation,
+            MaintenanceKind = MaintenanceKind,
+            Busy = Running || PendingApprovals > 0 || MaintenanceKind != null
         };
     }
 
@@ -294,7 +298,9 @@ public sealed class AppServerHost(
             appConfigMonitor: _services.GetRequiredService<IAppConfigMonitor>(),
             openAIClientProvider: _services.GetRequiredService<OpenAIClientProvider>(),
             backgroundTerminalService: _services.GetService<IBackgroundTerminalService>(),
-            contextPageManager: _runtime.ContextPageManager);
+            contextPageManager: _runtime.ContextPageManager,
+            dreamStore: _services.GetService<DreamStore>(),
+            dreamsService: _runtime.DreamsService);
     }
 
     // -------------------------------------------------------------------------
@@ -1138,6 +1144,18 @@ public sealed class AppServerHost(
                 {
                     PendingApprovals = Math.Max(0, previous.PendingApprovals - 1)
                 },
+                SessionThreadRuntimeSignal.MaintenanceCompactingStarted => previous with
+                {
+                    MaintenanceKind = "compacting"
+                },
+                SessionThreadRuntimeSignal.MaintenanceConsolidatingStarted => previous with
+                {
+                    MaintenanceKind = "consolidating"
+                },
+                SessionThreadRuntimeSignal.MaintenanceCompleted => previous with
+                {
+                    MaintenanceKind = null
+                },
                 _ => previous
             };
 
@@ -1166,12 +1184,19 @@ public sealed class AppServerHost(
             if (!decision.ShouldNotify)
                 return;
 
+            var actionUrl = decision.OpenDesktopOnClick && !string.IsNullOrWhiteSpace(decision.ThreadId)
+                ? HubTurnNotificationPolicy.BuildDesktopOpenActionUrl(_runtime.Paths.WorkspacePath, decision.ThreadId)
+                : null;
+
             await HubNotificationClient.RequestAsync(
                 _runtime.Paths.WorkspacePath,
                 spec.Kind,
                 lang.T(spec.TitleKey),
                 lang.T(spec.BodyKey, decision.DisplayName),
-                spec.Severity);
+                spec.Severity,
+                decision.ThreadId,
+                actionUrl,
+                decision.OpenDesktopOnClick);
         });
     }
 

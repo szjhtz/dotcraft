@@ -236,6 +236,49 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
     }
 
     [Fact]
+    public async Task CancelThreadMaintenanceAsync_CancelsManualCompactionWithoutNoticeAndDrainsQueue()
+    {
+        var mainChat = new StreamingReplyChatClient("ok");
+        var summaryChat = new BlockingSummaryChatClient();
+        await using var agentFactory = CreateAgentFactory(summaryChat);
+        var service = CreateService(agentFactory, mainChat);
+        var thread = await service.CreateThreadAsync(MakeIdentity(), threadId: "thread-cancel-compact");
+
+        await DrainAsync(service.SubmitInputAsync(
+            thread.Id,
+            [new TextContent("turn 0 " + new string('u', 1200))]));
+
+        var subscription = CollectThreadEventsAsync(
+            service,
+            thread.Id,
+            replayRecent: true,
+            events => events.Any(e => IsSystemEvent(e, "compactCancelled")));
+        var compactTask = service.CompactThreadAsync(thread.Id);
+
+        await summaryChat.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        await service.EnqueueTurnInputAsync(thread.Id, [new TextContent("run after cancelled compaction")]);
+
+        await service.CancelThreadMaintenanceAsync(thread.Id);
+        var result = await compactTask;
+        var events = await subscription;
+
+        Assert.Equal("cancelled", result.Outcome);
+        Assert.Contains(events, e => IsSystemEvent(e, "compacting"));
+        Assert.Contains(events, e => IsSystemEvent(e, "compactCancelled"));
+        Assert.DoesNotContain(events, IsManualCompactionNotice);
+
+        await WaitUntilAsync(() =>
+            thread.Turns.Count >= 2
+            && thread.Turns[1].Status == TurnStatus.Completed
+            && thread.QueuedInputs.Count == 0);
+
+        var reloaded = await service.GetThreadAsync(thread.Id);
+        Assert.DoesNotContain(
+            reloaded.Turns.SelectMany(turn => turn.Items),
+            item => item.Payload is SystemNoticePayload { Kind: "compacted", Trigger: "manual" });
+    }
+
+    [Fact]
     public async Task CompactThreadAsync_RejectsEmptyClientManagedAndActiveThreads()
     {
         var mainChat = new BlockingChatClient();
@@ -406,6 +449,36 @@ public sealed class SessionServiceManualCompactionTests : IDisposable
         {
             Options = options;
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, responseText)));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose() { }
+    }
+
+    private sealed class BlockingSummaryChatClient : IChatClient
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+
+        public ChatOptions? Options { get; private set; }
+
+        public async Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            Options = options;
+            _started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "<summary>cancelled</summary>"));
         }
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

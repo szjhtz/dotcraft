@@ -55,6 +55,33 @@ public sealed class MessageTokenEstimatorTests
     }
 
     [Fact]
+    public void EstimateContent_FunctionResultStringStillCounted()
+    {
+        var text = new string('x', 400);
+        var fr = new FunctionResultContent("call-1", text);
+
+        Assert.True(MessageTokenEstimator.EstimateContent(fr) > MessageTokenEstimator.RoughTokenCount(text));
+    }
+
+    [Fact]
+    public void EstimateContent_FunctionResultListWithImage_DoesNotScaleWithImageBytes()
+    {
+        var imageBytes = new byte[1_000_000];
+        var fr = new FunctionResultContent(
+            "call-1",
+            (IList<AIContent>)
+            [
+                new TextContent("Image: screenshot.png (1,000,000 bytes, image/png)"),
+                new DataContent(imageBytes, "image/png")
+            ]);
+
+        var tokens = MessageTokenEstimator.EstimateContent(fr);
+
+        Assert.InRange(tokens, 2_000, 20_000);
+        Assert.True(tokens < imageBytes.Length / 16);
+    }
+
+    [Fact]
     public void EstimateContent_FunctionResultIncludesDenseStructuredPayload()
     {
         var payload = new Dictionary<string, object?>
@@ -71,6 +98,29 @@ public sealed class MessageTokenEstimatorTests
         Assert.True(
             MessageTokenEstimator.EstimateContent(result)
             > MessageTokenEstimator.RoughTokenCount(JsonSerializer.Serialize(payload)));
+    }
+
+    [Fact]
+    public void EstimateDelta_ImageToolResult_StaysBoundedByImageTokenCost()
+    {
+        var imageBytes = new byte[1_000_000];
+        var message = new ChatMessage(
+            ChatRole.Tool,
+            (IList<AIContent>)
+            [
+                new FunctionResultContent(
+                    "call-1",
+                    (IList<AIContent>)
+                    [
+                        new TextContent("Image: screenshot.png (1,000,000 bytes, image/png)"),
+                        new DataContent(imageBytes, "image/png")
+                    ])
+            ]);
+
+        var tokens = MessageTokenEstimator.EstimateDelta([message]);
+
+        Assert.InRange(tokens, 2_000, 20_000);
+        Assert.True(tokens < imageBytes.Length / 16);
     }
 
     [Fact]

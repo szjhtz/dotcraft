@@ -51,6 +51,27 @@ Dashboard 的 `Thinking` 和 `Response` trace 事件按连续 streaming 内容�
 
 返回 Dashboard Settings 页面使用的配置 schema。
 
+### `GET /dashboard/api/dreams/status`
+
+返回当前工作区 Dreams 配置、运行状态、active store 和最近一次运行。
+
+### `GET /dashboard/api/dreams/runs`
+
+返回 Dreams 运行记录。默认不包含 archived 运行。
+
+### `GET /dashboard/api/dreams/runs/{runId}`
+
+返回单次 Dreams 运行详情、active/output index 预览和 topic 路径，供 Dashboard 审阅页使用。
+
+### `POST /dashboard/api/dreams/run`
+
+请求立即运行一次 Dreams。
+
+### `POST /dashboard/api/dreams/runs/{runId}/{action}`
+
+执行 Dreams 审阅动作。`action` 支持 `apply`、`discard`、`archive`、`cancel`。
+`apply` 也用于将任意成功且未丢弃/归档的 run 设为 active store。
+
 ### `DELETE /api/sessions/{sessionKey}`
 
 删除指定 Dashboard 会话记录。

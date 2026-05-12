@@ -232,6 +232,13 @@ public interface ISessionService
         throw new NotSupportedException("Manual memory consolidation is not supported by this session service.");
 
     /// <summary>
+    /// Requests cancellation for active thread-level maintenance, such as manual compaction or memory consolidation.
+    /// Implementations may treat this as a no-op when no maintenance is active.
+    /// </summary>
+    Task CancelThreadMaintenanceAsync(string threadId, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
     /// Updates the per-thread agent configuration (e.g., MCP servers, extensions).
     /// </summary>
     Task UpdateThreadConfigurationAsync(

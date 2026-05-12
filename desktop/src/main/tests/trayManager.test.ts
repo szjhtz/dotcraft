@@ -5,13 +5,27 @@ const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(() => ({ unref: vi.fn() }))
 }))
 
+const workspaceLockMocks = vi.hoisted(() => ({
+  checkWorkspaceLock: vi.fn(() => ({ locked: false }))
+}))
+
+const activationMocks = vi.hoisted(() => ({
+  requestWorkspaceActivation: vi.fn(async () => false)
+}))
+
 const electronMocks = vi.hoisted(() => {
   const show = vi.fn()
-  const on = vi.fn()
+  let clickHandler: (() => void) | null = null
+  const on = vi.fn((event: string, handler: () => void) => {
+    if (event === 'click') clickHandler = handler
+  })
   const openExternal = vi.fn()
   return {
     show,
     on,
+    triggerClick: () => {
+      clickHandler?.()
+    },
     openExternal,
     Notification: vi.fn().mockImplementation(() => ({ show, on }))
   }
@@ -27,6 +41,10 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('child_process', () => childProcessMocks)
+
+vi.mock('../workspaceLock', () => workspaceLockMocks)
+
+vi.mock('../desktopActivation', () => activationMocks)
 
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => true)
@@ -63,6 +81,8 @@ describe('trayManager icon resolution', () => {
 describe('trayManager notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    workspaceLockMocks.checkWorkspaceLock.mockReturnValue({ locked: false })
+    activationMocks.requestWorkspaceActivation.mockResolvedValue(false)
   })
 
   it('parses Hub notification events', async () => {
@@ -73,14 +93,18 @@ describe('trayManager notifications', () => {
       workspacePath: 'F:/dotcraft',
       data: {
         title: 'Done',
-        body: 'Finished'
+        body: 'Finished',
+        threadId: 'thread_1',
+        openDesktopOnClick: true
       }
     }
 
     expect(parseHubNotificationPayload(event)).toMatchObject({
       workspacePath: 'F:/dotcraft',
+      threadId: 'thread_1',
       title: 'Done',
-      body: 'Finished'
+      body: 'Finished',
+      openDesktopOnClick: true
     })
   })
 
@@ -101,6 +125,58 @@ describe('trayManager notifications', () => {
     })
     expect(electronMocks.show).toHaveBeenCalled()
   })
+
+  it('does not launch Desktop when notification click disables Desktop opening', async () => {
+    const { showHubNotification } = await import('../trayManager')
+    showHubNotification({
+      kind: 'notification.requested',
+      at: new Date().toISOString(),
+      workspacePath: 'F:/dotcraft',
+      data: { title: 'Done', body: 'Finished', openDesktopOnClick: false }
+    })
+
+    electronMocks.triggerClick()
+    await Promise.resolve()
+
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled()
+    expect(electronMocks.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('activates an existing Desktop workspace for dotcraft workspace links', async () => {
+    activationMocks.requestWorkspaceActivation.mockResolvedValue(true)
+    workspaceLockMocks.checkWorkspaceLock.mockReturnValue({
+      locked: true,
+      pid: 123,
+      activation: {
+        host: '127.0.0.1',
+        port: 456,
+        token: 'token',
+        protocolVersion: 1
+      }
+    })
+    const { showHubNotification } = await import('../trayManager')
+    showHubNotification({
+      kind: 'notification.requested',
+      at: new Date().toISOString(),
+      workspacePath: 'F:/dotcraft',
+      data: {
+        title: 'Done',
+        body: 'Finished',
+        actionUrl: 'dotcraft://workspace/open?path=F%3A%2Fdotcraft&threadId=thread_1',
+        openDesktopOnClick: true
+      }
+    })
+
+    electronMocks.triggerClick()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(activationMocks.requestWorkspaceActivation).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 456, token: 'token' }),
+      { workspacePath: 'F:/dotcraft', threadId: 'thread_1' }
+    )
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled()
+  })
 })
 
 describe('trayManager process launches', () => {
@@ -115,6 +191,21 @@ describe('trayManager process launches', () => {
 
     const [, args, options] = childProcessMocks.spawn.mock.calls[0]
     expect(args).toEqual(expect.arrayContaining(['--workspace', 'E:/Git/dotcraft']))
+    expect(options).toEqual({
+      detached: true,
+      stdio: 'ignore'
+    })
+  })
+
+  it('launches Desktop windows with a workspace deep link when a thread is provided', async () => {
+    const { spawnDesktopWindow } = await import('../trayManager')
+
+    spawnDesktopWindow('E:/Git/dotcraft', 'thread 1')
+
+    const [, args, options] = childProcessMocks.spawn.mock.calls[0]
+    expect(args).toEqual(expect.arrayContaining([
+      'dotcraft://workspace/open?path=E%3A%2FGit%2Fdotcraft&threadId=thread+1'
+    ]))
     expect(options).toEqual({
       detached: true,
       stdio: 'ignore'

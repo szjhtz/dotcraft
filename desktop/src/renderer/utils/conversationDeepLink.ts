@@ -48,11 +48,13 @@ function rejectReasonToMessageKey(reason: LinkRejectReason): string {
 
 async function openFileViewer(params: OpenFileViewerParams): Promise<boolean> {
   try {
-    const classified = await window.api.workspace.viewer.classify({ absolutePath: params.absolutePath })
-    const relativePath = deriveRelativePathForViewer(params.absolutePath, params.workspacePath)
+    const authorized = await window.api.workspace.viewer.authorizeFile({ absolutePath: params.absolutePath })
+    const absolutePath = authorized.absolutePath
+    const classified = await window.api.workspace.viewer.classify({ absolutePath })
+    const relativePath = deriveRelativePathForViewer(absolutePath, params.workspacePath)
     const tabId = useViewerTabStore.getState().openFile({
       threadId: params.threadId,
-      absolutePath: params.absolutePath,
+      absolutePath,
       relativePath,
       contentClass: classified.contentClass,
       sizeBytes: classified.sizeBytes,

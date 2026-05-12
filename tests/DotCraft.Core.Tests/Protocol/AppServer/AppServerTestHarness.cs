@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DotCraft.Configuration;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Mcp;
 using DotCraft.Modules;
 using DotCraft.Protocol;
@@ -45,11 +46,13 @@ internal sealed class AppServerTestHarness : IDisposable
         IAppConfigMonitor? appConfigMonitor = null,
         SkillsLoader? skillsLoader = null,
         MemoryStore? memoryStore = null,
+        DreamStore? dreamStore = null,
         McpClientManager? mcpClientManager = null,
         IWelcomeSuggestionService? welcomeSuggestionService = null,
         WireNodeReplProxy? wireNodeReplProxy = null,
         IBackgroundTerminalService? backgroundTerminalService = null,
-        IAppServerChannelListContributor? channelListContributor = null)
+        IAppServerChannelListContributor? channelListContributor = null,
+        DreamsService? dreamsService = null)
     {
         _tempDir = Path.Combine(
             Path.GetTempPath(),
@@ -79,7 +82,9 @@ internal sealed class AppServerTestHarness : IDisposable
             skillsLoader: skillsLoader,
             mcpClientManager: mcpClientManager,
             wireNodeReplProxy: wireNodeReplProxy,
-            backgroundTerminalService: backgroundTerminalService);
+            backgroundTerminalService: backgroundTerminalService,
+            dreamStore: dreamStore,
+            dreamsService: dreamsService);
 
         Identity = new SessionIdentity
         {

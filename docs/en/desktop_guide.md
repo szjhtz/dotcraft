@@ -33,7 +33,9 @@ Common Desktop settings:
 | Model provider | OpenAI-compatible API key, model name, endpoint |
 | Dashboard / Automations | Visual debugging and automation review |
 
-In **Settings -> Personalization**, you can enable or disable long-term memory, and use **Reset memory** to delete the current workspace's `MEMORY.md`, `HISTORY.md`, and derived memory caches. Resetting memory does not delete sessions, configuration, skills, or automation tasks; if long-term memory stays enabled, future successful sessions can build new memory again.
+In **Settings -> Personalization**, you can enable or disable long-term memory and Dreams. Long-term memory consolidates explicit session memory during conversation turns. Dreams periodically organize passive workspace context in the background, even when no conversation is open.
+
+The Dreams section shows the latest run state and includes **Run now** plus **Auto-update Dreams**. With auto-update off, new Dreams runs create pending stores first. With auto-update on, future successful runs automatically become the active Dream store. **Manage Dreams** in Desktop shows lightweight run history and opens the Dashboard review page for each run; detailed diff, trace, apply, discard, cancel, and archive actions live in Dashboard. **Reset memory** deletes the current workspace's `MEMORY.md`, `HISTORY.md`, Dreams stores under `.craft/dreams`, and derived memory caches. Resetting memory does not delete sessions, configuration, skills, or automation tasks.
 
 You can also override startup values:
 

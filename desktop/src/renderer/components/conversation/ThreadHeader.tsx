@@ -145,6 +145,7 @@ export function ThreadHeader({ threadName, threadId, workspacePath }: ThreadHead
         <ActionTooltip
           label={t('threadHeader.commitTitle')}
           disabledReason={!hasWrittenFiles ? t('threadHeader.noCommitTitle') : undefined}
+          placement="bottom"
         >
           <button
             onClick={() => setCommitOpen(true)}

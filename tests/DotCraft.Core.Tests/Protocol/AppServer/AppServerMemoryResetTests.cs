@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DotCraft.Configuration;
 using DotCraft.Context;
+using DotCraft.Dreams;
 using DotCraft.Memory;
 using DotCraft.Protocol;
 using DotCraft.Protocol.AppServer;
@@ -34,11 +35,14 @@ public sealed class AppServerMemoryResetTests : IDisposable
     }
 
     [Fact]
-    public async Task MemoryReset_NoParams_ReturnsEmptyObjectAndClearsMemoryOnly()
+    public async Task MemoryReset_NoParams_ReturnsEmptyObjectAndClearsMemoryAndDreams()
     {
         var memoryStore = new MemoryStore(_workspaceCraftPath);
+        var dreamStore = new DreamStore(_workspaceCraftPath);
         memoryStore.WriteLongTerm("remember this");
         memoryStore.AppendHistory("historic event");
+        dreamStore.SaveDreamRun("# Dream Memory\n\n- passive context", "dream history");
+        File.WriteAllText(Path.Combine(dreamStore.DreamsDirectoryPath, "state.json"), "{}");
         var derivedDir = Path.Combine(memoryStore.MemoryDirectoryPath, "derived");
         Directory.CreateDirectory(derivedDir);
         await File.WriteAllTextAsync(Path.Combine(derivedDir, "snapshot.json"), "{}");
@@ -66,6 +70,7 @@ public sealed class AppServerMemoryResetTests : IDisposable
             workspaceCraftPath: _workspaceCraftPath,
             appConfigMonitor: monitor,
             memoryStore: memoryStore,
+            dreamStore: dreamStore,
             welcomeSuggestionService: welcomeSuggestions);
         using var bridge = AttachConfigChangedBridge(harness);
         await harness.InitializeAsync(configChange: true);
@@ -82,6 +87,13 @@ public sealed class AppServerMemoryResetTests : IDisposable
 
         Assert.True(Directory.Exists(memoryStore.MemoryDirectoryPath));
         Assert.Empty(Directory.EnumerateFileSystemEntries(memoryStore.MemoryDirectoryPath));
+        Assert.True(Directory.Exists(dreamStore.DreamsDirectoryPath));
+        Assert.Equal(
+            ["runs", "stores"],
+            Directory.EnumerateDirectories(dreamStore.DreamsDirectoryPath)
+                .Select(path => Path.GetFileName(path)!)
+                .OrderBy(static name => name)
+                .ToArray());
         Assert.True(File.Exists(configPath));
         Assert.False(harness.Monitor.Current.Memory.AutoConsolidateEnabled);
 

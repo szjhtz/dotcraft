@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect, useMemo, type CSSProperties } from 'react'
-import { Archive, ChevronsDown, ListChecks, Target } from 'lucide-react'
+import { Archive, ChevronsDown, CornerDownRight, ListChecks, Target, Trash2 } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { useConversationStore } from '../../stores/conversationStore'
 import { addToast } from '../../stores/toastStore'
@@ -49,6 +49,16 @@ const MAX_IMAGES = 5
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MANUAL_COMPACTION_TIMEOUT_MS = 5 * 60 * 1000
 const MANUAL_MEMORY_CONSOLIDATION_TIMEOUT_MS = 5 * 60 * 1000
+
+function isTurnBusyError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  const normalized = message.toLowerCase()
+  return normalized.includes('turninprogress')
+    || normalized.includes('already has a running turn')
+    || normalized.includes('active thread maintenance')
+    || normalized.includes('thread maintenance')
+    || normalized.includes('-32012')
+}
 
 interface InputComposerProps {
   threadId: string
@@ -106,6 +116,7 @@ export function InputComposer({
   const turnStatus = useConversationStore((s) => s.turnStatus)
   const pendingMessage = useConversationStore((s) => s.pendingMessage)
   const queuedInputs = useConversationStore((s) => s.queuedInputs)
+  const maintenanceKind = useConversationStore((s) => s.maintenanceKind)
   const threadMode = useConversationStore((s) => s.threadMode)
   const turnsLength = useConversationStore((s) => s.turns.length)
   const setThreadMode = useConversationStore((s) => s.setThreadMode)
@@ -118,13 +129,15 @@ export function InputComposer({
 
   const isRunning = turnStatus === 'running'
   const isWaitingApproval = turnStatus === 'waitingApproval'
+  const isMaintenanceActive = maintenanceKind === 'compacting' || maintenanceKind === 'consolidating'
+  const isBusyForInput = isRunning || isMaintenanceActive
   const canUseCommandPicker = capabilities?.commandManagement === true
   const canUseSkillPicker = capabilities?.skillsManagement === true
   const canUseThreadGoals = capabilities?.threadGoals === true
   const canUseManualCompaction = capabilities?.manualCompaction === true
   const canUseManualMemoryConsolidation = capabilities?.manualMemoryConsolidation === true
-  const canCompactCurrentThread = canUseManualCompaction && turnsLength > 0 && turnStatus === 'idle'
-  const canConsolidateCurrentThread = canUseManualMemoryConsolidation && turnsLength > 0 && turnStatus === 'idle'
+  const canCompactCurrentThread = canUseManualCompaction && turnsLength > 0 && turnStatus === 'idle' && !isMaintenanceActive
+  const canConsolidateCurrentThread = canUseManualMemoryConsolidation && turnsLength > 0 && turnStatus === 'idle' && !isMaintenanceActive
   const canUseSystemActions = true
   const canUseSlashPicker = canUseCommandPicker || canUseSkillPicker || canUseThreadGoals || canUseSystemActions
 
@@ -532,7 +545,7 @@ export function InputComposer({
       await pendingModeChangeRef.current
     }
 
-    if (isRunning) {
+    if (isBusyForInput) {
       if (sendInFlightRef.current) return
       sendInFlightRef.current = true
       try {
@@ -558,9 +571,16 @@ export function InputComposer({
 
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
+    const capturedImages = [...images]
+    const capturedFiles = [...files]
+    const capturedSegments = [...segments]
+    const { inputParts } = buildComposerInputParts({
+      text: trimmed,
+      segments: capturedSegments,
+      files: capturedFiles,
+      images: capturedImages
+    })
     try {
-      const capturedImages = [...images]
-      const capturedFiles = [...files]
       richRef.current?.clear()
       setImages([])
       setFiles([])
@@ -573,15 +593,36 @@ export function InputComposer({
         files: capturedFiles,
         fallbackThreadName: t('toast.imageMessage'),
         fileFallbackThreadName: t('toast.fileReferenceMessage'),
-        attachmentFallbackThreadName: t('toast.attachmentMessage')
+        attachmentFallbackThreadName: t('toast.attachmentMessage'),
+        throwOnStartError: true
       })
     } catch (err) {
       console.error('turn/start failed:', err)
+      if (isTurnBusyError(err)) {
+        try {
+          await window.api.appServer.sendRequest('turn/enqueue', {
+            threadId,
+            input: inputParts,
+            sender: undefined
+          })
+          return
+        } catch (enqueueErr) {
+          console.error('turn/enqueue fallback failed:', enqueueErr)
+          richRef.current?.setContent({ text: trimmed, segments: capturedSegments })
+          setImages(capturedImages)
+          setFiles(capturedFiles)
+          addToast(enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr), 'error')
+          return
+        }
+      }
+      richRef.current?.setContent({ text: trimmed, segments: capturedSegments })
+      setImages(capturedImages)
+      setFiles(capturedFiles)
       addToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
       sendInFlightRef.current = false
     }
-  }, [compactThreadContext, consolidateThreadMemory, executeGoalCommand, files, images, isRunning, isWaitingApproval, modelLoading, setComposerMode, threadId, workspacePath, t])
+  }, [compactThreadContext, consolidateThreadMemory, executeGoalCommand, files, images, isBusyForInput, isWaitingApproval, modelLoading, setComposerMode, threadId, workspacePath, t])
 
   const removeQueuedInput = useCallback(async (queuedInputId: string): Promise<void> => {
     try {
@@ -613,12 +654,18 @@ export function InputComposer({
   }, [threadId])
 
   const stopTurn = useCallback(async () => {
-    const activeTurnId = useConversationStore.getState().activeTurnId
-    if (!activeTurnId || activeTurnId.startsWith('local-turn-')) return
+    const state = useConversationStore.getState()
+    const activeTurnId = state.activeTurnId
     try {
-      await window.api.appServer.sendRequest('turn/interrupt', { threadId, turnId: activeTurnId })
+      if (activeTurnId && !activeTurnId.startsWith('local-turn-')) {
+        await window.api.appServer.sendRequest('turn/interrupt', { threadId, turnId: activeTurnId })
+        return
+      }
+      if (state.maintenanceKind === 'compacting' || state.maintenanceKind === 'consolidating') {
+        await window.api.appServer.sendRequest('thread/maintenance/interrupt', { threadId })
+      }
     } catch (err) {
-      console.error('turn/interrupt failed:', err)
+      console.error('interrupt failed:', err)
     }
   }, [threadId])
 
@@ -964,7 +1011,7 @@ export function InputComposer({
               })}
             />
 
-            <ApprovalPolicyPicker threadId={threadId} disabled={isRunning || isWaitingApproval} />
+            <ApprovalPolicyPicker threadId={threadId} disabled={isBusyForInput || isWaitingApproval} />
             {currentGoal && (
               <ActionTooltip label={currentGoal.objective} placement="top">
                 <button
@@ -1007,7 +1054,7 @@ export function InputComposer({
               )}
             />
             {!isWaitingApproval ? (
-              isRunning ? (
+              isBusyForInput ? (
                 canSend ? (
                   <ActionTooltip label={t('composer.queueSendTitle')} placement="top">
                     <button
@@ -1122,26 +1169,35 @@ function QueuedInputList({
             >
               {label}
             </span>
-            <button
-              type="button"
-              onClick={() => onSteer(item.id)}
-              disabled={isGuidancePending}
-              style={{
-                ...queuedTextButtonStyle,
-                opacity: isGuidancePending ? 0.55 : 1,
-                cursor: isGuidancePending ? 'default' : 'pointer'
-              }}
+            <ActionTooltip
+              label={isGuidancePending ? t('composer.queueGuidancePending') : t('composer.queueGuide')}
+              placement="top"
             >
-              {isGuidancePending ? t('composer.queueGuidancePending') : t('composer.queueGuide')}
-            </button>
-            <button
-              type="button"
-              onClick={() => onRemove(item.id)}
-              aria-label={t('composer.queueRemove')}
-              style={queuedTextButtonStyle}
-            >
-              {t('composer.queueRemove')}
-            </button>
+              <button
+                type="button"
+                onClick={() => onSteer(item.id)}
+                disabled={isGuidancePending}
+                aria-label={isGuidancePending ? t('composer.queueGuidancePending') : t('composer.queueGuide')}
+                style={{
+                  ...queuedSteerButtonStyle,
+                  opacity: isGuidancePending ? 0.55 : 1,
+                  cursor: isGuidancePending ? 'default' : 'pointer'
+                }}
+              >
+                <CornerDownRight size={13} strokeWidth={1.9} aria-hidden style={{ flexShrink: 0 }} />
+                <span>{isGuidancePending ? t('composer.queueGuidancePending') : t('composer.queueGuide')}</span>
+              </button>
+            </ActionTooltip>
+            <ActionTooltip label={t('composer.queueRemove')} placement="top">
+              <button
+                type="button"
+                onClick={() => onRemove(item.id)}
+                aria-label={t('composer.queueRemove')}
+                style={queuedIconButtonStyle}
+              >
+                <Trash2 size={14} strokeWidth={1.8} aria-hidden />
+              </button>
+            </ActionTooltip>
           </div>
         )
       })}
@@ -1149,13 +1205,33 @@ function QueuedInputList({
   )
 }
 
-const queuedTextButtonStyle: CSSProperties = {
+const queuedSteerButtonStyle: CSSProperties = {
   border: 'none',
   background: 'transparent',
   color: 'var(--text-dimmed)',
   cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '4px',
   fontSize: '12px',
-  padding: '2px 4px'
+  minHeight: '24px',
+  padding: '2px 4px',
+  borderRadius: '5px'
+}
+
+const queuedIconButtonStyle: CSSProperties = {
+  width: '24px',
+  height: '24px',
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-dimmed)',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  borderRadius: '5px',
+  flexShrink: 0
 }
 
 function parseSystemSlashCommand(text: string): { kind: 'plan' | 'agent' | 'compact' | 'consolidate' } | null {

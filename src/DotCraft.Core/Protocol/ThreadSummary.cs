@@ -22,6 +22,17 @@ public sealed class ThreadSummaryRuntime
     /// True when the last completed turn produced a plan that still needs user confirmation.
     /// </summary>
     public bool WaitingOnPlanConfirmation { get; set; }
+
+    /// <summary>
+    /// True when the thread cannot start a new turn because a turn, approval, or maintenance task is active.
+    /// </summary>
+    public bool Busy { get; set; }
+
+    /// <summary>
+    /// Current thread maintenance kind. Null when no maintenance is active.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MaintenanceKind { get; set; }
 }
 
 /// <summary>
@@ -108,7 +119,8 @@ public sealed class ThreadSummary
             {
                 Running = true,
                 WaitingOnApproval = activeTurn.Status == TurnStatus.WaitingApproval,
-                WaitingOnPlanConfirmation = false
+                WaitingOnPlanConfirmation = false,
+                Busy = true
             };
         }
 
@@ -117,7 +129,8 @@ public sealed class ThreadSummary
         {
             Running = false,
             WaitingOnApproval = false,
-            WaitingOnPlanConfirmation = lastTurn is not null && EndsWithSuccessfulCreatePlanInPlanMode(thread, lastTurn)
+            WaitingOnPlanConfirmation = lastTurn is not null && EndsWithSuccessfulCreatePlanInPlanMode(thread, lastTurn),
+            Busy = false
         };
     }
 

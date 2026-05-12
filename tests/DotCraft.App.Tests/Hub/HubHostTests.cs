@@ -102,7 +102,10 @@ public sealed class HubHostTests : IDisposable
                     workspacePath = "F:\\dotcraft",
                     kind = "turnCompleted",
                     title = "Done",
-                    body = "Finished"
+                    body = "Finished",
+                    threadId = "thread_1",
+                    actionUrl = "dotcraft://workspace/open?path=F%3A%5Cdotcraft&threadId=thread_1",
+                    openDesktopOnClick = true
                 })
             };
             notifyRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", info.Token);
@@ -110,17 +113,32 @@ public sealed class HubHostTests : IDisposable
             notify.EnsureSuccessStatusCode();
 
             var sawEvent = false;
+            JsonDocument? eventDoc = null;
             while (!cts.IsCancellationRequested)
             {
                 var line = await reader.ReadLineAsync(cts.Token);
                 if (line == "event: notification.requested")
                 {
                     sawEvent = true;
+                    continue;
+                }
+
+                if (sawEvent && line?.StartsWith("data:", StringComparison.Ordinal) == true)
+                {
+                    eventDoc = JsonDocument.Parse(line["data:".Length..].Trim());
                     break;
                 }
             }
 
             Assert.True(sawEvent);
+            Assert.NotNull(eventDoc);
+            using (eventDoc)
+            {
+                var data = eventDoc.RootElement.GetProperty("data");
+                Assert.Equal("thread_1", data.GetProperty("threadId").GetString());
+                Assert.Equal("dotcraft://workspace/open?path=F%3A%5Cdotcraft&threadId=thread_1", data.GetProperty("actionUrl").GetString());
+                Assert.True(data.GetProperty("openDesktopOnClick").GetBoolean());
+            }
         }
 
         await ShutdownAsync(http, info, cts.Token);

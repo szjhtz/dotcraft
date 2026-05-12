@@ -1,3 +1,5 @@
+using DotCraft.Dreams;
+
 namespace DotCraft.Protocol;
 
 /// <summary>
@@ -35,6 +37,7 @@ public static class ThreadVisibility
         }
 
         return string.Equals(originChannel, WelcomeSuggestionConstants.ChannelName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(originChannel, DreamsConstants.ChannelName, StringComparison.OrdinalIgnoreCase)
             || string.Equals(originChannel, CommitMessageSuggestConstants.ChannelName, StringComparison.OrdinalIgnoreCase);
     }
 }

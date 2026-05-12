@@ -346,6 +346,15 @@ export function App(): JSX.Element {
   }, [])
 
   useEffect(() => {
+    return window.api.window.onOpenThread((payload) => {
+      const threadId = payload.threadId.trim()
+      if (!threadId) return
+      useUIStore.getState().setActiveMainView('conversation')
+      useThreadStore.getState().setActiveThreadId(threadId)
+    })
+  }, [])
+
+  useEffect(() => {
     window.api.settings
       .get()
       .then((s) => {
@@ -602,19 +611,25 @@ export function App(): JSX.Element {
 
             const threadStore = useThreadStore.getState()
             const threadSummary = threadStore.threadList.find((thread) => thread.id === threadId)
-            threadStore.applyRuntimeSnapshot(threadId, {
+            const runtimeSnapshot: ThreadRuntimeSnapshot = {
               running: pp.runtime?.running === true,
+              busy: pp.runtime?.busy === true,
               waitingOnApproval: pp.runtime?.waitingOnApproval === true,
-              waitingOnPlanConfirmation: pp.runtime?.waitingOnPlanConfirmation === true
+              waitingOnPlanConfirmation: pp.runtime?.waitingOnPlanConfirmation === true,
+              maintenanceKind: pp.runtime?.maintenanceKind ?? null
+            }
+            threadStore.applyRuntimeSnapshot(threadId, {
+              ...runtimeSnapshot
             }, {
               isActive: threadStore.activeThreadId === threadId,
               isDesktopOrigin: threadSummary?.originChannel?.toLowerCase() === 'dotcraft-desktop'
             })
             useSubAgentStore.getState().updateChildRuntime(threadId, {
-              running: pp.runtime?.running === true,
-              waitingOnApproval: pp.runtime?.waitingOnApproval === true,
-              waitingOnPlanConfirmation: pp.runtime?.waitingOnPlanConfirmation === true
+              ...runtimeSnapshot
             })
+            if (threadStore.activeThreadId === threadId) {
+              useConversationStore.getState().setMaintenanceKind(runtimeSnapshot.maintenanceKind)
+            }
             break
           }
 
@@ -1379,14 +1394,19 @@ export function App(): JSX.Element {
           }
           const res = result as { thread: Thread }
           useThreadStore.getState().setActiveThread(res.thread)
+          const runtime = res.thread.runtime
           useThreadStore.getState().applyRuntimeSnapshot(requestedId, {
-            running: (res.thread.turns ?? []).some((turn) =>
-              turn.status === 'running' || turn.status === 'waitingApproval'
-            ),
-            waitingOnApproval: (res.thread.turns ?? []).some((turn) =>
-              turn.status === 'waitingApproval'
-            ),
-            waitingOnPlanConfirmation: false
+            running: runtime?.running === true
+              || (res.thread.turns ?? []).some((turn) =>
+                turn.status === 'running' || turn.status === 'waitingApproval'
+              ),
+            busy: runtime?.busy === true,
+            waitingOnApproval: runtime?.waitingOnApproval === true
+              || (res.thread.turns ?? []).some((turn) =>
+                turn.status === 'waitingApproval'
+              ),
+            waitingOnPlanConfirmation: runtime?.waitingOnPlanConfirmation === true,
+            maintenanceKind: runtime?.maintenanceKind ?? null
           }, {
             isActive: true,
             isDesktopOrigin: res.thread.originChannel?.toLowerCase() === 'dotcraft-desktop'
@@ -1415,6 +1435,7 @@ export function App(): JSX.Element {
           }
           useConversationStore.getState().setQueuedInputs(res.thread.queuedInputs ?? [])
           useConversationStore.getState().setContextUsage(res.thread.contextUsage ?? null)
+          useConversationStore.getState().setMaintenanceKind(runtime?.maintenanceKind ?? null)
           void useSubAgentStore.getState().fetchChildren(requestedId)
           const parked = useThreadStore.getState().consumeParkedApproval(requestedId)
           if (parked) {
@@ -1560,6 +1581,7 @@ export function App(): JSX.Element {
         .catch((err: unknown) => {
           console.error('thread/read failed:', err)
           useUIStore.getState().cancelPendingWelcomeTurnForThread(requestedId)
+          addToast(translate(localeRef.current, 'toast.threadNotFound'), 'warning')
         })
 
       // Guard: skip subscribe if we already hold a subscription for this thread.

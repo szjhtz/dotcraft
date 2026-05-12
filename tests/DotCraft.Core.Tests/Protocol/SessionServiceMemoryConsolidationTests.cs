@@ -2,6 +2,7 @@ using DotCraft.Abstractions;
 using DotCraft.Agents;
 using DotCraft.Configuration;
 using DotCraft.Context;
+using DotCraft.Dreams;
 using DotCraft.Memory;
 using DotCraft.Protocol;
 using DotCraft.Security;
@@ -51,6 +52,28 @@ public sealed class SessionServiceMemoryConsolidationTests : IDisposable
     }
 
     [Fact]
+    public async Task SubmitInputAsync_ForInternalMaintenanceThread_DoesNotScheduleMemoryConsolidation()
+    {
+        var consolidator = new FakeMemoryConsolidator(
+            MemoryConsolidationResult.Succeeded(memoryWritten: true, historyWritten: true));
+        var chatClient = new StaticChatClient("ok");
+        await using var agentFactory = CreateAgentFactory(chatClient, consolidator);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(new SessionIdentity
+        {
+            ChannelName = DreamsConstants.ChannelName,
+            UserId = DreamsConstants.InternalUserId,
+            WorkspacePath = _tempDir
+        });
+        thread.Metadata[ThreadVisibility.InternalMetadataKey] = DreamsConstants.InternalMetadataValue;
+
+        var turnEvents = await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("organize dreams")]));
+
+        Assert.Equal(0, consolidator.Calls);
+        Assert.DoesNotContain(turnEvents, e => IsSystemEvent(e, "consolidating"));
+    }
+
+    [Fact]
     public async Task SubmitInputAsync_WhenConsolidationSucceeds_EmitsConsolidatedAndPersistentNotice()
     {
         var startSawPersistedTurn = false;
@@ -94,6 +117,89 @@ public sealed class SessionServiceMemoryConsolidationTests : IDisposable
         var reloaded = await svc.GetThreadAsync(thread.Id);
         var notice = Assert.Single(reloaded.Turns.Single().Items, item => item.Type == ItemType.SystemNotice);
         Assert.Equal("memoryConsolidated", notice.AsSystemNotice?.Kind);
+    }
+
+    [Fact]
+    public async Task AutoConsolidation_BlocksQueuedInputUntilTerminalEvent()
+    {
+        var consolidator = new BlockingMemoryConsolidator(MemoryConsolidationResult.Skipped("no changes"));
+        var chatClient = new StaticChatClient("ok");
+        await using var agentFactory = CreateAgentFactory(chatClient, consolidator);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+
+        await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("first")]));
+        await consolidator.Started.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await svc.EnqueueTurnInputAsync(thread.Id, [new TextContent("second")]);
+        await Task.Delay(150);
+
+        var duringMaintenance = await svc.GetThreadAsync(thread.Id);
+        Assert.Single(duringMaintenance.Turns);
+        Assert.Single(duringMaintenance.QueuedInputs);
+
+        consolidator.Release();
+
+        await WaitUntilAsync(() =>
+            thread.Turns.Count >= 2
+            && thread.Turns[1].Status == TurnStatus.Completed
+            && thread.QueuedInputs.Count == 0);
+    }
+
+    [Fact]
+    public async Task SubmitInputAsync_WhenAutoConsolidationActive_IsRejectedAsBusy()
+    {
+        var consolidator = new BlockingMemoryConsolidator(MemoryConsolidationResult.Skipped("no changes"));
+        var chatClient = new StaticChatClient("ok");
+        await using var agentFactory = CreateAgentFactory(chatClient, consolidator);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+
+        await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("first")]));
+        await consolidator.Started.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            svc.SubmitInputAsync(thread.Id, [new TextContent("second")]));
+
+        Assert.Contains("active thread maintenance", ex.Message);
+        consolidator.Release();
+    }
+
+    [Fact]
+    public async Task CancelThreadMaintenanceAsync_EmitsCancelledWithoutNoticeAndDrainsQueuedInput()
+    {
+        var consolidator = new BlockingMemoryConsolidator(
+            MemoryConsolidationResult.Succeeded(memoryWritten: true, historyWritten: true));
+        var chatClient = new StaticChatClient("ok");
+        await using var agentFactory = CreateAgentFactory(chatClient, consolidator);
+        var svc = CreateService(agentFactory, chatClient);
+        var thread = await svc.CreateThreadAsync(MakeIdentity());
+
+        var subscription = CollectThreadEventsAsync(
+            svc,
+            thread.Id,
+            events => events.Any(e => IsSystemEvent(e, "consolidationCancelled")));
+
+        await DrainAsync(svc.SubmitInputAsync(thread.Id, [new TextContent("first")]));
+        await consolidator.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        await svc.EnqueueTurnInputAsync(thread.Id, [new TextContent("second")]);
+
+        await svc.CancelThreadMaintenanceAsync(thread.Id);
+        var threadEvents = await subscription;
+
+        Assert.Contains(threadEvents, e => IsSystemEvent(e, "consolidationCancelled"));
+        Assert.DoesNotContain(threadEvents, e => IsSystemEvent(e, "consolidated"));
+        Assert.DoesNotContain(threadEvents, IsMemoryNotice);
+
+        await WaitUntilAsync(() =>
+            thread.Turns.Count >= 2
+            && thread.Turns[1].Status == TurnStatus.Completed
+            && thread.QueuedInputs.Count == 0);
+
+        var reloaded = await svc.GetThreadAsync(thread.Id);
+        Assert.DoesNotContain(
+            reloaded.Turns.SelectMany(turn => turn.Items),
+            item => item.Payload is SystemNoticePayload { Kind: "memoryConsolidated" });
     }
 
     [Theory]
@@ -331,7 +437,8 @@ public sealed class SessionServiceMemoryConsolidationTests : IDisposable
     private static bool IsConsolidationTerminal(SessionEvent evt) =>
         IsSystemEvent(evt, "consolidated")
         || IsSystemEvent(evt, "consolidationSkipped")
-        || IsSystemEvent(evt, "consolidationFailed");
+        || IsSystemEvent(evt, "consolidationFailed")
+        || IsSystemEvent(evt, "consolidationCancelled");
 
     private static bool IsSystemEvent(SessionEvent evt, string kind) =>
         evt.EventType == SessionEventType.SystemEvent
@@ -356,12 +463,40 @@ public sealed class SessionServiceMemoryConsolidationTests : IDisposable
         MemoryConsolidationResult result,
         Func<Task>? onStart = null) : IMemoryConsolidator
     {
+        public int Calls { get; private set; }
+
         public async Task<MemoryConsolidationResult> ConsolidateAsync(
             IReadOnlyList<ChatMessage> messagesToArchive,
             CancellationToken cancellationToken = default)
         {
+            Calls++;
             if (onStart != null)
                 await onStart();
+            return result;
+        }
+    }
+
+    private sealed class BlockingMemoryConsolidator(MemoryConsolidationResult result) : IMemoryConsolidator
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Calls { get; private set; }
+
+        public Task Started => _started.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<MemoryConsolidationResult> ConsolidateAsync(
+            IReadOnlyList<ChatMessage> messagesToArchive,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            if (Calls > 1)
+                return MemoryConsolidationResult.Skipped("already_tested");
+
+            _started.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
             return result;
         }
     }

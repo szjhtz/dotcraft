@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LocaleProvider } from '../contexts/LocaleContext'
 import { TurnArtifacts } from '../components/conversation/TurnArtifacts'
 import { TurnCompletionSummary } from '../components/conversation/TurnCompletionSummary'
 import { useConversationStore } from '../stores/conversationStore'
 import { useViewerTabStore } from '../stores/viewerTabStore'
+import { useUIStore } from '../stores/uiStore'
 import type { FileDiff } from '../types/toolCall'
 
 const settingsGet = vi.fn()
 const settingsSet = vi.fn()
 const listEditors = vi.fn()
 const launchEditor = vi.fn()
+const classify = vi.fn()
 const toViewerUrl = vi.fn()
 const browserCreate = vi.fn()
 const writeFile = vi.fn()
@@ -58,6 +60,11 @@ function resetStores(): void {
     currentThreadId: 'thread-1',
     currentWorkspacePath: 'F:/workspace'
   })
+  useUIStore.setState({
+    activeDetailTab: { kind: 'system', id: 'changes' },
+    detailPanelPreferredVisible: false,
+    detailPanelVisible: false
+  })
 }
 
 describe('turn completion artifacts', () => {
@@ -68,6 +75,7 @@ describe('turn completion artifacts', () => {
     settingsSet.mockResolvedValue(undefined)
     listEditors.mockResolvedValue([{ id: 'explorer', labelKey: 'editors.explorer', iconKey: 'explorer' }])
     launchEditor.mockResolvedValue(undefined)
+    classify.mockResolvedValue({ contentClass: 'text', mime: 'text/markdown', sizeBytes: 16 })
     toViewerUrl.mockResolvedValue({ url: 'dotcraft-viewer://workspace/F%3A/workspace/site/index.html' })
     browserCreate.mockResolvedValue({
       tabId: 'browser-tab',
@@ -87,6 +95,7 @@ describe('turn completion artifacts', () => {
         file: { writeFile, deleteFile },
         workspace: {
           viewer: {
+            classify,
             toViewerUrl,
             browser: { create: browserCreate }
           }
@@ -111,6 +120,33 @@ describe('turn completion artifacts', () => {
     expect(screen.getByText('index.html')).toBeInTheDocument()
     expect(screen.getByText('Web page · HTML')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Choose how to open file' })).toBeEnabled())
+  })
+
+  it('opens Markdown artifact card bodies in the internal file viewer', async () => {
+    useConversationStore.setState({
+      changedFiles: new Map([['README.md', makeDiff('README.md')]])
+    })
+
+    renderWithLocale(<TurnArtifacts turnId="turn-1" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open README.md in DotCraft viewer' }))
+
+    await waitFor(() => {
+      expect(classify).toHaveBeenCalledWith({ absolutePath: 'F:/workspace/README.md' })
+    })
+    const activeTab = useUIStore.getState().activeDetailTab
+    expect(activeTab.kind).toBe('viewer')
+    if (activeTab.kind === 'viewer') {
+      const tab = useViewerTabStore.getState().getThreadState('thread-1').tabs.find((entry) => entry.id === activeTab.id)
+      expect(tab).toMatchObject({
+        kind: 'file',
+        absolutePath: 'F:/workspace/README.md',
+        relativePath: 'README.md',
+        contentClass: 'text',
+        sizeBytes: 16
+      })
+    }
+    expect(useUIStore.getState().detailPanelVisible).toBe(true)
+    expect(launchEditor).not.toHaveBeenCalled()
   })
 
   it('opens HTML artifacts in the internal browser', async () => {

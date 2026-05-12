@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MarkdownRenderer } from '../components/conversation/MarkdownRenderer'
 import { LocaleProvider } from '../contexts/LocaleContext'
+import { useConversationStore } from '../stores/conversationStore'
+import { useThreadStore } from '../stores/threadStore'
+import { useUIStore } from '../stores/uiStore'
+import { useViewerTabStore } from '../stores/viewerTabStore'
 
 const openExternal = vi.fn()
+const authorizeFile = vi.fn()
+const classify = vi.fn()
 
 beforeAll(() => {
   // highlight.js theme is loaded dynamically from App/main; not required for these tests
@@ -13,6 +19,12 @@ beforeAll(() => {
     configurable: true,
     value: {
       settings: { get: () => Promise.resolve({ locale: 'en' }) },
+      workspace: {
+        viewer: {
+          authorizeFile,
+          classify
+        }
+      },
       shell: { openExternal }
     }
   })
@@ -21,6 +33,21 @@ beforeAll(() => {
 describe('MarkdownRenderer', () => {
   beforeEach(() => {
     openExternal.mockReset()
+    authorizeFile.mockImplementation(async ({ absolutePath }: { absolutePath: string }) => ({ absolutePath }))
+    classify.mockResolvedValue({ contentClass: 'pdf', mime: 'application/pdf', sizeBytes: 100 })
+    useConversationStore.getState().reset()
+    useConversationStore.setState({ workspacePath: 'F:/workspace' })
+    useThreadStore.setState({ activeThreadId: 'thread-1' })
+    useViewerTabStore.setState({
+      byThread: new Map(),
+      currentThreadId: 'thread-1',
+      currentWorkspacePath: 'F:/workspace'
+    })
+    useUIStore.setState({
+      activeDetailTab: { kind: 'system', id: 'changes' },
+      detailPanelPreferredVisible: false,
+      detailPanelVisible: false
+    })
   })
 
   function renderWithLocale(
@@ -147,6 +174,26 @@ describe('MarkdownRenderer', () => {
     const link = screen.getByRole('link', { name: /guide\.md/i })
     expect(link).toHaveAttribute('data-inline-reference-kind', 'file')
     expect(link).toHaveAttribute('title', './docs/guide.md')
+  })
+
+  it('opens absolute local file links in the internal viewer', async () => {
+    renderWithLocale('[report](file:///D:/docs/report.pdf)')
+    fireEvent.click(screen.getByRole('link', { name: /report/i }))
+
+    await waitFor(() => {
+      expect(authorizeFile).toHaveBeenCalledWith({ absolutePath: 'D:/docs/report.pdf' })
+      expect(classify).toHaveBeenCalledWith({ absolutePath: 'D:/docs/report.pdf' })
+    })
+    const activeTab = useUIStore.getState().activeDetailTab
+    expect(activeTab.kind).toBe('viewer')
+    if (activeTab.kind === 'viewer') {
+      const tab = useViewerTabStore.getState().getThreadState('thread-1').tabs.find((entry) => entry.id === activeTab.id)
+      expect(tab).toMatchObject({
+        kind: 'file',
+        absolutePath: 'D:/docs/report.pdf',
+        contentClass: 'pdf'
+      })
+    }
   })
 
   it('shortens raw browser links into readable labels', () => {

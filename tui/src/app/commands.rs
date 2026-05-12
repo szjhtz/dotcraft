@@ -12,7 +12,6 @@ pub struct ParsedSlashCommand {
 /// Slash commands that must remain client-local in TUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalSlashCommand {
-    Help,
     Sessions,
     Load { thread_id: String },
     Plan,
@@ -20,14 +19,19 @@ pub enum LocalSlashCommand {
     Clear,
     Goal { argument_text: String },
     Model { model_name: Option<String> },
+    Skills,
+    Permissions,
     Quit,
 }
 
-/// Static local command metadata used by help/completion.
+/// Static local command metadata used by completion.
 pub fn local_command_catalog() -> Vec<SlashCommandDescriptor> {
     vec![
-        SlashCommandDescriptor::new("/help", "Show this help overlay", "local-ui"),
-        SlashCommandDescriptor::new("/sessions", "Browse and resume previous threads", "local-ui"),
+        SlashCommandDescriptor::new(
+            "/sessions",
+            "Browse and resume previous threads",
+            "local-ui",
+        ),
         SlashCommandDescriptor::new("/load", "Resume a thread by ID (/load <id>)", "local-ui"),
         SlashCommandDescriptor::new("/plan", "Switch to Plan mode", "local-ui"),
         SlashCommandDescriptor::new("/agent", "Switch to Agent mode", "local-ui"),
@@ -40,6 +44,12 @@ pub fn local_command_catalog() -> Vec<SlashCommandDescriptor> {
         SlashCommandDescriptor::new(
             "/model",
             "Open model picker or set model directly (/model [name|default])",
+            "local-ui",
+        ),
+        SlashCommandDescriptor::new("/skills", "Enable, disable, or inspect skills", "local-ui"),
+        SlashCommandDescriptor::new(
+            "/permissions",
+            "Choose what DotCraft is allowed to do",
             "local-ui",
         ),
         SlashCommandDescriptor::new("/quit", "Exit dotcraft-tui", "local-ui"),
@@ -101,7 +111,6 @@ pub fn parse(input: &str) -> Option<ParsedSlashCommand> {
 /// Map a parsed command to a local TUI command if applicable.
 pub fn to_local_command(parsed: &ParsedSlashCommand) -> Option<LocalSlashCommand> {
     Some(match parsed.name.as_str() {
-        "/help" => LocalSlashCommand::Help,
         "/sessions" => LocalSlashCommand::Sessions,
         "/load" => LocalSlashCommand::Load {
             thread_id: parsed.argument_text.clone(),
@@ -119,6 +128,8 @@ pub fn to_local_command(parsed: &ParsedSlashCommand) -> Option<LocalSlashCommand
                 Some(parsed.argument_text.clone())
             },
         },
+        "/skills" => LocalSlashCommand::Skills,
+        "/permissions" | "/premissions" => LocalSlashCommand::Permissions,
         "/quit" | "/exit" => LocalSlashCommand::Quit,
         _ => return None,
     })
@@ -139,17 +150,27 @@ mod tests {
     #[test]
     fn merge_catalog_prefers_local_command_metadata() {
         let merged = merge_command_catalog(&[CommandInfo {
-            name: "/help".to_string(),
+            name: "/skills".to_string(),
             aliases: vec![],
-            description: "Server help".to_string(),
+            description: "Server skills".to_string(),
             category: "builtin".to_string(),
             requires_admin: false,
         }]);
-        let help = merged
+        let skills = merged
             .iter()
-            .find(|c| c.name == "/help")
-            .expect("help should exist");
-        assert_eq!(help.category, "local-ui");
-        assert_eq!(help.description, "Show this help overlay");
+            .find(|c| c.name == "/skills")
+            .expect("skills should exist");
+        assert_eq!(skills.category, "local-ui");
+        assert_eq!(skills.description, "Enable, disable, or inspect skills");
+    }
+
+    #[test]
+    fn permissions_command_accepts_common_typo_alias() {
+        let parsed = parse("/premissions").expect("should parse");
+
+        assert_eq!(
+            to_local_command(&parsed),
+            Some(LocalSlashCommand::Permissions)
+        );
     }
 }

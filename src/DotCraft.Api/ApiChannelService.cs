@@ -14,6 +14,7 @@ using DotCraft.Hosting;
 using DotCraft.Lsp;
 using DotCraft.Mcp;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Modules;
 using DotCraft.Security;
 using DotCraft.Skills;
@@ -360,7 +361,8 @@ public sealed class ApiChannelService(
                     traceCollector,
                     () => tools.Select(t => t.Name).ToArray(),
                     sp.GetService<CustomCommandLoader>(),
-                    sandboxEnabled: config.Tools.Sandbox.Enabled)
+                    sandboxEnabled: config.Tools.Sandbox.Enabled,
+                    dreamStore: sp.GetService<DreamStore>())
             ]
         };
     }

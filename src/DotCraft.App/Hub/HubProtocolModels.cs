@@ -67,6 +67,8 @@ public sealed class HubNotificationRequest
 {
     public string? WorkspacePath { get; set; }
 
+    public string? ThreadId { get; set; }
+
     public string Kind { get; set; } = string.Empty;
 
     public string Title { get; set; } = string.Empty;
@@ -78,6 +80,8 @@ public sealed class HubNotificationRequest
     public string? Source { get; set; }
 
     public string? ActionUrl { get; set; }
+
+    public bool? OpenDesktopOnClick { get; set; }
 }
 
 public sealed record HubAppServerResponse(

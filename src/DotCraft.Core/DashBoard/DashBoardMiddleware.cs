@@ -3,8 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using DotCraft.Agents;
 using DotCraft.Configuration;
+using DotCraft.Dreams;
 using DotCraft.Hosting;
 using DotCraft.Protocol;
+using DotCraft.Protocol.AppServer;
 using DotCraft.Tracing;
 using DotCraft.Tools;
 using Microsoft.AspNetCore.Builder;
@@ -42,7 +44,9 @@ public static class DashBoardMiddleware
         SessionPersistenceService? persistence = null,
         Func<string, CancellationToken, Task>? deleteThreadAsync = null,
         IDashBoardSessionHandler? sessionHandler = null,
-        bool refreshTraceFromDiskBeforeRead = false)
+        bool refreshTraceFromDiskBeforeRead = false,
+        DreamStore? dreamStore = null,
+        DreamsService? dreamsService = null)
     {
         var logger = endpoints.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DashBoard");
 
@@ -386,6 +390,9 @@ public static class DashBoardMiddleware
             });
         }
 
+        if (dreamStore != null && dreamsService != null)
+            MapDreamsEndpoints(endpoints, paths, dreamStore, dreamsService, logger);
+
         endpoints.MapGet("/dashboard/api/events/stream", async ctx =>
         {
             ctx.Response.Headers.ContentType = "text/event-stream";
@@ -535,6 +542,191 @@ public static class DashBoardMiddleware
                 RestoreAtPath(postedNested, existingNested, path, depth + 1);
             }
         }
+    }
+
+    private static void MapDreamsEndpoints(
+        IEndpointRouteBuilder endpoints,
+        DotCraftPaths paths,
+        DreamStore dreamStore,
+        DreamsService dreamsService,
+        ILogger? logger)
+    {
+        endpoints.MapGet("/dashboard/api/dreams/status", (HttpContext ctx) =>
+            Results.Json(BuildDreamsStatus(ctx, paths, dreamStore, dreamsService), JsonOptions));
+
+        endpoints.MapGet("/dashboard/api/dreams/runs", (HttpContext ctx) =>
+        {
+            var includeArchived = string.Equals(
+                ctx.Request.Query["includeArchived"].ToString(),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+            return Results.Json(new
+            {
+                activeDreamStoreId = dreamStore.GetActiveStoreId(),
+                runs = dreamsService.ListRuns(includeArchived).Select(ToDreamRunWire).ToList()
+            }, JsonOptions);
+        });
+
+        endpoints.MapGet("/dashboard/api/dreams/runs/{runId}", (string runId) =>
+        {
+            var state = dreamsService.LoadRun(runId.Trim());
+            return state == null
+                ? Results.Json(new { error = "Dream run not found." }, JsonOptions, statusCode: StatusCodes.Status404NotFound)
+                : Results.Json(new
+                {
+                    run = ToDreamRunWire(state),
+                    activeDreamStoreId = dreamStore.GetActiveStoreId(),
+                    preview = BuildDreamsRunPreview(dreamStore, state)
+                }, JsonOptions);
+        });
+
+        endpoints.MapPost("/dashboard/api/dreams/run", async (HttpContext ctx) =>
+        {
+            var state = await dreamsService.RequestRunAsync(cancellationToken: ctx.RequestAborted).ConfigureAwait(false);
+            return Results.Json(new
+            {
+                run = ToDreamRunWire(state),
+                activeDreamStoreId = dreamStore.GetActiveStoreId(),
+                status = BuildDreamsStatus(ctx, paths, dreamStore, dreamsService)
+            }, JsonOptions);
+        });
+
+        endpoints.MapPost("/dashboard/api/dreams/runs/{runId}/{action}", async (HttpContext ctx, string runId, string action) =>
+        {
+            try
+            {
+                var normalizedAction = action.ToLowerInvariant();
+                DreamsRunState? state = normalizedAction switch
+                {
+                    "apply" => dreamsService.ApplyRun(runId.Trim()),
+                    "discard" => dreamsService.DiscardRun(runId.Trim()),
+                    "archive" => dreamsService.ArchiveRun(runId.Trim()),
+                    "cancel" => await dreamsService.CancelRunAsync(runId.Trim(), ctx.RequestAborted).ConfigureAwait(false),
+                    _ => null
+                };
+
+                if (state == null)
+                {
+                    var statusCode = normalizedAction is "apply" or "discard" or "archive" or "cancel"
+                        ? StatusCodes.Status404NotFound
+                        : StatusCodes.Status400BadRequest;
+                    return Results.Json(new { error = "Dream run not found." }, JsonOptions, statusCode: statusCode);
+                }
+
+                if (string.Equals(action, "apply", StringComparison.OrdinalIgnoreCase))
+                    ctx.RequestServices.GetService<IAppConfigMonitor>()?.NotifyChanged("dashboard/dreams/apply", [ConfigChangeRegions.Memory]);
+
+                return Results.Json(new
+                {
+                    run = ToDreamRunWire(state),
+                    activeDreamStoreId = dreamStore.GetActiveStoreId()
+                }, JsonOptions);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, JsonOptions, statusCode: StatusCodes.Status400BadRequest);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Dashboard Dreams action failed for {RunId} / {Action}", runId, action);
+                return Results.Json(new { error = ex.Message }, JsonOptions, statusCode: StatusCodes.Status500InternalServerError);
+            }
+        });
+    }
+
+    private static object BuildDreamsStatus(
+        HttpContext ctx,
+        DotCraftPaths paths,
+        DreamStore dreamStore,
+        DreamsService dreamsService)
+    {
+        var config = ResolveDreamsConfig(ctx, paths);
+        var state = dreamsService.LoadLatestState();
+        var running = state?.Status == DreamsRunStatuses.Running && !state.EndedAt.HasValue;
+        var runs = dreamsService.ListRuns(includeArchived: false);
+        return new
+        {
+            enabled = config.Enabled,
+            interval = FormatTimeSpanForWire(config.Interval),
+            threadLookbackCount = config.ThreadLookbackCount,
+            autoApply = config.AutoApply,
+            historyTailChars = config.HistoryTailChars,
+            minCompletedTurnsSinceLastRun = config.MinCompletedTurnsSinceLastRun,
+            nextRunAt = state?.NextRunAt,
+            running,
+            activeDreamStoreId = dreamStore.GetActiveStoreId(),
+            pendingCount = runs.Count(static run => run.ReviewStatus == DreamsReviewStatuses.Pending),
+            lastRun = state == null ? null : ToDreamRunWire(state)
+        };
+    }
+
+    private static DreamsConfig ResolveDreamsConfig(HttpContext ctx, DotCraftPaths paths)
+    {
+        var monitored = ctx.RequestServices.GetService<IAppConfigMonitor>()?.Current.Dreams;
+        if (monitored != null)
+            return monitored;
+
+        var configPath = Path.Combine(paths.CraftPath, "config.json");
+        return AppConfig.LoadWithGlobalFallback(configPath).Dreams ?? new DreamsConfig();
+    }
+
+    private static string FormatTimeSpanForWire(TimeSpan value) =>
+        value.ToString("c", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static DreamsRunStateWire ToDreamRunWire(DreamsRunState state) => new()
+    {
+        Id = state.Id,
+        Status = state.Status,
+        StartedAt = state.StartedAt,
+        EndedAt = state.EndedAt,
+        ProcessedThreadCount = state.ProcessedThreadCount,
+        CandidateThreadCount = state.CandidateThreadCount,
+        DreamWritten = state.DreamWritten,
+        HistoryWritten = state.HistoryWritten,
+        TopicFilesWritten = state.TopicFilesWritten,
+        TopicFilesDeleted = state.TopicFilesDeleted,
+        EvidenceSearchCount = state.EvidenceSearchCount,
+        EvidenceReadCount = state.EvidenceReadCount,
+        OutputStoreId = state.OutputStoreId,
+        ReviewStatus = state.ReviewStatus,
+        AutoApplied = state.AutoApplied,
+        ErrorType = state.ErrorType,
+        EvidenceThreadIds = state.EvidenceThreadIds,
+        WrittenPaths = state.WrittenPaths,
+        ThreadId = state.ThreadId,
+        TurnId = state.TurnId,
+        TurnIds = state.TurnIds,
+        Trigger = state.Trigger,
+        Message = state.Message,
+        Usage = state.Usage,
+        InputManifestPath = state.InputManifestPath
+    };
+
+    private static object? BuildDreamsRunPreview(DreamStore dreamStore, DreamsRunState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.OutputStoreId))
+            return null;
+
+        var activeStoreId = dreamStore.GetActiveStoreId();
+        return new
+        {
+            activeStoreId,
+            outputStoreId = state.OutputStoreId,
+            activeIndexMarkdown = string.IsNullOrWhiteSpace(activeStoreId) ? string.Empty : dreamStore.ReadIndex(activeStoreId),
+            outputIndexMarkdown = dreamStore.ReadIndex(state.OutputStoreId),
+            activeTopicPaths = string.IsNullOrWhiteSpace(activeStoreId)
+                ? new List<string>()
+                : dreamStore.ListTopicFiles(activeStoreId).Select(static topic => topic.Path).ToList(),
+            outputTopicPaths = dreamStore.ListTopicFiles(state.OutputStoreId).Select(static topic => topic.Path).ToList(),
+            inputManifestMarkdown = ReadOptionalFile(state.InputManifestPath)
+        };
+    }
+
+    private static string ReadOptionalFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return string.Empty;
+        return File.ReadAllText(path);
     }
 
     private static void MapOrchestratorEndpoints(

@@ -64,4 +64,18 @@ describe('segmentsFromNativeInputParts commandRef rendering', () => {
       { type: 'text', value: ' some text' }
     ])
   })
+
+  it('keeps fileRef displayPath separate from the real target path', () => {
+    const parts: InputPart[] = [
+      {
+        type: 'fileRef',
+        path: 'C:\\temp\\notes.txt',
+        displayPath: 'notes.txt'
+      }
+    ]
+
+    expect(segmentsFromNativeInputParts(parts)).toEqual([
+      { type: 'fileRef', relativePath: 'notes.txt', targetPath: 'C:\\temp\\notes.txt' }
+    ])
+  })
 })

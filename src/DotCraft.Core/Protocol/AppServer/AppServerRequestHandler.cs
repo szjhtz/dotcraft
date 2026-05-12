@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Globalization;
 using DotCraft.Agents;
 using DotCraft.Abstractions;
 using DotCraft.Commands.Core;
@@ -14,6 +15,7 @@ using DotCraft.Localization;
 using DotCraft.Lsp;
 using DotCraft.Mcp;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Plugins;
 using DotCraft.Skills;
 using DotCraft.Tools.BackgroundTerminals;
@@ -63,7 +65,9 @@ public sealed class AppServerRequestHandler(
     IAppConfigMonitor? appConfigMonitor = null,
     OpenAIClientProvider? openAIClientProvider = null,
     IBackgroundTerminalService? backgroundTerminalService = null,
-    IContextPageManager? contextPageManager = null)
+    IContextPageManager? contextPageManager = null,
+    DreamStore? dreamStore = null,
+    DreamsService? dreamsService = null)
 {
     private readonly CommandRegistry _commandRegistry = commandRegistry
                                                         ?? CommandRegistry.CreateDefault(
@@ -133,6 +137,15 @@ public sealed class AppServerRequestHandler(
         AppServerMethods.WelcomeSuggestions,
         AppServerMethods.WorkspaceConfigSchema,
         AppServerMethods.WorkspaceConfigUpdate,
+        AppServerMethods.DreamsStatus,
+        AppServerMethods.DreamsRun,
+        AppServerMethods.DreamsCreate,
+        AppServerMethods.DreamsGet,
+        AppServerMethods.DreamsList,
+        AppServerMethods.DreamsCancel,
+        AppServerMethods.DreamsArchive,
+        AppServerMethods.DreamsApply,
+        AppServerMethods.DreamsDiscard,
         AppServerMethods.MemoryReset,
         AppServerMethods.CronList,
         AppServerMethods.CronRemove,
@@ -244,6 +257,7 @@ public sealed class AppServerRequestHandler(
                 AppServerMethods.ThreadGoalClear => HandleThreadGoalClearAsync(msg, ct),
                 AppServerMethods.ThreadCompactStart => HandleThreadCompactStartAsync(msg, ct),
                 AppServerMethods.ThreadMemoryConsolidateStart => HandleThreadMemoryConsolidateStartAsync(msg, ct),
+                AppServerMethods.ThreadMaintenanceInterrupt => HandleThreadMaintenanceInterruptAsync(msg, ct),
                 AppServerMethods.ThreadRollback => HandleThreadRollbackAsync(msg, ct),
                 AppServerMethods.ThreadSubscribe => HandleThreadSubscribeAsync(msg, ct),
                 AppServerMethods.ThreadUnsubscribe => HandleThreadUnsubscribeAsync(msg, ct),
@@ -295,6 +309,15 @@ public sealed class AppServerRequestHandler(
                 AppServerMethods.WelcomeSuggestions => HandleWelcomeSuggestionsAsync(msg, ct),
                 AppServerMethods.WorkspaceConfigSchema => HandleWorkspaceConfigSchemaAsync(msg, ct),
                 AppServerMethods.WorkspaceConfigUpdate => HandleWorkspaceConfigUpdateAsync(msg, ct),
+                AppServerMethods.DreamsStatus => HandleDreamsStatusAsync(msg, ct),
+                AppServerMethods.DreamsRun => HandleDreamsRunAsync(msg, ct),
+                AppServerMethods.DreamsCreate => HandleDreamsCreateAsync(msg, ct),
+                AppServerMethods.DreamsGet => HandleDreamsGetAsync(msg, ct),
+                AppServerMethods.DreamsList => HandleDreamsListAsync(msg, ct),
+                AppServerMethods.DreamsCancel => HandleDreamsCancelAsync(msg, ct),
+                AppServerMethods.DreamsArchive => HandleDreamsArchiveAsync(msg, ct),
+                AppServerMethods.DreamsApply => HandleDreamsApplyAsync(msg, ct),
+                AppServerMethods.DreamsDiscard => HandleDreamsDiscardAsync(msg, ct),
                 AppServerMethods.MemoryReset => HandleMemoryResetAsync(msg, ct),
                 _ => TryHandleExtensionAsync(method, msg, ct)
             });
@@ -339,6 +362,7 @@ public sealed class AppServerRequestHandler(
             ThreadGoals = GoalsCapabilityEnabled(),
             ManualCompaction = true,
             ManualMemoryConsolidation = memoryStore != null,
+            ThreadMaintenanceInterrupt = true,
             ApprovalFlow = true,
             ModeSwitch = true,
             ConfigOverride = true,
@@ -354,6 +378,7 @@ public sealed class AppServerRequestHandler(
             ModelCatalogManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath),
             WorkspaceConfigManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath),
             MemoryManagement = memoryStore != null,
+            Dreams = dreamsService != null && !string.IsNullOrWhiteSpace(workspaceCraftPath),
             McpManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath) && mcpClientManager != null,
             McpServerOrigins = mcpClientManager != null,
             ExternalChannelManagement = !string.IsNullOrWhiteSpace(workspaceCraftPath),
@@ -1152,6 +1177,13 @@ public sealed class AppServerRequestHandler(
             MemoryWritten = result.MemoryWritten,
             HistoryWritten = result.HistoryWritten
         };
+    }
+
+    private async Task<object?> HandleThreadMaintenanceInterruptAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        var p = GetParams<ThreadMaintenanceInterruptParams>(msg);
+        await sessionService.CancelThreadMaintenanceAsync(p.ThreadId, ct);
+        return new { };
     }
 
     private async Task<object?> HandleThreadRollbackAsync(AppServerIncomingMessage msg, CancellationToken ct)
@@ -2442,6 +2474,25 @@ public sealed class AppServerRequestHandler(
         };
     }
 
+    private void RefreshCurrentDreamsConfig()
+    {
+        if (appConfigMonitor == null || string.IsNullOrWhiteSpace(workspaceCraftPath))
+            return;
+
+        var configPath = Path.Combine(workspaceCraftPath, "config.json");
+        var mergedConfig = AppConfig.LoadWithGlobalFallback(configPath);
+        appConfigMonitor.Current.Dreams = new DreamsConfig
+        {
+            Enabled = mergedConfig.Dreams.Enabled,
+            Interval = mergedConfig.Dreams.Interval,
+            StartupDelay = mergedConfig.Dreams.StartupDelay,
+            ThreadLookbackCount = mergedConfig.Dreams.ThreadLookbackCount,
+            AutoApply = mergedConfig.Dreams.AutoApply,
+            HistoryTailChars = mergedConfig.Dreams.HistoryTailChars,
+            MinCompletedTurnsSinceLastRun = mergedConfig.Dreams.MinCompletedTurnsSinceLastRun
+        };
+    }
+
     private void RefreshCurrentLspConfig(bool? toolsLspEnabled)
     {
         if (appConfigMonitor == null)
@@ -2527,7 +2578,7 @@ public sealed class AppServerRequestHandler(
         if (string.IsNullOrWhiteSpace(workspaceCraftPath))
             throw AppServerErrors.MethodNotFound(AppServerMethods.WorkspaceConfigUpdate);
         if (!msg.Params.HasValue || msg.Params.Value.ValueKind != JsonValueKind.Object)
-            throw AppServerErrors.InvalidParams("At least one of 'model', 'apiKey', 'endPoint', 'welcomeSuggestionsEnabled', 'skillsSelfLearningEnabled', 'memoryAutoConsolidateEnabled', 'defaultApprovalPolicy', or 'toolsLspEnabled' is required.");
+            throw AppServerErrors.InvalidParams("At least one supported workspace config field is required.");
 
         var hasModel = TryGetCaseInsensitiveProperty(msg.Params.Value, "model", out var modelEl);
         var hasApiKey = TryGetCaseInsensitiveProperty(msg.Params.Value, "apiKey", out var apiKeyEl);
@@ -2544,6 +2595,22 @@ public sealed class AppServerRequestHandler(
             msg.Params.Value,
             "memoryAutoConsolidateEnabled",
             out var memoryAutoConsolidateEnabledEl);
+        var hasDreamsEnabled = TryGetCaseInsensitiveProperty(
+            msg.Params.Value,
+            "dreamsEnabled",
+            out var dreamsEnabledEl);
+        var hasDreamsInterval = TryGetCaseInsensitiveProperty(
+            msg.Params.Value,
+            "dreamsInterval",
+            out var dreamsIntervalEl);
+        var hasDreamsThreadLookbackCount = TryGetCaseInsensitiveProperty(
+            msg.Params.Value,
+            "dreamsThreadLookbackCount",
+            out var dreamsThreadLookbackCountEl);
+        var hasDreamsAutoApply = TryGetCaseInsensitiveProperty(
+            msg.Params.Value,
+            "dreamsAutoApply",
+            out var dreamsAutoApplyEl);
         var hasDefaultApprovalPolicy = TryGetCaseInsensitiveProperty(
             msg.Params.Value,
             "defaultApprovalPolicy",
@@ -2558,11 +2625,15 @@ public sealed class AppServerRequestHandler(
             && !hasWelcomeSuggestionsEnabled
             && !hasSkillsSelfLearningEnabled
             && !hasMemoryAutoConsolidateEnabled
+            && !hasDreamsEnabled
+            && !hasDreamsInterval
+            && !hasDreamsThreadLookbackCount
+            && !hasDreamsAutoApply
             && !hasDefaultApprovalPolicy
             && !hasToolsLspEnabled)
         {
             throw AppServerErrors.InvalidParams(
-                "At least one of 'model', 'apiKey', 'endPoint', 'welcomeSuggestionsEnabled', 'skillsSelfLearningEnabled', 'memoryAutoConsolidateEnabled', 'defaultApprovalPolicy', or 'toolsLspEnabled' is required.");
+                "At least one supported workspace config field is required.");
         }
 
         var model = hasModel ? ParseNullableString(modelEl, "model") : null;
@@ -2576,6 +2647,18 @@ public sealed class AppServerRequestHandler(
             : null;
         var memoryAutoConsolidateEnabled = hasMemoryAutoConsolidateEnabled
             ? ParseNullableBoolean(memoryAutoConsolidateEnabledEl, "memoryAutoConsolidateEnabled")
+            : null;
+        var dreamsEnabled = hasDreamsEnabled
+            ? ParseNullableBoolean(dreamsEnabledEl, "dreamsEnabled")
+            : null;
+        var dreamsInterval = hasDreamsInterval
+            ? ParseNullablePositiveTimeSpan(dreamsIntervalEl, "dreamsInterval")
+            : null;
+        var dreamsThreadLookbackCount = hasDreamsThreadLookbackCount
+            ? ParseNullablePositiveInt32(dreamsThreadLookbackCountEl, "dreamsThreadLookbackCount")
+            : null;
+        var dreamsAutoApply = hasDreamsAutoApply
+            ? ParseNullableBoolean(dreamsAutoApplyEl, "dreamsAutoApply")
             : null;
         var defaultApprovalPolicy = hasDefaultApprovalPolicy
             ? ParseNullableString(defaultApprovalPolicyEl, "defaultApprovalPolicy")
@@ -2592,6 +2675,10 @@ public sealed class AppServerRequestHandler(
             welcomeSuggestionsEnabled,
             skillsSelfLearningEnabled,
             memoryAutoConsolidateEnabled,
+            dreamsEnabled,
+            dreamsInterval,
+            dreamsThreadLookbackCount,
+            dreamsAutoApply,
             hasDefaultApprovalPolicy ? NormalizeDefaultApprovalPolicy(defaultApprovalPolicy) : null,
             toolsLspEnabled,
             hasModel,
@@ -2600,6 +2687,10 @@ public sealed class AppServerRequestHandler(
             hasWelcomeSuggestionsEnabled,
             hasSkillsSelfLearningEnabled,
             hasMemoryAutoConsolidateEnabled,
+            hasDreamsEnabled,
+            hasDreamsInterval,
+            hasDreamsThreadLookbackCount,
+            hasDreamsAutoApply,
             hasDefaultApprovalPolicy,
             hasToolsLspEnabled);
 
@@ -2627,6 +2718,18 @@ public sealed class AppServerRequestHandler(
             changedRegions.Add(ConfigChangeRegions.Memory);
             RefreshCurrentMemoryConfig();
         }
+        if (saveResult.DreamsChanged)
+        {
+            changedRegions.Add(ConfigChangeRegions.Memory);
+            RefreshCurrentDreamsConfig();
+            if (dreamsService != null)
+            {
+                if (appConfigMonitor?.Current.Dreams.Enabled == true)
+                    await dreamsService.StartAsync(ct);
+                else
+                    await dreamsService.StopAsync(ct);
+            }
+        }
         if (saveResult.DefaultApprovalPolicyChanged)
         {
             changedRegions.Add(ConfigChangeRegions.WorkspaceDefaultApprovalPolicy);
@@ -2653,6 +2756,10 @@ public sealed class AppServerRequestHandler(
             WelcomeSuggestionsEnabled = saveResult.WelcomeSuggestionsEnabled,
             SkillsSelfLearningEnabled = saveResult.SkillsSelfLearningEnabled,
             MemoryAutoConsolidateEnabled = saveResult.MemoryAutoConsolidateEnabled,
+            DreamsEnabled = saveResult.DreamsEnabled,
+            DreamsInterval = saveResult.DreamsInterval,
+            DreamsThreadLookbackCount = saveResult.DreamsThreadLookbackCount,
+            DreamsAutoApply = saveResult.DreamsAutoApply,
             DefaultApprovalPolicy = saveResult.DefaultApprovalPolicy,
             ToolsLspEnabled = saveResult.ToolsLspEnabled
         };
@@ -2671,6 +2778,218 @@ public sealed class AppServerRequestHandler(
         });
     }
 
+    private Task<object?> HandleDreamsStatusAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        EnsureDreamsAvailable();
+        ValidateEmptyObjectParams(msg, AppServerMethods.DreamsStatus);
+        return Task.FromResult<object?>(BuildDreamsStatusResult());
+    }
+
+    private async Task<object?> HandleDreamsRunAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        EnsureDreamsAvailable();
+        ValidateEmptyObjectParams(msg, AppServerMethods.DreamsRun);
+        await dreamsService!.RequestRunAsync(cancellationToken: ct).ConfigureAwait(false);
+        return BuildDreamsStatusResult();
+    }
+
+    private async Task<object?> HandleDreamsCreateAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        EnsureDreamsAvailable();
+        var p = msg.Params.HasValue && msg.Params.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+            ? new DreamsCreateParams()
+            : GetParams<DreamsCreateParams>(msg);
+        if (p.ThreadLookbackCount.HasValue && p.ThreadLookbackCount.Value <= 0)
+            throw AppServerErrors.InvalidParams("'threadLookbackCount' must be a positive integer.");
+
+        var state = await dreamsService!.RequestRunAsync(
+                new DreamsRunRequest(p.ThreadIds, p.ThreadLookbackCount, p.Instructions, p.Model),
+                ct)
+            .ConfigureAwait(false);
+        return new DreamsRunResult
+        {
+            Run = ToDreamRunWire(state),
+            ActiveDreamStoreId = dreamStore?.GetActiveStoreId()
+        };
+    }
+
+    private Task<object?> HandleDreamsGetAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        EnsureDreamsAvailable();
+        var p = GetParams<DreamsRunIdParams>(msg);
+        var state = dreamsService!.LoadRun(NormalizeDreamRunId(p.RunId));
+        if (state == null)
+            throw AppServerErrors.InvalidParams("Dream run not found.");
+        return Task.FromResult<object?>(new DreamsRunResult
+        {
+            Run = ToDreamRunWire(state),
+            ActiveDreamStoreId = dreamStore?.GetActiveStoreId(),
+            Preview = BuildDreamsRunPreview(state)
+        });
+    }
+
+    private Task<object?> HandleDreamsListAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        EnsureDreamsAvailable();
+        var p = msg.Params.HasValue && msg.Params.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+            ? new DreamsListParams()
+            : GetParams<DreamsListParams>(msg);
+        return Task.FromResult<object?>(new DreamsListResult
+        {
+            Runs = dreamsService!.ListRuns(p.IncludeArchived)
+                .Select(ToDreamRunWire)
+                .ToList()
+        });
+    }
+
+    private async Task<object?> HandleDreamsCancelAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        EnsureDreamsAvailable();
+        var p = GetParams<DreamsRunIdParams>(msg);
+        var state = await dreamsService!.CancelRunAsync(NormalizeDreamRunId(p.RunId), ct).ConfigureAwait(false);
+        if (state == null)
+            throw AppServerErrors.InvalidParams("Dream run not found.");
+        return new DreamsRunResult { Run = ToDreamRunWire(state), ActiveDreamStoreId = dreamStore?.GetActiveStoreId() };
+    }
+
+    private Task<object?> HandleDreamsArchiveAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        EnsureDreamsAvailable();
+        var p = GetParams<DreamsRunIdParams>(msg);
+        var state = dreamsService!.ArchiveRun(NormalizeDreamRunId(p.RunId));
+        if (state == null)
+            throw AppServerErrors.InvalidParams("Dream run not found.");
+        return Task.FromResult<object?>(new DreamsRunResult { Run = ToDreamRunWire(state), ActiveDreamStoreId = dreamStore?.GetActiveStoreId() });
+    }
+
+    private Task<object?> HandleDreamsApplyAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        EnsureDreamsAvailable();
+        var p = GetParams<DreamsRunIdParams>(msg);
+        DreamsRunState? state;
+        try
+        {
+            state = dreamsService!.ApplyRun(NormalizeDreamRunId(p.RunId));
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw AppServerErrors.InvalidParams(ex.Message);
+        }
+        if (state == null)
+            throw AppServerErrors.InvalidParams("Dream run not found.");
+        MarkMemoryContextDirty();
+        appConfigMonitor?.NotifyChanged(AppServerMethods.DreamsApply, [ConfigChangeRegions.Memory]);
+        return Task.FromResult<object?>(new DreamsRunResult { Run = ToDreamRunWire(state), ActiveDreamStoreId = dreamStore?.GetActiveStoreId() });
+    }
+
+    private Task<object?> HandleDreamsDiscardAsync(AppServerIncomingMessage msg, CancellationToken ct)
+    {
+        _ = ct;
+        EnsureDreamsAvailable();
+        var p = GetParams<DreamsRunIdParams>(msg);
+        var state = dreamsService!.DiscardRun(NormalizeDreamRunId(p.RunId));
+        if (state == null)
+            throw AppServerErrors.InvalidParams("Dream run not found.");
+        return Task.FromResult<object?>(new DreamsRunResult { Run = ToDreamRunWire(state), ActiveDreamStoreId = dreamStore?.GetActiveStoreId() });
+    }
+
+    private void EnsureDreamsAvailable()
+    {
+        if (dreamsService == null || string.IsNullOrWhiteSpace(workspaceCraftPath))
+            throw AppServerErrors.MethodNotFound(AppServerMethods.DreamsStatus);
+    }
+
+    private DreamsStatusResult BuildDreamsStatusResult()
+    {
+        var config = appConfigMonitor?.Current.Dreams ?? new DreamsConfig();
+        var state = dreamsService!.LoadLatestState();
+        var running = state?.Status == DreamsRunStatuses.Running && !state.EndedAt.HasValue;
+        return new DreamsStatusResult
+        {
+            Enabled = config.Enabled,
+            Interval = FormatTimeSpanForWire(config.Interval),
+            ThreadLookbackCount = config.ThreadLookbackCount,
+            AutoApply = config.AutoApply,
+            HistoryTailChars = config.HistoryTailChars,
+            MinCompletedTurnsSinceLastRun = config.MinCompletedTurnsSinceLastRun,
+            NextRunAt = state?.NextRunAt,
+            Running = running,
+            ActiveDreamStoreId = dreamStore?.GetActiveStoreId(),
+            LastRun = state == null ? null : ToDreamRunWire(state)
+        };
+    }
+
+    private static DreamsRunStateWire ToDreamRunWire(DreamsRunState state) => new()
+    {
+        Id = state.Id,
+        Status = state.Status,
+        StartedAt = state.StartedAt,
+        EndedAt = state.EndedAt,
+        ProcessedThreadCount = state.ProcessedThreadCount,
+        CandidateThreadCount = state.CandidateThreadCount,
+        DreamWritten = state.DreamWritten,
+        HistoryWritten = state.HistoryWritten,
+        TopicFilesWritten = state.TopicFilesWritten,
+        TopicFilesDeleted = state.TopicFilesDeleted,
+        EvidenceSearchCount = state.EvidenceSearchCount,
+        EvidenceReadCount = state.EvidenceReadCount,
+        OutputStoreId = state.OutputStoreId,
+        ReviewStatus = state.ReviewStatus,
+        AutoApplied = state.AutoApplied,
+        ErrorType = state.ErrorType,
+        EvidenceThreadIds = state.EvidenceThreadIds,
+        WrittenPaths = state.WrittenPaths,
+        ThreadId = state.ThreadId,
+        TurnId = state.TurnId,
+        TurnIds = state.TurnIds,
+        Trigger = state.Trigger,
+        Message = state.Message,
+        Usage = state.Usage,
+        InputManifestPath = state.InputManifestPath
+    };
+
+    private DreamsRunPreviewWire? BuildDreamsRunPreview(DreamsRunState state)
+    {
+        if (dreamStore == null || string.IsNullOrWhiteSpace(state.OutputStoreId))
+            return null;
+
+        var activeStoreId = dreamStore.GetActiveStoreId();
+        return new DreamsRunPreviewWire
+        {
+            ActiveStoreId = activeStoreId,
+            OutputStoreId = state.OutputStoreId,
+            ActiveIndexMarkdown = string.IsNullOrWhiteSpace(activeStoreId) ? string.Empty : dreamStore.ReadIndex(activeStoreId),
+            OutputIndexMarkdown = dreamStore.ReadIndex(state.OutputStoreId),
+            ActiveTopicPaths = string.IsNullOrWhiteSpace(activeStoreId)
+                ? []
+                : dreamStore.ListTopicFiles(activeStoreId).Select(static topic => topic.Path).ToList(),
+            OutputTopicPaths = dreamStore.ListTopicFiles(state.OutputStoreId).Select(static topic => topic.Path).ToList()
+        };
+    }
+
+    private static string NormalizeDreamRunId(string runId)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            throw AppServerErrors.InvalidParams("'runId' is required.");
+        return runId.Trim();
+    }
+
+    private static void ValidateEmptyObjectParams(AppServerIncomingMessage msg, string method)
+    {
+        if (msg.Params.HasValue
+            && msg.Params.Value.ValueKind is not JsonValueKind.Null
+                and not JsonValueKind.Object
+                and not JsonValueKind.Undefined)
+        {
+            throw AppServerErrors.InvalidParams($"{method} accepts omitted, null, or empty-object params.");
+        }
+    }
+
     private Task<object?> HandleMemoryResetAsync(AppServerIncomingMessage msg, CancellationToken ct)
     {
         _ = ct;
@@ -2687,6 +3006,7 @@ public sealed class AppServerRequestHandler(
         try
         {
             memoryStore.ClearAll();
+            dreamStore?.ClearAll();
             MarkMemoryContextDirty();
             if (!string.IsNullOrWhiteSpace(_hostWorkspacePath))
                 welcomeSuggestionService?.ClearWorkspaceCache(_hostWorkspacePath);
@@ -3862,7 +4182,9 @@ public sealed class AppServerRequestHandler(
         if (msg.Contains("archived and cannot be resumed") || msg.Contains("is not Active"))
             return AppServerErrors.ThreadNotActive(id);
 
-        if (msg.Contains("already has a running Turn") || msg.Contains("has a running Turn"))
+        if (msg.Contains("already has a running Turn")
+            || msg.Contains("has a running Turn")
+            || msg.Contains("has active thread maintenance"))
             return AppServerErrors.TurnInProgress(id);
 
         // historyMode contract violations are caller errors → InvalidParams (-32602)
@@ -3940,6 +4262,10 @@ public sealed class AppServerRequestHandler(
         bool? welcomeSuggestionsEnabled,
         bool? skillsSelfLearningEnabled,
         bool? memoryAutoConsolidateEnabled,
+        bool? dreamsEnabled,
+        TimeSpan? dreamsInterval,
+        int? dreamsThreadLookbackCount,
+        bool? dreamsAutoApply,
         string? defaultApprovalPolicy,
         bool? toolsLspEnabled,
         bool updateModel,
@@ -3948,6 +4274,10 @@ public sealed class AppServerRequestHandler(
         bool updateWelcomeSuggestionsEnabled,
         bool updateSkillsSelfLearningEnabled,
         bool updateMemoryAutoConsolidateEnabled,
+        bool updateDreamsEnabled,
+        bool updateDreamsInterval,
+        bool updateDreamsThreadLookbackCount,
+        bool updateDreamsAutoApply,
         bool updateDefaultApprovalPolicy,
         bool updateToolsLspEnabled)
     {
@@ -3967,6 +4297,14 @@ public sealed class AppServerRequestHandler(
         var selfLearningEnabledKey = selfLearningSection == null ? null : FindCaseInsensitiveKey(selfLearningSection, "Enabled");
         var memorySection = GetOrCreateConfigSection(root, "Memory", createIfMissing: updateMemoryAutoConsolidateEnabled);
         var memoryAutoConsolidateEnabledKey = memorySection == null ? null : FindCaseInsensitiveKey(memorySection, "AutoConsolidateEnabled");
+        var dreamsSection = GetOrCreateConfigSection(
+            root,
+            "Dreams",
+            createIfMissing: updateDreamsEnabled || updateDreamsInterval || updateDreamsThreadLookbackCount || updateDreamsAutoApply);
+        var dreamsEnabledKey = dreamsSection == null ? null : FindCaseInsensitiveKey(dreamsSection, "Enabled");
+        var dreamsIntervalKey = dreamsSection == null ? null : FindCaseInsensitiveKey(dreamsSection, "Interval");
+        var dreamsThreadLookbackCountKey = dreamsSection == null ? null : FindCaseInsensitiveKey(dreamsSection, "ThreadLookbackCount");
+        var dreamsAutoApplyKey = dreamsSection == null ? null : FindCaseInsensitiveKey(dreamsSection, "AutoApply");
         var permissionsSection = GetOrCreateConfigSection(root, "Permissions", createIfMissing: updateDefaultApprovalPolicy);
         var defaultApprovalPolicyKey = permissionsSection == null ? null : FindCaseInsensitiveKey(permissionsSection, "DefaultApprovalPolicy");
         var toolsSection = GetOrCreateConfigSection(root, "Tools", createIfMissing: updateToolsLspEnabled);
@@ -3981,6 +4319,10 @@ public sealed class AppServerRequestHandler(
         var existingWelcomeSuggestionsEnabled = ReadConfigBooleanValue(welcomeSection, welcomeEnabledKey);
         var existingSkillsSelfLearningEnabled = ReadConfigBooleanValue(selfLearningSection, selfLearningEnabledKey);
         var existingMemoryAutoConsolidateEnabled = ReadConfigBooleanValue(memorySection, memoryAutoConsolidateEnabledKey);
+        var existingDreamsEnabled = ReadConfigBooleanValue(dreamsSection, dreamsEnabledKey);
+        var existingDreamsInterval = ReadConfigTimeSpanValue(dreamsSection, dreamsIntervalKey);
+        var existingDreamsThreadLookbackCount = ReadConfigInt32Value(dreamsSection, dreamsThreadLookbackCountKey);
+        var existingDreamsAutoApply = ReadConfigBooleanValue(dreamsSection, dreamsAutoApplyKey);
         var existingDefaultApprovalPolicy = NormalizeDefaultApprovalPolicy(ReadConfigStringValue(permissionsSection, defaultApprovalPolicyKey));
         var existingToolsLspEnabled = ReadConfigBooleanValue(lspSection, toolsLspEnabledKey);
 
@@ -3993,6 +4335,14 @@ public sealed class AppServerRequestHandler(
             && existingSkillsSelfLearningEnabled != skillsSelfLearningEnabled;
         var memoryAutoConsolidateChanged = updateMemoryAutoConsolidateEnabled
             && existingMemoryAutoConsolidateEnabled != memoryAutoConsolidateEnabled;
+        var dreamsEnabledChanged = updateDreamsEnabled
+            && existingDreamsEnabled != dreamsEnabled;
+        var dreamsIntervalChanged = updateDreamsInterval
+            && existingDreamsInterval != dreamsInterval;
+        var dreamsThreadLookbackCountChanged = updateDreamsThreadLookbackCount
+            && existingDreamsThreadLookbackCount != dreamsThreadLookbackCount;
+        var dreamsAutoApplyChanged = updateDreamsAutoApply
+            && existingDreamsAutoApply != dreamsAutoApply;
         var defaultApprovalPolicyChanged = updateDefaultApprovalPolicy
             && !string.Equals(existingDefaultApprovalPolicy, defaultApprovalPolicy, StringComparison.Ordinal);
         var toolsLspEnabledChanged = updateToolsLspEnabled
@@ -4027,6 +4377,31 @@ public sealed class AppServerRequestHandler(
             UpsertOrRemoveConfigValue(memory, autoConsolidateExistingKey, "AutoConsolidateEnabled", memoryAutoConsolidateEnabled);
             RemoveConfigSectionIfEmpty(root, "Memory");
         }
+        if (updateDreamsEnabled || updateDreamsInterval || updateDreamsThreadLookbackCount || updateDreamsAutoApply)
+        {
+            var dreams = GetOrCreateConfigSection(root, "Dreams", createIfMissing: true)!;
+            if (updateDreamsEnabled)
+            {
+                var enabledExistingKey = FindCaseInsensitiveKey(dreams, "Enabled");
+                UpsertOrRemoveConfigValue(dreams, enabledExistingKey, "Enabled", dreamsEnabled);
+            }
+            if (updateDreamsInterval)
+            {
+                var intervalExistingKey = FindCaseInsensitiveKey(dreams, "Interval");
+                UpsertOrRemoveConfigValue(dreams, intervalExistingKey, "Interval", FormatTimeSpanForConfig(dreamsInterval));
+            }
+            if (updateDreamsThreadLookbackCount)
+            {
+                var threadLookbackExistingKey = FindCaseInsensitiveKey(dreams, "ThreadLookbackCount");
+                UpsertOrRemoveConfigValue(dreams, threadLookbackExistingKey, "ThreadLookbackCount", dreamsThreadLookbackCount);
+            }
+            if (updateDreamsAutoApply)
+            {
+                var autoApplyExistingKey = FindCaseInsensitiveKey(dreams, "AutoApply");
+                UpsertOrRemoveConfigValue(dreams, autoApplyExistingKey, "AutoApply", dreamsAutoApply);
+            }
+            RemoveConfigSectionIfEmpty(root, "Dreams");
+        }
         if (updateDefaultApprovalPolicy)
         {
             var permissions = GetOrCreateConfigSection(root, "Permissions", createIfMissing: true)!;
@@ -4050,6 +4425,10 @@ public sealed class AppServerRequestHandler(
             || welcomeSuggestionsChanged
             || skillsSelfLearningChanged
             || memoryAutoConsolidateChanged
+            || dreamsEnabledChanged
+            || dreamsIntervalChanged
+            || dreamsThreadLookbackCountChanged
+            || dreamsAutoApplyChanged
             || defaultApprovalPolicyChanged
             || toolsLspEnabledChanged)
         {
@@ -4071,6 +4450,18 @@ public sealed class AppServerRequestHandler(
             MemoryAutoConsolidateEnabled = updateMemoryAutoConsolidateEnabled
                 ? memoryAutoConsolidateEnabled
                 : existingMemoryAutoConsolidateEnabled,
+            DreamsEnabled = updateDreamsEnabled
+                ? dreamsEnabled
+                : existingDreamsEnabled,
+            DreamsInterval = updateDreamsInterval
+                ? FormatTimeSpanForConfig(dreamsInterval)
+                : FormatTimeSpanForConfig(existingDreamsInterval),
+            DreamsThreadLookbackCount = updateDreamsThreadLookbackCount
+                ? dreamsThreadLookbackCount
+                : existingDreamsThreadLookbackCount,
+            DreamsAutoApply = updateDreamsAutoApply
+                ? dreamsAutoApply
+                : existingDreamsAutoApply,
             DefaultApprovalPolicy = updateDefaultApprovalPolicy
                 ? defaultApprovalPolicy
                 : existingDefaultApprovalPolicy,
@@ -4083,6 +4474,7 @@ public sealed class AppServerRequestHandler(
             WelcomeSuggestionsChanged = welcomeSuggestionsChanged,
             SkillsSelfLearningChanged = skillsSelfLearningChanged,
             MemoryAutoConsolidateChanged = memoryAutoConsolidateChanged,
+            DreamsChanged = dreamsEnabledChanged || dreamsIntervalChanged || dreamsThreadLookbackCountChanged || dreamsAutoApplyChanged,
             DefaultApprovalPolicyChanged = defaultApprovalPolicyChanged,
             ToolsLspEnabledChanged = toolsLspEnabledChanged
         };
@@ -4147,6 +4539,22 @@ public sealed class AppServerRequestHandler(
         root[existingKey ?? canonicalKey] = value.Value;
     }
 
+    private static void UpsertOrRemoveConfigValue(
+        JsonObject root,
+        string? existingKey,
+        string canonicalKey,
+        int? value)
+    {
+        if (!value.HasValue)
+        {
+            if (existingKey != null)
+                root.Remove(existingKey);
+            return;
+        }
+
+        root[existingKey ?? canonicalKey] = value.Value;
+    }
+
     private static string? ParseNullableString(JsonElement element, string fieldName)
     {
         return element.ValueKind switch
@@ -4166,6 +4574,39 @@ public sealed class AppServerRequestHandler(
             JsonValueKind.False => false,
             _ => throw AppServerErrors.InvalidParams($"'{fieldName}' must be a boolean or null.")
         };
+    }
+
+    private static int? ParseNullablePositiveInt32(JsonElement element, string fieldName)
+    {
+        if (element.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (element.ValueKind != JsonValueKind.Number
+            || !element.TryGetInt32(out var value)
+            || value <= 0)
+        {
+            throw AppServerErrors.InvalidParams($"'{fieldName}' must be a positive integer or null.");
+        }
+
+        return value;
+    }
+
+    private static TimeSpan? ParseNullablePositiveTimeSpan(JsonElement element, string fieldName)
+    {
+        if (element.ValueKind == JsonValueKind.Null)
+            return null;
+        if (element.ValueKind != JsonValueKind.String)
+            throw AppServerErrors.InvalidParams($"'{fieldName}' must be a positive TimeSpan string or null.");
+
+        var raw = element.GetString();
+        if (string.IsNullOrWhiteSpace(raw)
+            || !TryParseWireTimeSpan(raw.Trim(), out var value)
+            || value <= TimeSpan.Zero)
+        {
+            throw AppServerErrors.InvalidParams($"'{fieldName}' must be a positive TimeSpan string or null.");
+        }
+
+        return value;
     }
 
     private static string? ReadConfigStringValue(JsonObject? root, string? key)
@@ -4188,6 +4629,68 @@ public sealed class AppServerRequestHandler(
         if (node is not JsonValue value)
             return null;
         return value.TryGetValue<bool>(out var result) ? result : null;
+    }
+
+    private static int? ReadConfigInt32Value(JsonObject? root, string? key)
+    {
+        if (root == null || string.IsNullOrEmpty(key))
+            return null;
+        if (!root.TryGetPropertyValue(key, out var node) || node == null)
+            return null;
+        if (node is not JsonValue value)
+            return null;
+        return value.TryGetValue<int>(out var result) ? result : null;
+    }
+
+    private static TimeSpan? ReadConfigTimeSpanValue(JsonObject? root, string? key)
+    {
+        var raw = ReadConfigStringValue(root, key);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        return TryParseWireTimeSpan(raw.Trim(), out var result) && result > TimeSpan.Zero
+            ? result
+            : null;
+    }
+
+    private static string? FormatTimeSpanForConfig(TimeSpan? value) =>
+        value.HasValue ? value.Value.ToString("c", CultureInfo.InvariantCulture) : null;
+
+    private static string FormatTimeSpanForWire(TimeSpan value)
+    {
+        var normalized = value <= TimeSpan.Zero ? TimeSpan.FromHours(24) : value;
+        var totalSeconds = (long)Math.Round(normalized.TotalSeconds);
+        var hours = totalSeconds / 3600;
+        var minutes = (totalSeconds % 3600) / 60;
+        var seconds = totalSeconds % 60;
+        return $"{hours:00}:{minutes:00}:{seconds:00}";
+    }
+
+    private static bool TryParseWireTimeSpan(string raw, out TimeSpan value)
+    {
+        if (TryParseTotalHoursTimeSpan(raw, out value))
+            return true;
+        return TimeSpan.TryParse(raw, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static bool TryParseTotalHoursTimeSpan(string raw, out TimeSpan value)
+    {
+        value = default;
+        var parts = raw.Split(':');
+        if (parts.Length != 3)
+            return false;
+
+        if (!long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var hours)
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var minutes)
+            || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
+            || hours < 0
+            || minutes is < 0 or > 59
+            || seconds is < 0 or > 59)
+        {
+            return false;
+        }
+
+        value = TimeSpan.FromHours(hours) + TimeSpan.FromMinutes(minutes) + TimeSpan.FromSeconds(seconds);
+        return true;
     }
 
     private static JsonObject? GetOrCreateConfigSection(JsonObject root, string canonicalKey, bool createIfMissing)
@@ -4237,6 +4740,14 @@ public sealed class AppServerRequestHandler(
 
         public bool? MemoryAutoConsolidateEnabled { get; init; }
 
+        public bool? DreamsEnabled { get; init; }
+
+        public string? DreamsInterval { get; init; }
+
+        public int? DreamsThreadLookbackCount { get; init; }
+
+        public bool? DreamsAutoApply { get; init; }
+
         public string? DefaultApprovalPolicy { get; init; }
 
         public bool? ToolsLspEnabled { get; init; }
@@ -4252,6 +4763,8 @@ public sealed class AppServerRequestHandler(
         public bool SkillsSelfLearningChanged { get; init; }
 
         public bool MemoryAutoConsolidateChanged { get; init; }
+
+        public bool DreamsChanged { get; init; }
 
         public bool DefaultApprovalPolicyChanged { get; init; }
 

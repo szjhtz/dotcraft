@@ -573,7 +573,7 @@ describe('SkillsView marketplace browse and manage modes', () => {
     }))
     expect(useUIStore.getState().pendingWelcomeTurn?.inputParts[1]).toEqual(expect.objectContaining({
       type: 'text',
-      text: expect.stringContaining('Preserve the candidate bundle instead of rewriting it.')
+      text: expect.stringContaining('Do not rewrite the candidate bundle.')
     }))
   })
 

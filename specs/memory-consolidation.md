@@ -69,13 +69,16 @@ Consolidation writes two memory layers:
 
 The operation is best-effort. The system should avoid corrupting existing memory files; if a consolidation attempt cannot produce a valid update, it should leave existing memory unchanged.
 
-Concurrent consolidation attempts should be treated as independent background maintenance work. Implementations should serialize writes per memory store, replace `MEMORY.md` atomically via a temporary file, append `HISTORY.md` under the same store lock, and avoid blocking the active turn.
+Concurrent consolidation attempts should be treated as independent background maintenance work across different threads. Implementations should serialize writes per memory store, replace `MEMORY.md` atomically via a temporary file, and append `HISTORY.md` under the same store lock.
 
 ## 6. Failure And Backpressure
 
-Consolidation is fire-and-forget:
+Consolidation is best-effort maintenance:
 
 - The active turn does not wait for consolidation to complete.
+- While consolidation is active for a thread, that thread is maintenance-busy: new user input must be queued instead of starting a new turn immediately.
+- Queued input starts only after consolidation emits a terminal event (`consolidated`, `consolidationSkipped`, `consolidationFailed`, or `consolidationCancelled`).
+- Users may explicitly interrupt active consolidation; interruption emits `consolidationCancelled` and does not create a persistent memory notice.
 - A consolidation failure does not fail the turn.
 - A consolidation failure does not trip the compaction circuit breaker.
 - A skipped or failed consolidation attempt is acceptable; the worst expected user-visible outcome is that long-term memory was not updated.
@@ -90,6 +93,7 @@ Memory consolidation emits transient `system/event` notifications so clients can
 - `consolidated` is emitted through the thread event broker after the background task successfully writes `MEMORY.md` or `HISTORY.md`. Because the turn-scoped event channel may already be closed, this event is thread-scoped and carries `turnId = null`.
 - `consolidationSkipped` is emitted through the thread event broker when the background task completes without writing durable memory, such as when the model does not call `save_memory` or returns no valid changes. Clients should dismiss any active consolidation status without showing a success marker.
 - `consolidationFailed` is emitted through the thread event broker if the background task fails. Clients should dismiss any active consolidation status and may surface the event `message`.
+- `consolidationCancelled` is emitted through the thread event broker when the user interrupts active consolidation. Clients should dismiss any active consolidation status without showing a success marker.
 
 On `consolidated`, Session Core also persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the completed Turn and broadcasts `item/started` + `item/completed` through the thread event broker. This gives Desktop and other timeline clients a durable divider that survives thread reloads. Skipped and failed attempts do not create persistent conversation items.
 

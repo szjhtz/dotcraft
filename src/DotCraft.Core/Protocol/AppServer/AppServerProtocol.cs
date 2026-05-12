@@ -551,6 +551,12 @@ public sealed class AppServerServerCapabilities
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool ManualMemoryConsolidation { get; set; }
 
+    /// <summary>
+    /// Server supports interrupting active thread maintenance via <c>thread/maintenance/interrupt</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ThreadMaintenanceInterrupt { get; set; }
+
     public bool ApprovalFlow { get; set; } = true;
 
     public bool ModeSwitch { get; set; } = true;
@@ -632,6 +638,12 @@ public sealed class AppServerServerCapabilities
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool MemoryManagement { get; set; }
+
+    /// <summary>
+    /// Server supports workspace Dreams methods (<c>dreams/status</c>, <c>dreams/run</c>).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Dreams { get; set; }
 
     /// <summary>
     /// Server supports MCP configuration management methods (<c>mcp/list</c>, <c>mcp/upsert</c>, etc.).
@@ -853,6 +865,13 @@ public sealed class ThreadMemoryConsolidateStartResponse
     public bool HistoryWritten { get; set; }
 }
 
+// ───── thread/maintenance/interrupt ─────
+
+public sealed class ThreadMaintenanceInterruptParams
+{
+    public string ThreadId { get; set; } = string.Empty;
+}
+
 // ───── thread/rollback ─────
 
 public sealed class ThreadRollbackParams
@@ -958,6 +977,18 @@ public sealed class ThreadRuntimeState
     /// until the next turn starts on the same thread.
     /// </summary>
     public bool WaitingOnPlanConfirmation { get; set; }
+
+    /// <summary>
+    /// True when the thread cannot start a new turn because a turn, approval, or maintenance task is active.
+    /// </summary>
+    public bool Busy { get; set; }
+
+    /// <summary>
+    /// Current thread maintenance kind, such as <c>compacting</c> or <c>consolidating</c>.
+    /// Null when no thread maintenance is active.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MaintenanceKind { get; set; }
 }
 
 /// <summary>
@@ -2219,6 +2250,30 @@ public sealed class WorkspaceConfigUpdateParams
     public bool? MemoryAutoConsolidateEnabled { get; set; }
 
     /// <summary>
+    /// Workspace-level toggle for scheduled Dreams. Null removes the workspace override.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? DreamsEnabled { get; set; }
+
+    /// <summary>
+    /// Workspace-level Dreams interval as a positive TimeSpan string. Null removes the workspace override.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? DreamsInterval { get; set; }
+
+    /// <summary>
+    /// Workspace-level Dreams recent thread lookback. Null removes the workspace override.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public int? DreamsThreadLookbackCount { get; set; }
+
+    /// <summary>
+    /// Workspace-level Dreams auto-apply toggle. Null removes the workspace override.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? DreamsAutoApply { get; set; }
+
+    /// <summary>
     /// Workspace default approval policy. Null removes the workspace override.
     /// Supported values: default, autoApprove.
     /// </summary>
@@ -2280,6 +2335,34 @@ public sealed class WorkspaceConfigUpdateResult
     public bool? MemoryAutoConsolidateEnabled { get; set; }
 
     /// <summary>
+    /// Persisted workspace Dreams toggle after normalization.
+    /// Null means the workspace override was removed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? DreamsEnabled { get; set; }
+
+    /// <summary>
+    /// Persisted workspace Dreams interval after normalization.
+    /// Null means the workspace override was removed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? DreamsInterval { get; set; }
+
+    /// <summary>
+    /// Persisted workspace Dreams recent thread lookback after normalization.
+    /// Null means the workspace override was removed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public int? DreamsThreadLookbackCount { get; set; }
+
+    /// <summary>
+    /// Persisted workspace Dreams auto-apply toggle after normalization.
+    /// Null means the workspace override was removed.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public bool? DreamsAutoApply { get; set; }
+
+    /// <summary>
     /// Persisted workspace default approval policy after normalization.
     /// Null means the workspace override was removed.
     /// </summary>
@@ -2299,6 +2382,175 @@ public sealed class WorkspaceConfigUpdateResult
 /// </summary>
 public sealed class WorkspaceConfigSchemaParams
 {
+}
+
+// ───── dreams/* (workspace Dreams management) ─────
+
+/// <summary>
+/// Params for <see cref="AppServerMethods.DreamsStatus"/>.
+/// </summary>
+public sealed class DreamsStatusParams
+{
+}
+
+/// <summary>
+/// Params for <see cref="AppServerMethods.DreamsRun"/>.
+/// </summary>
+public sealed class DreamsRunParams
+{
+}
+
+/// <summary>
+/// Params for <see cref="AppServerMethods.DreamsCreate"/>.
+/// </summary>
+public sealed class DreamsCreateParams
+{
+    public List<string>? ThreadIds { get; set; }
+
+    public int? ThreadLookbackCount { get; set; }
+
+    public string? Instructions { get; set; }
+
+    public string? Model { get; set; }
+}
+
+public sealed class DreamsRunIdParams
+{
+    public string RunId { get; set; } = string.Empty;
+}
+
+public sealed class DreamsListParams
+{
+    public bool IncludeArchived { get; set; }
+}
+
+/// <summary>
+/// Result for <see cref="AppServerMethods.DreamsStatus"/> and <see cref="AppServerMethods.DreamsRun"/>.
+/// </summary>
+public sealed class DreamsStatusResult
+{
+    public bool Enabled { get; set; }
+
+    public string Interval { get; set; } = "24:00:00";
+
+    public int ThreadLookbackCount { get; set; }
+
+    public bool AutoApply { get; set; }
+
+    public int HistoryTailChars { get; set; }
+
+    public int MinCompletedTurnsSinceLastRun { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? NextRunAt { get; set; }
+
+    public bool Running { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActiveDreamStoreId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public DreamsRunStateWire? LastRun { get; set; }
+}
+
+public sealed class DreamsRunResult
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public DreamsRunStateWire? Run { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActiveDreamStoreId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DreamsRunPreviewWire? Preview { get; set; }
+}
+
+public sealed class DreamsListResult
+{
+    public List<DreamsRunStateWire> Runs { get; set; } = [];
+}
+
+/// <summary>
+/// Wire projection of the latest Dreams run state.
+/// </summary>
+public sealed class DreamsRunStateWire
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string Status { get; set; } = string.Empty;
+
+    public DateTimeOffset StartedAt { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? EndedAt { get; set; }
+
+    public int ProcessedThreadCount { get; set; }
+
+    public int CandidateThreadCount { get; set; }
+
+    public bool DreamWritten { get; set; }
+
+    public bool HistoryWritten { get; set; }
+
+    public int TopicFilesWritten { get; set; }
+
+    public int TopicFilesDeleted { get; set; }
+
+    public int EvidenceSearchCount { get; set; }
+
+    public int EvidenceReadCount { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OutputStoreId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReviewStatus { get; set; }
+
+    public bool AutoApplied { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ErrorType { get; set; }
+
+    public List<string> EvidenceThreadIds { get; set; } = [];
+
+    public List<string> WrittenPaths { get; set; } = [];
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ThreadId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TurnId { get; set; }
+
+    public List<string> TurnIds { get; set; } = [];
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Trigger { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Message { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TokenUsageInfo? Usage { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? InputManifestPath { get; set; }
+}
+
+public sealed class DreamsRunPreviewWire
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActiveStoreId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OutputStoreId { get; set; }
+
+    public string ActiveIndexMarkdown { get; set; } = string.Empty;
+
+    public string OutputIndexMarkdown { get; set; } = string.Empty;
+
+    public List<string> ActiveTopicPaths { get; set; } = [];
+
+    public List<string> OutputTopicPaths { get; set; } = [];
 }
 
 // ───── memory/reset (memory management) ─────
@@ -2779,6 +3031,7 @@ public static class AppServerMethods
     public const string ThreadGoalClear = "thread/goal/clear";
     public const string ThreadCompactStart = "thread/compact/start";
     public const string ThreadMemoryConsolidateStart = "thread/memory/consolidate/start";
+    public const string ThreadMaintenanceInterrupt = "thread/maintenance/interrupt";
     public const string ThreadRollback = "thread/rollback";
     public const string ThreadSubscribe = "thread/subscribe";
     public const string ThreadUnsubscribe = "thread/unsubscribe";
@@ -2806,6 +3059,15 @@ public static class AppServerMethods
     public const string WorkspaceConfigSchema = "workspace/config/schema";
     public const string WorkspaceConfigUpdate = "workspace/config/update";
     public const string WorkspaceConfigChanged = "workspace/configChanged";
+    public const string DreamsStatus = "dreams/status";
+    public const string DreamsRun = "dreams/run";
+    public const string DreamsCreate = "dreams/create";
+    public const string DreamsGet = "dreams/get";
+    public const string DreamsList = "dreams/list";
+    public const string DreamsCancel = "dreams/cancel";
+    public const string DreamsArchive = "dreams/archive";
+    public const string DreamsApply = "dreams/apply";
+    public const string DreamsDiscard = "dreams/discard";
     public const string MemoryReset = "memory/reset";
     public const string McpList = "mcp/list";
     public const string McpGet = "mcp/get";

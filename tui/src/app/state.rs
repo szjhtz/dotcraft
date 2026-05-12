@@ -4,7 +4,7 @@
 use std::cell::Cell;
 
 use super::token_tracker::TokenTracker;
-use crate::wire::types::{CommandInfo, ThreadGoal};
+use crate::wire::types::{CommandInfo, SkillInfo, ThreadGoal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnStatus {
@@ -30,7 +30,8 @@ pub enum OverlayKind {
     Approval,
     ThreadPicker,
     ModelPicker,
-    Help,
+    SkillsPicker,
+    PermissionsPicker,
 }
 
 /// One thread entry fetched from thread/list.
@@ -65,6 +66,133 @@ pub struct ModelPickerState {
     pub models: Vec<String>,
     pub selected: usize,
     pub loading: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SkillCacheState {
+    Idle,
+    Loading,
+    Ready(Vec<SkillInfo>),
+    Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillSuggestion {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub source_label: String,
+    pub enabled: bool,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillPopupState {
+    pub items: Vec<SkillSuggestion>,
+    pub selected: usize,
+    pub scroll_offset: usize,
+}
+
+impl SkillPopupState {
+    pub fn new(items: Vec<SkillSuggestion>) -> Self {
+        Self {
+            items,
+            selected: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn replace_items(&mut self, items: Vec<SkillSuggestion>, visible_rows: usize) {
+        self.items = items;
+        self.clamp_selection();
+        self.ensure_visible(visible_rows);
+    }
+
+    pub fn move_up(&mut self, visible_rows: usize) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.selected = if self.selected == 0 {
+            self.items.len() - 1
+        } else {
+            self.selected - 1
+        };
+        self.ensure_visible(visible_rows);
+    }
+
+    pub fn move_down(&mut self, visible_rows: usize) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.selected = if self.selected + 1 >= self.items.len() {
+            0
+        } else {
+            self.selected + 1
+        };
+        self.ensure_visible(visible_rows);
+    }
+
+    pub fn clamp_selection(&mut self) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+        } else {
+            self.selected = self.selected.min(self.items.len() - 1);
+        }
+    }
+
+    pub fn ensure_visible(&mut self, visible_rows: usize) {
+        self.clamp_selection();
+        if self.items.is_empty() || visible_rows == 0 {
+            self.scroll_offset = 0;
+            return;
+        }
+
+        let visible_rows = visible_rows.min(self.items.len()).max(1);
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        } else {
+            let bottom = self.scroll_offset + visible_rows - 1;
+            if self.selected > bottom {
+                self.scroll_offset = self.selected + 1 - visible_rows;
+            }
+        }
+
+        let max_offset = self.items.len().saturating_sub(visible_rows);
+        self.scroll_offset = self.scroll_offset.min(max_offset);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillsPickerState {
+    pub skills: Vec<SkillInfo>,
+    pub selected: usize,
+    pub scroll_offset: usize,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub search: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionOption {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub approval_policy: String,
+    pub require_approval_outside_workspace: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PermissionsPickerState {
+    pub options: Vec<PermissionOption>,
+    pub selected: usize,
     pub error: Option<String>,
 }
 
@@ -209,6 +337,84 @@ pub struct CommandPopupState {
     pub items: Vec<(String, String)>,
     /// Currently highlighted index.
     pub selected: usize,
+    /// First visible item index in the popup viewport.
+    pub scroll_offset: usize,
+}
+
+impl CommandPopupState {
+    pub fn new(items: Vec<(String, String)>) -> Self {
+        Self {
+            items,
+            selected: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn replace_items(&mut self, items: Vec<(String, String)>, visible_rows: usize) {
+        self.items = items;
+        self.clamp_selection();
+        self.ensure_visible(visible_rows);
+    }
+
+    pub fn move_up(&mut self, visible_rows: usize) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.selected = if self.selected == 0 {
+            self.items.len() - 1
+        } else {
+            self.selected - 1
+        };
+        self.ensure_visible(visible_rows);
+    }
+
+    pub fn move_down(&mut self, visible_rows: usize) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.selected = if self.selected + 1 >= self.items.len() {
+            0
+        } else {
+            self.selected + 1
+        };
+        self.ensure_visible(visible_rows);
+    }
+
+    pub fn clamp_selection(&mut self) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+        } else {
+            self.selected = self.selected.min(self.items.len() - 1);
+        }
+    }
+
+    pub fn ensure_visible(&mut self, visible_rows: usize) {
+        self.clamp_selection();
+        if self.items.is_empty() || visible_rows == 0 {
+            self.scroll_offset = 0;
+            return;
+        }
+
+        let visible_rows = visible_rows.min(self.items.len()).max(1);
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        } else {
+            let bottom = self.scroll_offset + visible_rows - 1;
+            if self.selected > bottom {
+                self.scroll_offset = self.selected + 1 - visible_rows;
+            }
+        }
+
+        let max_offset = self.items.len().saturating_sub(visible_rows);
+        self.scroll_offset = self.scroll_offset.min(max_offset);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,7 +425,11 @@ pub struct SlashCommandDescriptor {
 }
 
 impl SlashCommandDescriptor {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, category: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        category: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -300,13 +510,23 @@ pub struct AppState {
     pub model_picker: Option<ModelPickerState>,
     // One-shot model catalog cache.
     pub model_cache: ModelCacheState,
+    pub skills_picker: Option<SkillsPickerState>,
+    pub permissions_picker: Option<PermissionsPickerState>,
+    pub skill_cache: SkillCacheState,
     // Which overlay is currently rendering on top of the base UI
     pub active_overlay: Option<OverlayKind>,
 
     // Slash command completion popup
     pub command_popup: Option<CommandPopupState>,
+    pub skill_popup: Option<SkillPopupState>,
     pub server_commands: Vec<CommandInfo>,
     pub command_catalog: Vec<SlashCommandDescriptor>,
+
+    // Permission presets applied to the current or next thread.
+    pub current_approval_policy: Option<String>,
+    pub current_require_approval_outside_workspace: Option<bool>,
+    pub pending_approval_policy: Option<String>,
+    pub pending_require_approval_outside_workspace: Option<bool>,
 
     // Ctrl+C double-press quit detection
     pub last_interrupt_at: Option<std::time::Instant>,
@@ -352,10 +572,18 @@ impl AppState {
             thread_picker: None,
             model_picker: None,
             model_cache: ModelCacheState::Idle,
+            skills_picker: None,
+            permissions_picker: None,
+            skill_cache: SkillCacheState::Idle,
             active_overlay: None,
             command_popup: None,
+            skill_popup: None,
             server_commands: Vec::new(),
             command_catalog: Vec::new(),
+            current_approval_policy: None,
+            current_require_approval_outside_workspace: None,
+            pending_approval_policy: None,
+            pending_require_approval_outside_workspace: None,
             last_interrupt_at: None,
         }
     }

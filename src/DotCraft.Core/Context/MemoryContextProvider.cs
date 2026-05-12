@@ -1,6 +1,7 @@
 using DotCraft.Commands.Custom;
 using DotCraft.Tracing;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Skills;
 using Microsoft.Agents.AI;
 
@@ -25,6 +26,7 @@ public sealed class MemoryContextProvider(
     string? promptProfile = null,
     string? roleInstructions = null,
     IContextPageManager? contextPageManager = null,
+    DreamStore? dreamStore = null,
     string? threadId = null)
     : AIContextProvider
 {
@@ -42,7 +44,8 @@ public sealed class MemoryContextProvider(
         skillVariantTarget,
         promptProfile,
         roleInstructions,
-        contextPageManager);
+        contextPageManager,
+        dreamStore);
 
     protected override ValueTask<AIContext> ProvideAIContextAsync(InvokingContext context, CancellationToken cancellationToken = default)
     {

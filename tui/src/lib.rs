@@ -10,7 +10,10 @@ pub mod wire;
 use anyhow::Result;
 use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEventKind, MouseEventKind};
 use futures::StreamExt;
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time;
 
@@ -18,10 +21,13 @@ use crate::{
     app::{
         commands::{self, LocalSlashCommand, ParsedSlashCommand},
         event_mapper,
-        input_router::{self, InputAction, ModelPickerOp, ThreadPickerOp},
+        input_router::{
+            self, InputAction, ModelPickerOp, PermissionsPickerOp, SkillsPickerOp, ThreadPickerOp,
+        },
         state::{
             AgentMode, AppState, ApprovalState, HistoryEntry, ModelCacheState, ModelPickerState,
-            OverlayKind, ThreadEntry, ThreadPickerState, TurnStatus,
+            OverlayKind, PermissionOption, PermissionsPickerState, SkillCacheState,
+            SkillsPickerState, ThreadEntry, ThreadPickerState, TurnStatus,
         },
     },
     i18n::Strings,
@@ -33,36 +39,43 @@ use crate::{
         input_editor::InputEditor,
         layout,
         overlays::{
-            approval::ApprovalOverlay, command_popup::CommandPopup, help::HelpOverlay,
-            model_picker::ModelPicker, notification::NotificationToast,
-            thread_picker::ThreadPicker,
+            approval::ApprovalOverlay, command_popup::CommandPopup, model_picker::ModelPicker,
+            notification::NotificationToast, permissions_picker::PermissionsPicker,
+            skill_popup::SkillPopup, skills_picker::SkillsPicker, thread_picker::ThreadPicker,
         },
         status_indicator::StatusIndicator,
-        welcome_screen::WelcomeScreen,
     },
-    wire::{client::WireClient, transport::Transport},
+    wire::client::WireClient,
 };
+
+#[cfg(feature = "websocket")]
+use crate::wire::transport::Transport;
 
 /// Tracks how we're connected to the AppServer for reconnection logic.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 enum ConnectionMode {
-    LocalHub(String),
-    WebSocket(String),
+    LocalHub {
+        dotcraft_bin: String,
+        workspace_path: PathBuf,
+    },
+    WebSocket {
+        url: String,
+    },
 }
 
 /// Async result forwarded from spawned tasks back into the event loop.
 enum DeferredResult {
+    ConnectionReady(Result<ConnectedAppServer>),
     ThreadListLoaded(Result<serde_json::Value>),
     ThreadHistoryLoaded(Result<serde_json::Value>),
     ModelCatalogLoaded(Result<serde_json::Value>),
+    SkillsListLoaded(Result<serde_json::Value>),
 }
 
-/// Signals that the WelcomeScreen has been dismissed and chat UI should show.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum UiPhase {
-    Welcome,
-    Chat,
+struct ConnectedAppServer {
+    wire: WireClient,
+    ws_url: String,
 }
 
 /// Resolve the UI language with the following priority:
@@ -144,76 +157,31 @@ pub async fn run(
     let resolved_lang = resolve_language(lang.as_deref(), workspace_path);
     let strings = i18n::load(&resolved_lang);
 
-    // ── 3. Transport ──────────────────────────────────────────────────────
+    // ── 3. Connection intent ──────────────────────────────────────────────
     let connection_mode = if remote.is_some() {
-        ConnectionMode::WebSocket(remote.clone().unwrap())
+        ConnectionMode::WebSocket {
+            url: remote.clone().unwrap(),
+        }
     } else {
-        ConnectionMode::LocalHub(server_bin.clone().unwrap_or_else(|| "dotcraft".to_string()))
-    };
-
-    let transport = match &connection_mode {
-        #[cfg(feature = "websocket")]
-        ConnectionMode::WebSocket(url) => {
-            tracing::info!("Connecting to remote AppServer: {url}");
-            Transport::connect_ws(url).await?
-        }
-        #[cfg(not(feature = "websocket"))]
-        ConnectionMode::WebSocket(_) => {
-            anyhow::bail!(
-                "--remote requires the 'websocket' feature. \
-                 Rebuild with: cargo build --features websocket"
-            )
-        }
-        ConnectionMode::LocalHub(bin) => {
-            tracing::info!("Ensuring local AppServer through Hub: {bin} hub");
-            let ws_url = hub::ensure_appserver(&resolved_workspace, bin).await?;
-            tracing::info!("Connecting to Hub-managed AppServer: {ws_url}");
-            #[cfg(feature = "websocket")]
-            {
-                Transport::connect_ws(&ws_url).await?
-            }
-            #[cfg(not(feature = "websocket"))]
-            {
-                anyhow::bail!(
-                    "Local Hub mode requires the 'websocket' feature. \
-                     Rebuild with: cargo build --features websocket"
-                )
-            }
+        ConnectionMode::LocalHub {
+            dotcraft_bin: hub::resolve_dotcraft_binary(server_bin.as_deref()),
+            workspace_path: resolved_workspace.clone(),
         }
     };
 
-    // ── 4. Wire client + handshake ────────────────────────────────────────
-    let mut wire = WireClient::spawn(transport);
-    wire.initialize().await?;
-    tracing::info!(
-        "Connected to DotCraft AppServer v{}",
-        wire.server_info
-            .as_ref()
-            .map(|i| i.version.as_str())
-            .unwrap_or("?")
-    );
-
-    // ── 5. Terminal init ──────────────────────────────────────────────────
+    // ── 4. Terminal init ──────────────────────────────────────────────────
     let mut terminal = terminal::init()?;
     let _guard = TerminalGuard;
 
-    // ── 6. AppState ───────────────────────────────────────────────────────
+    // ── 5. AppState ───────────────────────────────────────────────────────
     let ws_path = resolved_workspace.to_string_lossy().into_owned();
     let mut state = AppState::new(ws_path.clone());
-    state.connected = true;
     state.workspace_model = read_workspace_model(&resolved_workspace);
     state.command_catalog = commands::merge_command_catalog(&state.server_commands);
-    if let Err(e) = refresh_command_catalog(&mut wire, &mut state, &resolved_lang).await {
-        tracing::warn!("Failed to load command catalog: {e}");
-        state.history.push(HistoryEntry::Error {
-            message: format!("Failed to load command catalog: {e}"),
-        });
-    }
 
-    // ── 7. Event loop (WelcomeScreen shown first, then chat UI) ─────────
+    // ── 6. Event loop (connection starts in the background) ───────────────
     run_event_loop(
         &mut terminal,
-        &mut wire,
         &mut state,
         &theme,
         &strings,
@@ -229,12 +197,11 @@ pub async fn run(
 
 async fn run_event_loop(
     terminal: &mut Term,
-    wire: &mut WireClient,
     state: &mut AppState,
     theme: &Theme,
     strings: &Strings,
     language: &str,
-    #[allow(unused_variables)] conn_mode: &ConnectionMode,
+    conn_mode: &ConnectionMode,
 ) -> Result<()> {
     let mut tick = time::interval(Duration::from_millis(16)); // ~60 fps
     tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -242,130 +209,108 @@ async fn run_event_loop(
     let mut event_stream = EventStream::new();
 
     let (deferred_tx, mut deferred_rx) = tokio_mpsc::unbounded_channel::<DeferredResult>();
-
-    if wire.capabilities.model_catalog_management.unwrap_or(false) {
-        state.model_cache = ModelCacheState::Loading;
-        if let Err(e) = spawn_model_catalog_load(wire, &deferred_tx).await {
-            state.model_cache = ModelCacheState::Error(format!("Failed to load models: {e}"));
-        }
-    }
-
-    // Show the WelcomeScreen until a key is pressed or the connection is confirmed ready.
-    let mut ui_phase = UiPhase::Welcome;
+    spawn_connection(conn_mode.clone(), &deferred_tx);
+    let mut connection_in_flight = true;
+    let mut wire: Option<WireClient> = None;
 
     loop {
-        tokio::select! {
-            // ── Wire messages ─────────────────────────────────────────────
-            Some(msg_result) = wire.recv() => {
+        if let Some(active_wire) = wire.as_mut() {
+            let mut lost_connection: Option<String> = None;
+            tokio::select! {
+                // ── Wire messages ─────────────────────────────────────────
+                Some(msg_result) = active_wire.recv() => {
                 match msg_result {
                     Err(e) => {
                         tracing::warn!("Wire error: {e}");
-                        state.connected = false;
-
-                        #[cfg(feature = "websocket")]
-                        if let ConnectionMode::WebSocket(url) = conn_mode {
-                            state.history.push(HistoryEntry::SystemInfo {
-                                message: format!("Connection lost: {e}. Reconnecting..."),
-                            });
-                            draw(terminal, state, theme, strings)?;
-
-                            match reconnect_ws(url, state, terminal, theme, strings, &mut event_stream).await {
-                                Ok(new_wire) => {
-                                    *wire = new_wire;
-                                    state.connected = true;
-                                    if wire.capabilities.model_catalog_management.unwrap_or(false) {
-                                        state.model_cache = ModelCacheState::Loading;
-                                        let _ = spawn_model_catalog_load(wire, &deferred_tx).await;
-                                    } else {
-                                        state.model_cache = ModelCacheState::Idle;
-                                    }
-                                    if let Err(e) = refresh_command_catalog(wire, state, language).await {
-                                        tracing::warn!("Failed to refresh command catalog after reconnect: {e}");
-                                        state.history.push(HistoryEntry::Error {
-                                            message: format!("Failed to refresh command catalog: {e}"),
-                                        });
-                                    }
-                                    if let Some(ref tid) = state.current_thread_id {
-                                        let _ = wire.notify("thread/subscribe", serde_json::json!({
-                                            "threadId": tid,
-                                            "replayRecent": true,
-                                        })).await;
-                                    }
-                                    state.history.push(HistoryEntry::SystemInfo {
-                                        message: "Reconnected to AppServer.".to_string(),
-                                    });
-                                    continue;
-                                }
-                                Err(e) => {
-                                    state.history.push(HistoryEntry::Error {
-                                        message: format!("Reconnection failed: {e}"),
-                                    });
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Local Hub mode or websocket feature disabled: fatal disconnect.
-                        state.history.push(HistoryEntry::Error {
-                            message: format!("Connection error: {e}"),
-                        });
-                        break;
+                        lost_connection = Some(e.to_string());
                     }
                     Ok(msg) => {
-                        if wire.resolve_response(&msg) {
+                        if active_wire.resolve_response(&msg) {
                             // handled internally
                         } else if is_server_request(&msg) {
-                            handle_server_request(wire, state, msg).await?;
+                            handle_server_request(active_wire, state, msg).await?;
                         } else {
                             event_mapper::apply(state, &msg);
                             // Auto-submit first queued message after a turn completes.
                             if state.turn_status == TurnStatus::Idle {
                                 if let Some(queued) = state.pending_input.first().cloned() {
                                     state.pending_input.remove(0);
-                                    submit_turn(wire, state, queued).await?;
+                                    submit_turn(active_wire, state, queued).await?;
                                 }
                             }
                         }
                     }
                 }
-            }
+                }
 
-            // ── Deferred async results ───────────────────────────────────
-            Some(deferred) = deferred_rx.recv() => {
-                handle_deferred_result(state, strings, deferred);
-            }
+                // ── Deferred async results ───────────────────────────────
+                Some(deferred) = deferred_rx.recv() => {
+                    handle_connected_deferred_result(
+                        &mut connection_in_flight,
+                        state,
+                        strings,
+                        deferred,
+                    );
+                }
 
-            // ── Terminal events ───────────────────────────────────────────
-            Some(evt_result) = event_stream.next() => {
-                match evt_result {
-                    Err(e) => tracing::warn!("Terminal event error: {e}"),
-                    Ok(evt) => {
-                        // Any key press dismisses the WelcomeScreen.
-                        if ui_phase == UiPhase::Welcome {
-                            if let crossterm::event::Event::Key(k) = &evt {
-                                if k.kind != crossterm::event::KeyEventKind::Release {
-                                    ui_phase = UiPhase::Chat;
-                                }
-                            }
-                        }
-                        if ui_phase == UiPhase::Chat {
-                            if handle_terminal_event(terminal, wire, state, theme, strings, &deferred_tx, evt).await? {
+                // ── Terminal events ───────────────────────────────────────
+                Some(evt_result) = event_stream.next() => {
+                    match evt_result {
+                        Err(e) => tracing::warn!("Terminal event error: {e}"),
+                        Ok(evt) => {
+                            if handle_terminal_event(terminal, active_wire, state, theme, strings, &deferred_tx, evt).await? {
                                 break;
                             }
                         }
                     }
                 }
-            }
 
-            // ── Tick: redraw ──────────────────────────────────────────────
-            _ = tick.tick() => {
-                state.tick_count = state.tick_count.wrapping_add(1);
-                expire_notifications(state);
-                // WelcomeScreen stays until the user presses any key (see key handler above).
-                // No auto-dismiss — we want the user to see it before they start typing.
-                if ui_phase == UiPhase::Welcome {
-                    draw_welcome(terminal, state, theme, strings, env!("CARGO_PKG_VERSION"))?;
-                } else {
+                // ── Tick: redraw ──────────────────────────────────────────
+                _ = tick.tick() => {
+                    state.tick_count = state.tick_count.wrapping_add(1);
+                    expire_notifications(state);
+                    draw(terminal, state, theme, strings)?;
+                }
+            }
+            if let Some(error) = lost_connection {
+                state.connected = false;
+                wire = None;
+                state.history.push(HistoryEntry::SystemInfo {
+                    message: format!("Connection lost: {error}. Reconnecting..."),
+                });
+                if !connection_in_flight {
+                    spawn_connection(conn_mode.clone(), &deferred_tx);
+                    connection_in_flight = true;
+                }
+            }
+        } else {
+            tokio::select! {
+                Some(deferred) = deferred_rx.recv() => {
+                    handle_deferred_result(
+                        &mut wire,
+                        &mut connection_in_flight,
+                        state,
+                        strings,
+                        language,
+                        &deferred_tx,
+                        deferred,
+                    ).await?;
+                }
+
+                Some(evt_result) = event_stream.next() => {
+                    match evt_result {
+                        Err(e) => tracing::warn!("Terminal event error: {e}"),
+                        Ok(evt) => {
+                            if handle_disconnected_terminal_event(state, evt) {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                _ = tick.tick() => {
+                    state.tick_count = state.tick_count.wrapping_add(1);
+                    expire_notifications(state);
                     draw(terminal, state, theme, strings)?;
                 }
             }
@@ -416,11 +361,13 @@ async fn handle_terminal_event(
                         let action = input_router::handle_model_picker(state, key);
                         handle_model_picker_action(wire, state, action).await?;
                     }
-                    OverlayKind::Help => {
-                        let action = input_router::handle_help_overlay(key);
-                        if matches!(action, InputAction::CloseOverlay) {
-                            state.active_overlay = None;
-                        }
+                    OverlayKind::SkillsPicker => {
+                        let action = input_router::handle_skills_picker(state, key);
+                        handle_skills_picker_action(wire, state, deferred_tx, action).await?;
+                    }
+                    OverlayKind::PermissionsPicker => {
+                        let action = input_router::handle_permissions_picker(state, key);
+                        handle_permissions_picker_action(wire, state, action).await?;
                     }
                 }
                 return Ok(false);
@@ -464,9 +411,6 @@ async fn handle_terminal_event(
                     }
                 }
                 InputAction::Quit => return Ok(true),
-                InputAction::OpenHelp => {
-                    state.active_overlay = Some(OverlayKind::Help);
-                }
                 InputAction::ToggleMode => {
                     let new_mode = match state.mode {
                         AgentMode::Agent => AgentMode::Plan,
@@ -491,6 +435,8 @@ async fn handle_terminal_event(
                 InputAction::ApprovalDecision(_)
                 | InputAction::ThreadPickerAction(_)
                 | InputAction::ModelPickerAction(_)
+                | InputAction::SkillsPickerAction(_)
+                | InputAction::PermissionsPickerAction(_)
                 | InputAction::CloseOverlay
                 | InputAction::None => {}
             }
@@ -553,6 +499,26 @@ async fn spawn_model_catalog_load(
     Ok(())
 }
 
+async fn spawn_skills_list_load(
+    wire: &mut WireClient,
+    deferred_tx: &tokio_mpsc::UnboundedSender<DeferredResult>,
+) -> Result<()> {
+    let (_, rx) = wire
+        .send_request(
+            "skills/list",
+            serde_json::json!({ "includeUnavailable": true }),
+        )
+        .await?;
+    let tx = deferred_tx.clone();
+    tokio::spawn(async move {
+        let result = rx
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("response dropped")));
+        let _ = tx.send(DeferredResult::SkillsListLoaded(result));
+    });
+    Ok(())
+}
+
 fn normalize_command_language(language: &str) -> &'static str {
     if language.eq_ignore_ascii_case("zh")
         || language.eq_ignore_ascii_case("zh-cn")
@@ -588,16 +554,28 @@ async fn refresh_command_catalog(
 
 async fn create_thread(wire: &mut WireClient, state: &mut AppState) -> Result<()> {
     let ws = &state.workspace_path;
-    let params = if let Some(model) = state.pending_model_override.clone() {
-        serde_json::json!({
-            "identity": build_identity(ws),
-            "config": { "model": model }
-        })
-    } else {
-        serde_json::json!({
-            "identity": build_identity(ws)
-        })
-    };
+    let mut params = serde_json::json!({
+        "identity": build_identity(ws)
+    });
+    let mut config = serde_json::Map::new();
+    if let Some(model) = state.pending_model_override.clone() {
+        config.insert("model".to_string(), serde_json::Value::String(model));
+    }
+    if let Some(policy) = state.pending_approval_policy.clone() {
+        config.insert(
+            "approvalPolicy".to_string(),
+            serde_json::Value::String(policy),
+        );
+    }
+    if let Some(require_outside) = state.pending_require_approval_outside_workspace {
+        config.insert(
+            "requireApprovalOutsideWorkspace".to_string(),
+            serde_json::Value::Bool(require_outside),
+        );
+    }
+    if !config.is_empty() {
+        params["config"] = serde_json::Value::Object(config);
+    }
 
     let result: serde_json::Value = wire.request("thread/start", params).await?;
     if let Some(thread) = result.get("thread") {
@@ -615,10 +593,23 @@ async fn create_thread(wire: &mut WireClient, state: &mut AppState) -> Result<()
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .or_else(|| state.pending_model_override.clone());
+        state.current_approval_policy = thread
+            .get("configuration")
+            .and_then(|cfg| cfg.get("approvalPolicy"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| state.pending_approval_policy.clone());
+        state.current_require_approval_outside_workspace = thread
+            .get("configuration")
+            .and_then(|cfg| cfg.get("requireApprovalOutsideWorkspace"))
+            .and_then(|v| v.as_bool())
+            .or(state.pending_require_approval_outside_workspace);
         state.current_goal = thread
             .get("goal")
             .and_then(|goal| serde_json::from_value(goal.clone()).ok());
         state.pending_model_override = None;
+        state.pending_approval_policy = None;
+        state.pending_require_approval_outside_workspace = None;
     }
     Ok(())
 }
@@ -650,10 +641,11 @@ async fn submit_turn(wire: &mut WireClient, state: &mut AppState, text: String) 
         .history
         .push(HistoryEntry::UserMessage { text: text.clone() });
     state.at_bottom = true;
+    let input_parts = build_turn_input_parts(state, &text);
 
     let params = serde_json::json!({
         "threadId": thread_id,
-        "input": [{ "type": "text", "text": text }]
+        "input": input_parts
     });
 
     match wire.send_request("turn/start", params).await {
@@ -668,6 +660,87 @@ async fn submit_turn(wire: &mut WireClient, state: &mut AppState, text: String) 
         }
     }
     Ok(())
+}
+
+fn build_turn_input_parts(state: &AppState, text: &str) -> Vec<serde_json::Value> {
+    let skill_names = match &state.skill_cache {
+        SkillCacheState::Ready(skills) => skills
+            .iter()
+            .filter(|skill| skill.available && skill.enabled)
+            .map(|skill| skill.name.to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>(),
+        _ => std::collections::HashSet::new(),
+    };
+    if skill_names.is_empty() {
+        return vec![serde_json::json!({ "type": "text", "text": text })];
+    }
+
+    let mut parts = Vec::new();
+    let mut text_start = 0usize;
+    let mut idx = 0usize;
+    while idx < text.len() {
+        let Some(ch) = text[idx..].chars().next() else {
+            break;
+        };
+        if ch != '$' {
+            idx += ch.len_utf8();
+            continue;
+        }
+        let at_token_boundary = idx == 0
+            || text[..idx]
+                .chars()
+                .next_back()
+                .map(char::is_whitespace)
+                .unwrap_or(false);
+        if !at_token_boundary {
+            idx += ch.len_utf8();
+            continue;
+        }
+
+        let name_start = idx + 1;
+        let mut name_end = name_start;
+        for (offset, c) in text[name_start..].char_indices() {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                name_end = name_start + offset + c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if name_end == name_start {
+            idx += 1;
+            continue;
+        }
+
+        let name = &text[name_start..name_end];
+        if !skill_names.contains(&name.to_ascii_lowercase()) {
+            idx = name_end;
+            continue;
+        }
+
+        if text_start < idx {
+            parts.push(serde_json::json!({
+                "type": "text",
+                "text": &text[text_start..idx]
+            }));
+        }
+        parts.push(serde_json::json!({
+            "type": "skillRef",
+            "name": name
+        }));
+        idx = name_end;
+        text_start = idx;
+    }
+
+    if text_start < text.len() {
+        parts.push(serde_json::json!({
+            "type": "text",
+            "text": &text[text_start..]
+        }));
+    }
+    if parts.is_empty() {
+        parts.push(serde_json::json!({ "type": "text", "text": text }));
+    }
+    parts
 }
 
 async fn handle_interrupt(wire: &mut WireClient, state: &mut AppState) -> Result<bool> {
@@ -750,8 +823,303 @@ fn is_server_request(msg: &wire::types::JsonRpcMessage) -> bool {
     msg.id.is_some() && msg.method.is_some()
 }
 
+fn spawn_connection(
+    conn_mode: ConnectionMode,
+    deferred_tx: &tokio_mpsc::UnboundedSender<DeferredResult>,
+) {
+    let tx = deferred_tx.clone();
+    tokio::spawn(async move {
+        let result = connect_appserver(&conn_mode).await;
+        let _ = tx.send(DeferredResult::ConnectionReady(result));
+    });
+}
+
+async fn connect_appserver(conn_mode: &ConnectionMode) -> Result<ConnectedAppServer> {
+    #[cfg(not(feature = "websocket"))]
+    {
+        let _ = conn_mode;
+        anyhow::bail!(
+            "TUI local Hub and remote modes require the 'websocket' feature. \
+             Rebuild with: cargo build --features websocket"
+        )
+    }
+
+    #[cfg(feature = "websocket")]
+    {
+        let ws_url = match conn_mode {
+            ConnectionMode::WebSocket { url } => {
+                tracing::info!("Connecting to remote AppServer: {url}");
+                url.clone()
+            }
+            ConnectionMode::LocalHub {
+                dotcraft_bin,
+                workspace_path,
+            } => {
+                tracing::info!("Ensuring local AppServer through Hub: {dotcraft_bin} hub");
+                let ws_url = hub::ensure_appserver(workspace_path, dotcraft_bin).await?;
+                tracing::info!("Connecting to Hub-managed AppServer: {ws_url}");
+                ws_url
+            }
+        };
+
+        let transport = Transport::connect_ws(&ws_url).await?;
+        let mut wire = WireClient::spawn(transport);
+        wire.initialize().await?;
+        tracing::info!(
+            "Connected to DotCraft AppServer v{}",
+            wire.server_info
+                .as_ref()
+                .map(|i| i.version.as_str())
+                .unwrap_or("?")
+        );
+        Ok(ConnectedAppServer { wire, ws_url })
+    }
+}
+
+async fn finish_connection_setup(
+    wire: &mut WireClient,
+    state: &mut AppState,
+    language: &str,
+    deferred_tx: &tokio_mpsc::UnboundedSender<DeferredResult>,
+) {
+    state.connected = true;
+    state.model_cache = if wire.capabilities.model_catalog_management.unwrap_or(false) {
+        ModelCacheState::Loading
+    } else {
+        ModelCacheState::Idle
+    };
+    state.skill_cache = if wire.capabilities.skills_management.unwrap_or(false) {
+        SkillCacheState::Loading
+    } else {
+        SkillCacheState::Idle
+    };
+
+    if wire.capabilities.model_catalog_management.unwrap_or(false) {
+        if let Err(e) = spawn_model_catalog_load(wire, deferred_tx).await {
+            state.model_cache = ModelCacheState::Error(format!("Failed to load models: {e}"));
+        }
+    }
+
+    if let Err(e) = refresh_command_catalog(wire, state, language).await {
+        tracing::warn!("Failed to load command catalog: {e}");
+        state.history.push(HistoryEntry::Error {
+            message: format!("Failed to load command catalog: {e}"),
+        });
+    }
+
+    if wire.capabilities.skills_management.unwrap_or(false) {
+        if let Err(e) = spawn_skills_list_load(wire, deferred_tx).await {
+            state.skill_cache = SkillCacheState::Error(format!("Failed to load skills: {e}"));
+        }
+    }
+
+    if let Some(ref tid) = state.current_thread_id {
+        let _ = wire
+            .notify(
+                "thread/subscribe",
+                serde_json::json!({
+                    "threadId": tid,
+                    "replayRecent": true,
+                }),
+            )
+            .await;
+    }
+}
+
+fn handle_disconnected_terminal_event(state: &mut AppState, evt: CrosstermEvent) -> bool {
+    match evt {
+        CrosstermEvent::Key(key) => {
+            if key.kind == KeyEventKind::Release {
+                return false;
+            }
+
+            if key.code == crossterm::event::KeyCode::Char('c')
+                && key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+            {
+                let now = Instant::now();
+                if let Some(last) = state.last_interrupt_at {
+                    if now.duration_since(last) < Duration::from_secs(1) {
+                        return true;
+                    }
+                }
+                state.last_interrupt_at = Some(now);
+                return false;
+            }
+
+            if let Some(overlay) = &state.active_overlay.clone() {
+                match overlay {
+                    OverlayKind::ThreadPicker => {
+                        let action = input_router::handle_thread_picker(state, key);
+                        if matches!(
+                            action,
+                            InputAction::ThreadPickerAction(ThreadPickerOp::Close)
+                        ) {
+                            state.active_overlay = None;
+                            state.thread_picker = None;
+                        }
+                    }
+                    OverlayKind::ModelPicker => {
+                        let action = input_router::handle_model_picker(state, key);
+                        if matches!(action, InputAction::ModelPickerAction(ModelPickerOp::Close)) {
+                            state.active_overlay = None;
+                            state.model_picker = None;
+                        }
+                    }
+                    OverlayKind::SkillsPicker => {
+                        let action = input_router::handle_skills_picker(state, key);
+                        match action {
+                            InputAction::SkillsPickerAction(SkillsPickerOp::Close) => {
+                                state.active_overlay = None;
+                                state.skills_picker = None;
+                            }
+                            InputAction::SkillsPickerAction(SkillsPickerOp::Toggle) => {
+                                if let Some(picker) = state.skills_picker.as_mut() {
+                                    picker.error =
+                                        Some("Connect before changing skill settings.".to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    OverlayKind::PermissionsPicker => {
+                        let action = input_router::handle_permissions_picker(state, key);
+                        match action {
+                            InputAction::PermissionsPickerAction(PermissionsPickerOp::Close) => {
+                                state.active_overlay = None;
+                                state.permissions_picker = None;
+                            }
+                            InputAction::PermissionsPickerAction(PermissionsPickerOp::Apply) => {
+                                apply_pending_permission_selection(state);
+                            }
+                            _ => {}
+                        }
+                    }
+                    OverlayKind::Approval => {
+                        if matches!(
+                            input_router::handle_approval_overlay(state, key),
+                            InputAction::ApprovalDecision(_)
+                        ) {
+                            state.active_overlay = None;
+                            state.pending_approval = None;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            let enter_would_submit = key.code == crossterm::event::KeyCode::Enter
+                && key.modifiers == crossterm::event::KeyModifiers::NONE
+                && state.command_popup.is_none()
+                && state.skill_popup.is_none()
+                && !state.input_text.is_empty();
+            if enter_would_submit {
+                return false;
+            }
+
+            let action = input_router::handle_key(state, key);
+            match action {
+                InputAction::Quit => return true,
+                InputAction::ToggleMode => {
+                    state.mode = match state.mode {
+                        AgentMode::Agent => AgentMode::Plan,
+                        AgentMode::Plan => AgentMode::Agent,
+                    };
+                }
+                InputAction::SubmitTurn(_)
+                | InputAction::Interrupt
+                | InputAction::SoftInterrupt
+                | InputAction::ApprovalDecision(_)
+                | InputAction::ThreadPickerAction(_)
+                | InputAction::ModelPickerAction(_)
+                | InputAction::SkillsPickerAction(_)
+                | InputAction::PermissionsPickerAction(_)
+                | InputAction::CloseOverlay
+                | InputAction::ForceRedraw
+                | InputAction::None => {}
+            }
+        }
+        CrosstermEvent::Paste(text) => {
+            state.input_history_pos = None;
+            state.input_text.insert_str(state.input_cursor, &text);
+            state.input_cursor += text.len();
+        }
+        CrosstermEvent::Mouse(mouse) => {
+            if state.active_overlay.is_some() {
+                return false;
+            }
+
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    input_router::enter_transcript_browse(state);
+                    input_router::scroll_line_up(state);
+                }
+                MouseEventKind::ScrollDown => {
+                    input_router::enter_transcript_browse(state);
+                    input_router::scroll_line_down(state);
+                }
+                _ => {}
+            }
+        }
+        CrosstermEvent::Resize(_w, _h) => {}
+        _ => {}
+    }
+    false
+}
+
 /// Process a deferred async result that arrived from a spawned task.
-fn handle_deferred_result(state: &mut AppState, strings: &Strings, result: DeferredResult) {
+async fn handle_deferred_result(
+    wire: &mut Option<WireClient>,
+    connection_in_flight: &mut bool,
+    state: &mut AppState,
+    strings: &Strings,
+    language: &str,
+    deferred_tx: &tokio_mpsc::UnboundedSender<DeferredResult>,
+    result: DeferredResult,
+) -> Result<()> {
+    match result {
+        DeferredResult::ConnectionReady(Ok(mut connected)) => {
+            *connection_in_flight = false;
+            finish_connection_setup(&mut connected.wire, state, language, deferred_tx).await;
+            state.history.push(HistoryEntry::SystemInfo {
+                message: format!("Connected to AppServer: {}", connected.ws_url),
+            });
+            *wire = Some(connected.wire);
+        }
+        DeferredResult::ConnectionReady(Err(e)) => {
+            *connection_in_flight = false;
+            state.connected = false;
+            state.history.push(HistoryEntry::Error {
+                message: format!("Connection failed: {e}"),
+            });
+        }
+        other => handle_deferred_payload(state, strings, other),
+    }
+    Ok(())
+}
+
+fn handle_connected_deferred_result(
+    connection_in_flight: &mut bool,
+    state: &mut AppState,
+    strings: &Strings,
+    result: DeferredResult,
+) {
+    match result {
+        DeferredResult::ConnectionReady(Ok(_connected)) => {
+            *connection_in_flight = false;
+        }
+        DeferredResult::ConnectionReady(Err(e)) => {
+            *connection_in_flight = false;
+            state.history.push(HistoryEntry::Error {
+                message: format!("Connection failed: {e}"),
+            });
+        }
+        other => handle_deferred_payload(state, strings, other),
+    }
+}
+
+fn handle_deferred_payload(state: &mut AppState, strings: &Strings, result: DeferredResult) {
     match result {
         DeferredResult::ModelCatalogLoaded(Ok(value)) => {
             let (models, error) = parse_model_catalog(&value);
@@ -781,6 +1149,38 @@ fn handle_deferred_result(state: &mut AppState, strings: &Strings, result: Defer
                 picker.loading = false;
                 picker.error = Some(msg);
                 picker.models.clear();
+            }
+        }
+        DeferredResult::SkillsListLoaded(Ok(value)) => {
+            match serde_json::from_value::<wire::types::SkillsListResult>(value) {
+                Ok(result) => {
+                    state.skill_cache = SkillCacheState::Ready(result.skills.clone());
+                    if let Some(picker) = state.skills_picker.as_mut() {
+                        picker.loading = false;
+                        picker.error = None;
+                        picker.skills = result.skills;
+                        if picker.selected >= picker.skills.len() {
+                            picker.selected = 0;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("Failed to parse skills: {e}");
+                    state.skill_cache = SkillCacheState::Error(msg.clone());
+                    if let Some(picker) = state.skills_picker.as_mut() {
+                        picker.loading = false;
+                        picker.error = Some(msg);
+                    }
+                }
+            }
+        }
+        DeferredResult::SkillsListLoaded(Err(e)) => {
+            let msg = format!("Failed to load skills: {e}");
+            state.skill_cache = SkillCacheState::Error(msg.clone());
+            if let Some(picker) = state.skills_picker.as_mut() {
+                picker.loading = false;
+                picker.error = Some(msg);
+                picker.skills.clear();
             }
         }
         DeferredResult::ThreadListLoaded(Ok(value)) => {
@@ -817,6 +1217,7 @@ fn handle_deferred_result(state: &mut AppState, strings: &Strings, result: Defer
                 message: format!("Failed to load thread history: {e}"),
             });
         }
+        DeferredResult::ConnectionReady(_) => {}
     }
 }
 
@@ -908,6 +1309,346 @@ async fn handle_thread_picker_action(
         _ => {}
     }
     Ok(())
+}
+
+async fn open_skills_picker(
+    wire: &mut WireClient,
+    state: &mut AppState,
+    deferred_tx: &tokio_mpsc::UnboundedSender<DeferredResult>,
+) -> Result<()> {
+    if !wire.capabilities.skills_management.unwrap_or(false) {
+        state.history.push(HistoryEntry::Error {
+            message: "Skills management is not available on this server.".to_string(),
+        });
+        return Ok(());
+    }
+
+    let (loading, skills, error) = match &state.skill_cache {
+        SkillCacheState::Ready(skills) => (false, skills.clone(), None),
+        SkillCacheState::Error(err) => (false, Vec::new(), Some(err.clone())),
+        SkillCacheState::Loading => (true, Vec::new(), None),
+        SkillCacheState::Idle => {
+            state.skill_cache = SkillCacheState::Loading;
+            if let Err(e) = spawn_skills_list_load(wire, deferred_tx).await {
+                let msg = format!("Failed to load skills: {e}");
+                state.skill_cache = SkillCacheState::Error(msg.clone());
+                (false, Vec::new(), Some(msg))
+            } else {
+                (true, Vec::new(), None)
+            }
+        }
+    };
+
+    state.skills_picker = Some(SkillsPickerState {
+        skills,
+        selected: 0,
+        scroll_offset: 0,
+        loading,
+        error,
+        search: String::new(),
+    });
+    state.active_overlay = Some(OverlayKind::SkillsPicker);
+    Ok(())
+}
+
+async fn handle_skills_picker_action(
+    wire: &mut WireClient,
+    state: &mut AppState,
+    deferred_tx: &tokio_mpsc::UnboundedSender<DeferredResult>,
+    action: InputAction,
+) -> Result<()> {
+    match action {
+        InputAction::SkillsPickerAction(SkillsPickerOp::Close) => {
+            state.active_overlay = None;
+            state.skills_picker = None;
+        }
+        InputAction::SkillsPickerAction(SkillsPickerOp::Toggle) => {
+            if !wire.capabilities.skills_management.unwrap_or(false) {
+                if let Some(picker) = state.skills_picker.as_mut() {
+                    picker.error = Some("Skills management is not available.".to_string());
+                }
+                return Ok(());
+            }
+
+            let Some(name) = input_router::selected_skill_name(state) else {
+                return Ok(());
+            };
+            let next_enabled = state
+                .skills_picker
+                .as_ref()
+                .and_then(|picker| picker.skills.iter().find(|skill| skill.name == name))
+                .map(|skill| !skill.enabled)
+                .unwrap_or(true);
+
+            let result = wire
+                .request::<wire::types::SkillsSetEnabledResult>(
+                    "skills/setEnabled",
+                    serde_json::json!({
+                        "name": name,
+                        "enabled": next_enabled
+                    }),
+                )
+                .await;
+            match result {
+                Ok(result) => {
+                    update_skill_cache_entry(state, result.skill);
+                    if let Err(e) = spawn_skills_list_load(wire, deferred_tx).await {
+                        if let Some(picker) = state.skills_picker.as_mut() {
+                            picker.error = Some(format!("Changed skill, but refresh failed: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(picker) = state.skills_picker.as_mut() {
+                        picker.error = Some(format!("Failed to update skill: {e}"));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn update_skill_cache_entry(state: &mut AppState, updated: wire::types::SkillInfo) {
+    if let SkillCacheState::Ready(skills) = &mut state.skill_cache {
+        if let Some(skill) = skills.iter_mut().find(|skill| skill.name == updated.name) {
+            *skill = updated.clone();
+        } else {
+            skills.push(updated.clone());
+        }
+    }
+
+    if let Some(picker) = state.skills_picker.as_mut() {
+        if let Some(skill) = picker
+            .skills
+            .iter_mut()
+            .find(|skill| skill.name == updated.name)
+        {
+            *skill = updated;
+        } else {
+            picker.skills.push(updated);
+        }
+        picker.loading = false;
+        picker.error = None;
+    }
+}
+
+fn open_permissions_picker(state: &mut AppState, strings: &Strings) {
+    let options = permission_options(strings);
+    let selected = selected_permission_index(state, &options);
+    state.permissions_picker = Some(PermissionsPickerState {
+        options,
+        selected,
+        error: None,
+    });
+    state.active_overlay = Some(OverlayKind::PermissionsPicker);
+}
+
+fn permission_options(strings: &Strings) -> Vec<PermissionOption> {
+    vec![
+        PermissionOption {
+            id: "default".to_string(),
+            label: strings.permissions_default_label.to_string(),
+            description: strings.permissions_default_desc.to_string(),
+            approval_policy: "default".to_string(),
+            require_approval_outside_workspace: None,
+        },
+        PermissionOption {
+            id: "autoApprove".to_string(),
+            label: strings.permissions_auto_approve_label.to_string(),
+            description: strings.permissions_auto_approve_desc.to_string(),
+            approval_policy: "autoApprove".to_string(),
+            require_approval_outside_workspace: None,
+        },
+        PermissionOption {
+            id: "interrupt".to_string(),
+            label: strings.permissions_interrupt_label.to_string(),
+            description: strings.permissions_interrupt_desc.to_string(),
+            approval_policy: "interrupt".to_string(),
+            require_approval_outside_workspace: None,
+        },
+        PermissionOption {
+            id: "workspaceOnly".to_string(),
+            label: strings.permissions_workspace_only_label.to_string(),
+            description: strings.permissions_workspace_only_desc.to_string(),
+            approval_policy: "default".to_string(),
+            require_approval_outside_workspace: Some(false),
+        },
+        PermissionOption {
+            id: "askOutsideWorkspace".to_string(),
+            label: strings.permissions_ask_outside_label.to_string(),
+            description: strings.permissions_ask_outside_desc.to_string(),
+            approval_policy: "default".to_string(),
+            require_approval_outside_workspace: Some(true),
+        },
+    ]
+}
+
+fn selected_permission_index(state: &AppState, options: &[PermissionOption]) -> usize {
+    let policy = state
+        .pending_approval_policy
+        .as_deref()
+        .or(state.current_approval_policy.as_deref())
+        .unwrap_or("default");
+    let outside = state
+        .pending_require_approval_outside_workspace
+        .or(state.current_require_approval_outside_workspace);
+
+    options
+        .iter()
+        .position(|option| {
+            option.approval_policy == policy && option.require_approval_outside_workspace == outside
+        })
+        .unwrap_or(0)
+}
+
+async fn handle_permissions_picker_action(
+    wire: &mut WireClient,
+    state: &mut AppState,
+    action: InputAction,
+) -> Result<()> {
+    match action {
+        InputAction::PermissionsPickerAction(PermissionsPickerOp::Close) => {
+            state.active_overlay = None;
+            state.permissions_picker = None;
+        }
+        InputAction::PermissionsPickerAction(PermissionsPickerOp::Apply) => {
+            if let Some(thread_id) = state.current_thread_id.clone() {
+                if !wire.capabilities.config_override.unwrap_or(false) {
+                    if let Some(picker) = state.permissions_picker.as_mut() {
+                        picker.error = Some(
+                            "Permission updates are not available on this server.".to_string(),
+                        );
+                    }
+                    return Ok(());
+                }
+                let Some(option) = input_router::selected_permission_option(state) else {
+                    return Ok(());
+                };
+                if let Err(e) =
+                    apply_thread_permission_option(wire, state, &thread_id, &option).await
+                {
+                    if let Some(picker) = state.permissions_picker.as_mut() {
+                        picker.error = Some(e);
+                    }
+                    return Ok(());
+                }
+                state.history.push(HistoryEntry::SystemInfo {
+                    message: format!("Permissions set: {}", option.label),
+                });
+            } else {
+                apply_pending_permission_selection(state);
+            }
+            state.active_overlay = None;
+            state.permissions_picker = None;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn apply_pending_permission_selection(state: &mut AppState) {
+    let Some(option) = input_router::selected_permission_option(state) else {
+        return;
+    };
+    state.pending_approval_policy = Some(option.approval_policy.clone());
+    state.pending_require_approval_outside_workspace = option.require_approval_outside_workspace;
+    state.current_approval_policy = Some(option.approval_policy.clone());
+    state.current_require_approval_outside_workspace = option.require_approval_outside_workspace;
+    state.history.push(HistoryEntry::SystemInfo {
+        message: format!(
+            "Permissions will apply to the next thread: {}",
+            option.label
+        ),
+    });
+    state.active_overlay = None;
+    state.permissions_picker = None;
+}
+
+async fn apply_thread_permission_option(
+    wire: &mut WireClient,
+    state: &mut AppState,
+    thread_id: &str,
+    option: &PermissionOption,
+) -> Result<(), String> {
+    let read = wire
+        .request::<serde_json::Value>(
+            "thread/read",
+            serde_json::json!({ "threadId": thread_id, "includeTurns": false }),
+        )
+        .await
+        .map_err(|e| format!("Failed to read thread config: {e}"))?;
+
+    let mut config = read
+        .get("thread")
+        .and_then(|thread| thread.get("configuration"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !config.is_object() {
+        config = serde_json::json!({});
+    }
+
+    if let Some(cfg_obj) = config.as_object_mut() {
+        upsert_or_remove_config_string(
+            cfg_obj,
+            "approvalPolicy",
+            Some(option.approval_policy.clone()),
+        );
+        match option.require_approval_outside_workspace {
+            Some(value) => {
+                let key = find_existing_key(cfg_obj, "requireApprovalOutsideWorkspace")
+                    .unwrap_or_else(|| "requireApprovalOutsideWorkspace".to_string());
+                cfg_obj.insert(key, serde_json::Value::Bool(value));
+            }
+            None => {
+                if let Some(key) = find_existing_key(cfg_obj, "requireApprovalOutsideWorkspace") {
+                    cfg_obj.remove(&key);
+                }
+            }
+        }
+    }
+
+    wire.send_request(
+        "thread/config/update",
+        serde_json::json!({ "threadId": thread_id, "config": config }),
+    )
+    .await
+    .map_err(|e| format!("Failed to update permissions: {e}"))?;
+
+    state.current_approval_policy = Some(option.approval_policy.clone());
+    state.current_require_approval_outside_workspace = option.require_approval_outside_workspace;
+    state.pending_approval_policy = None;
+    state.pending_require_approval_outside_workspace = None;
+    Ok(())
+}
+
+fn upsert_or_remove_config_string(
+    cfg_obj: &mut serde_json::Map<String, serde_json::Value>,
+    key_name: &str,
+    value: Option<String>,
+) {
+    match value {
+        Some(value) => {
+            let key = find_existing_key(cfg_obj, key_name).unwrap_or_else(|| key_name.to_string());
+            cfg_obj.insert(key, serde_json::Value::String(value));
+        }
+        None => {
+            if let Some(key) = find_existing_key(cfg_obj, key_name) {
+                cfg_obj.remove(&key);
+            }
+        }
+    }
+}
+
+fn find_existing_key(
+    cfg_obj: &serde_json::Map<String, serde_json::Value>,
+    key_name: &str,
+) -> Option<String> {
+    cfg_obj
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(key_name))
+        .cloned()
 }
 
 async fn handle_model_picker_action(
@@ -1312,7 +2053,7 @@ async fn handle_slash_command(
     } else {
         let name = cmd.name.trim_start_matches('/');
         state.history.push(HistoryEntry::Error {
-            message: format!("Unknown command: /{name}. Type /help for available commands."),
+            message: format!("Unknown command: /{name}."),
         });
     }
     Ok(false)
@@ -1414,8 +2155,11 @@ async fn handle_local_slash_command(
             });
             state.active_overlay = Some(OverlayKind::ModelPicker);
         }
-        LocalSlashCommand::Help => {
-            state.active_overlay = Some(OverlayKind::Help);
+        LocalSlashCommand::Skills => {
+            open_skills_picker(wire, state, deferred_tx).await?;
+        }
+        LocalSlashCommand::Permissions => {
+            open_permissions_picker(state, strings);
         }
         LocalSlashCommand::Sessions => {
             if !wire.capabilities.thread_management.unwrap_or(false) {
@@ -1504,7 +2248,8 @@ async fn handle_goal_command(
         "pause" | "paused" => {
             let Some(thread_id) = state.current_thread_id.clone() else {
                 state.history.push(HistoryEntry::Error {
-                    message: "No active thread. Set a goal with /goal <objective> first.".to_string(),
+                    message: "No active thread. Set a goal with /goal <objective> first."
+                        .to_string(),
                 });
                 return Ok(());
             };
@@ -1522,7 +2267,8 @@ async fn handle_goal_command(
         "resume" | "active" => {
             let Some(thread_id) = state.current_thread_id.clone() else {
                 state.history.push(HistoryEntry::Error {
-                    message: "No active thread. Set a goal with /goal <objective> first.".to_string(),
+                    message: "No active thread. Set a goal with /goal <objective> first."
+                        .to_string(),
                 });
                 return Ok(());
             };
@@ -1545,7 +2291,10 @@ async fn handle_goal_command(
                 return Ok(());
             };
             let result: wire::types::ThreadGoalClearResult = wire
-                .request("thread/goal/clear", serde_json::json!({ "threadId": thread_id }))
+                .request(
+                    "thread/goal/clear",
+                    serde_json::json!({ "threadId": thread_id }),
+                )
                 .await?;
             state.current_goal = None;
             let message = if result.cleared {
@@ -1590,7 +2339,10 @@ async fn show_current_goal(wire: &mut WireClient, state: &mut AppState) -> Resul
     };
 
     let result: wire::types::ThreadGoalGetResult = wire
-        .request("thread/goal/get", serde_json::json!({ "threadId": thread_id }))
+        .request(
+            "thread/goal/get",
+            serde_json::json!({ "threadId": thread_id }),
+        )
         .await?;
     state.current_goal = result.goal.clone();
     match result.goal {
@@ -1662,13 +2414,13 @@ async fn execute_server_command(
         state.subagent_entries.clear();
         state.streaming.clear();
         state.token_tracker.reset();
-            state.current_turn_id = None;
-            state.current_model_override = None;
-            state.pending_model_override = None;
-            state.current_goal = None;
-            if let Some(thread) = result.thread {
-                state.current_thread_id = Some(thread.id);
-                state.current_thread_name = thread.display_name;
+        state.current_turn_id = None;
+        state.current_model_override = None;
+        state.pending_model_override = None;
+        state.current_goal = None;
+        if let Some(thread) = result.thread {
+            state.current_thread_id = Some(thread.id);
+            state.current_thread_name = thread.display_name;
         } else {
             state.current_thread_id = None;
             state.current_thread_name = None;
@@ -1694,115 +2446,7 @@ fn expire_notifications(state: &mut AppState) {
     state.notifications.retain(|n| n.dismiss_at_ms > now_ms);
 }
 
-// ── WebSocket Reconnection ───────────────────────────────────────────────
-
-/// Reconnect to a WebSocket AppServer with exponential backoff (1s-30s) + jitter.
-/// Keeps rendering the UI during the wait so the user sees status updates.
-/// Returns a new WireClient on success, or Err if the user presses Ctrl+C.
-#[cfg(feature = "websocket")]
-async fn reconnect_ws(
-    url: &str,
-    state: &mut AppState,
-    terminal: &mut Term,
-    theme: &Theme,
-    strings: &Strings,
-    event_stream: &mut EventStream,
-) -> Result<WireClient> {
-    let mut delay = Duration::from_secs(1);
-    let max_delay = Duration::from_secs(30);
-    let mut attempt = 0u32;
-
-    loop {
-        attempt += 1;
-        state.connected = false;
-        tracing::info!("Reconnect attempt {attempt}, delay: {delay:?}");
-
-        // Simple jitter based on system time to avoid thundering herd.
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        let jitter = Duration::from_millis((nanos % 500) as u64);
-        let deadline = Instant::now() + delay + jitter;
-        let mut tick = time::interval(Duration::from_millis(16));
-        tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-        loop {
-            if Instant::now() >= deadline {
-                break;
-            }
-            tokio::select! {
-                Some(evt_result) = event_stream.next() => {
-                    if let Ok(CrosstermEvent::Key(key)) = evt_result {
-                        if key.kind == KeyEventKind::Press
-                            && key.code == crossterm::event::KeyCode::Char('c')
-                            && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
-                            anyhow::bail!("User cancelled reconnection");
-                        }
-                    }
-                }
-                _ = tick.tick() => {
-                    state.tick_count = state.tick_count.wrapping_add(1);
-                    expire_notifications(state);
-                    draw(terminal, state, theme, strings)?;
-                }
-            }
-        }
-
-        match Transport::connect_ws(url).await {
-            Ok(transport) => {
-                let mut new_wire = WireClient::spawn(transport);
-                match new_wire.initialize().await {
-                    Ok(()) => {
-                        tracing::info!("Reconnected after {attempt} attempt(s)");
-                        return Ok(new_wire);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Reconnect handshake failed: {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Reconnect attempt {attempt} failed: {e}");
-            }
-        }
-
-        delay = (delay * 2).min(max_delay);
-    }
-}
-
 // ── Draw ──────────────────────────────────────────────────────────────────
-
-fn draw_welcome(
-    terminal: &mut Term,
-    state: &AppState,
-    theme: &Theme,
-    strings: &Strings,
-    version: &str,
-) -> Result<()> {
-    terminal::prepare_frame(terminal);
-    terminal.draw(|frame| {
-        let area = frame.area();
-        frame.render_widget(
-            WelcomeScreen::new(
-                version,
-                &state.workspace_path,
-                state
-                    .current_model_override
-                    .as_deref()
-                    .or(state.workspace_model.as_deref())
-                    .or(Some(strings.model_default_label)),
-                state.connected,
-                state.tick_count,
-                theme,
-                strings,
-            ),
-            area,
-        );
-    })?;
-    Ok(())
-}
 
 fn draw(terminal: &mut Term, state: &AppState, theme: &Theme, strings: &Strings) -> Result<()> {
     terminal::prepare_frame(terminal);
@@ -1814,7 +2458,25 @@ fn draw(terminal: &mut Term, state: &AppState, theme: &Theme, strings: &Strings)
         let has_pending = !state.pending_input.is_empty();
         let input_h = InputEditor::preferred_height(state, area.width);
         let status_h = StatusIndicator::preferred_height(state);
-        let zones = layout::compute(area, show_status_zone, has_pending, input_h, status_h);
+        let command_popup_h = if let Some(popup) = &state.command_popup {
+            CommandPopup::preferred_height(popup)
+        } else if let Some(popup) = &state.skill_popup {
+            SkillPopup::preferred_height(popup)
+        } else {
+            0
+        };
+        let transcript_h = ChatView::preferred_height(state, theme, strings, area.width);
+        let footer_h = FooterLine::preferred_height(state);
+        let zones = layout::compute(
+            area,
+            transcript_h,
+            show_status_zone,
+            has_pending,
+            input_h,
+            status_h,
+            command_popup_h,
+            footer_h,
+        );
 
         // ChatView: pass actual available width for correct markdown wrap.
         let chat_width = zones.chat_view.width;
@@ -1844,6 +2506,14 @@ fn draw(terminal: &mut Term, state: &AppState, theme: &Theme, strings: &Strings)
 
         frame.render_widget(InputEditor::new(state, theme, strings), zones.input_editor);
 
+        if let (Some(popup_state), Some(popup_area)) = (&state.command_popup, zones.command_popup) {
+            frame.render_widget(CommandPopup::new(popup_state, theme), popup_area);
+        } else if let (Some(popup_state), Some(popup_area)) =
+            (&state.skill_popup, zones.command_popup)
+        {
+            frame.render_widget(SkillPopup::new(popup_state, theme, strings), popup_area);
+        }
+
         if let Some(footer_area) = zones.footer {
             frame.render_widget(FooterLine::new(state, theme, strings), footer_area);
         }
@@ -1860,12 +2530,6 @@ fn draw(terminal: &mut Term, state: &AppState, theme: &Theme, strings: &Strings)
             let cursor_y =
                 zones.input_editor.y + row.min(zones.input_editor.height.saturating_sub(1));
             frame.set_cursor_position((cursor_x, cursor_y));
-        }
-
-        // ── Command completion popup (above input) ─────────────────────
-        if let Some(popup_state) = &state.command_popup {
-            let popup_area = CommandPopup::popup_area(zones.input_editor, popup_state.items.len());
-            frame.render_widget(CommandPopup::new(popup_state, theme), popup_area);
         }
 
         // ── Notification toast (non-modal, top-right) ─────────────────────
@@ -1893,14 +2557,111 @@ fn draw(terminal: &mut Term, state: &AppState, theme: &Theme, strings: &Strings)
                     );
                 }
             }
-            Some(OverlayKind::Help) => {
-                frame.render_widget(
-                    HelpOverlay::new(theme, strings, &state.command_catalog),
-                    area,
-                );
+            Some(OverlayKind::SkillsPicker) => {
+                if let Some(picker) = &state.skills_picker {
+                    frame.render_widget(SkillsPicker::new(picker, theme, strings), area);
+                }
+            }
+            Some(OverlayKind::PermissionsPicker) => {
+                if let Some(picker) = &state.permissions_picker {
+                    frame.render_widget(PermissionsPicker::new(picker, theme, strings), area);
+                }
             }
             None => {}
         }
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn skill(name: &str) -> wire::types::SkillInfo {
+        wire::types::SkillInfo {
+            name: name.to_string(),
+            description: "Skill description".to_string(),
+            display_name: Some(name.to_string()),
+            short_description: None,
+            source: "builtin".to_string(),
+            plugin_id: None,
+            plugin_display_name: None,
+            available: true,
+            unavailable_reason: None,
+            enabled: true,
+            path: format!("/skills/{name}/SKILL.md"),
+            has_variant: None,
+            default_prompt: None,
+            metadata: None,
+        }
+    }
+
+    fn key(code: KeyCode) -> CrosstermEvent {
+        CrosstermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn disconnected_text_input_edits_draft() {
+        let mut state = AppState::new("workspace".to_string());
+
+        let quit = handle_disconnected_terminal_event(&mut state, key(KeyCode::Char('h')));
+
+        assert!(!quit);
+        assert_eq!(state.input_text, "h");
+        assert_eq!(state.input_cursor, 1);
+    }
+
+    #[test]
+    fn disconnected_enter_keeps_draft_and_does_not_submit() {
+        let mut state = AppState::new("workspace".to_string());
+        state.input_text = "hello".to_string();
+        state.input_cursor = state.input_text.len();
+
+        let quit = handle_disconnected_terminal_event(&mut state, key(KeyCode::Enter));
+
+        assert!(!quit);
+        assert_eq!(state.input_text, "hello");
+        assert_eq!(state.input_cursor, 5);
+        assert!(state.input_history.is_empty());
+        assert!(state.history.is_empty());
+    }
+
+    #[test]
+    fn turn_input_parts_materialize_skill_refs() {
+        let mut state = AppState::new("workspace".to_string());
+        state.skill_cache = SkillCacheState::Ready(vec![skill("browser-use")]);
+
+        let parts = build_turn_input_parts(&state, "Use $browser-use please");
+
+        assert_eq!(parts.len(), 3);
+        assert_eq!(
+            parts[0],
+            serde_json::json!({ "type": "text", "text": "Use " })
+        );
+        assert_eq!(
+            parts[1],
+            serde_json::json!({ "type": "skillRef", "name": "browser-use" })
+        );
+        assert_eq!(
+            parts[2],
+            serde_json::json!({ "type": "text", "text": " please" })
+        );
+    }
+
+    #[test]
+    fn turn_input_parts_leave_embedded_dollar_text_alone() {
+        let mut state = AppState::new("workspace".to_string());
+        state.skill_cache = SkillCacheState::Ready(vec![skill("browser-use")]);
+
+        let parts = build_turn_input_parts(&state, "cost$browser-use");
+
+        assert_eq!(
+            parts,
+            vec![serde_json::json!({
+                "type": "text",
+                "text": "cost$browser-use"
+            })]
+        );
+    }
 }

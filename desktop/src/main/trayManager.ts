@@ -12,6 +12,12 @@ import {
 import { tryAcquireTrayLock, type TrayLockHandle } from './trayLock'
 import { normalizeLocale, translate, type AppLocale } from '../shared/locales'
 import { resolveDotCraftRuntimeTools } from './ripgrepRuntime'
+import { checkWorkspaceLock } from './workspaceLock'
+import { requestWorkspaceActivation } from './desktopActivation'
+import {
+  buildWorkspaceOpenDeepLink,
+  parseWorkspaceOpenDeepLink
+} from './desktopDeepLink'
 
 interface TrayState {
   appServers: HubAppServerResponse[]
@@ -23,9 +29,11 @@ const REFRESH_INTERVAL_MS = 5_000
 
 interface HubNotificationPayload {
   workspacePath?: string | null
+  threadId?: string | null
   title?: string
   body?: string | null
   actionUrl?: string | null
+  openDesktopOnClick?: boolean | null
 }
 
 export function resolveTrayIconPath(platform: NodeJS.Platform = process.platform): string | null {
@@ -63,14 +71,19 @@ function stripArgPair(argv: string[], name: string): string[] {
 
 function baseDesktopArgs(): string[] {
   return stripArgPair(
-    stripArgPair(process.argv.slice(1).filter((arg) => arg !== '--tray'), '--workspace'),
+    stripArgPair(
+      process.argv.slice(1).filter((arg) => arg !== '--tray' && !parseWorkspaceOpenDeepLink(arg)),
+      '--workspace'
+    ),
     '--remote'
   )
 }
 
-export function spawnDesktopWindow(workspacePath?: string): void {
+export function spawnDesktopWindow(workspacePath?: string, threadId?: string | null): void {
   const args = baseDesktopArgs()
-  if (workspacePath) {
+  if (workspacePath && threadId?.trim()) {
+    args.push(buildWorkspaceOpenDeepLink(workspacePath, threadId))
+  } else if (workspacePath) {
     args.push('--workspace', workspacePath)
   }
   const child = spawn(process.execPath, args, {
@@ -78,6 +91,40 @@ export function spawnDesktopWindow(workspacePath?: string): void {
     stdio: 'ignore'
   })
   child.unref()
+}
+
+export async function openDesktopWindow(workspacePath?: string | null, threadId?: string | null): Promise<void> {
+  const path = workspacePath?.trim()
+  if (path) {
+    const lock = checkWorkspaceLock(path)
+    if (lock.locked && lock.activation) {
+      const activated = await requestWorkspaceActivation(lock.activation, {
+        workspacePath: path,
+        threadId: threadId ?? null
+      })
+      if (activated) return
+    }
+  }
+
+  spawnDesktopWindow(path || undefined, threadId)
+}
+
+async function openNotificationAction(payload: HubNotificationPayload): Promise<void> {
+  const actionUrl = payload.actionUrl?.trim()
+  if (actionUrl) {
+    const workspaceOpen = parseWorkspaceOpenDeepLink(actionUrl)
+    if (workspaceOpen) {
+      if (payload.openDesktopOnClick === false) return
+      await openDesktopWindow(workspaceOpen.workspacePath, workspaceOpen.threadId)
+      return
+    }
+
+    await shell.openExternal(actionUrl)
+    return
+  }
+
+  if (payload.openDesktopOnClick === false) return
+  await openDesktopWindow(payload.workspacePath ?? undefined, payload.threadId ?? undefined)
 }
 
 function displayWorkspaceName(path: string): string {
@@ -103,7 +150,9 @@ function buildAppServerMenu(
     submenu: [
       {
         label: L('tray.openDesktop'),
-        click: () => spawnDesktopWindow(workspacePath)
+        click: () => {
+          void openDesktopWindow(workspacePath)
+        }
       },
       {
         label: L('tray.openDashboard'),
@@ -137,7 +186,9 @@ function buildRecentMenu(recent: RecentWorkspace[], locale: AppLocale): MenuItem
   const L = (key: string) => translate(locale, key)
   const items = recent.slice(0, 8).map((workspace) => ({
     label: workspace.name || displayWorkspaceName(workspace.path),
-    click: () => spawnDesktopWindow(workspace.path)
+    click: () => {
+      void openDesktopWindow(workspace.path)
+    }
   }))
   return {
     label: L('tray.recent'),
@@ -197,9 +248,11 @@ export function parseHubNotificationPayload(event: HubEvent): HubNotificationPay
 
   return {
     workspacePath: typeof data.workspacePath === 'string' ? data.workspacePath : event.workspacePath,
+    threadId: typeof data.threadId === 'string' ? data.threadId : null,
     title,
     body: typeof data.body === 'string' ? data.body : null,
-    actionUrl: typeof data.actionUrl === 'string' ? data.actionUrl : null
+    actionUrl: typeof data.actionUrl === 'string' ? data.actionUrl : null,
+    openDesktopOnClick: typeof data.openDesktopOnClick === 'boolean' ? data.openDesktopOnClick : null
   }
 }
 
@@ -214,11 +267,7 @@ export function showHubNotification(event: HubEvent): boolean {
   })
 
   notification.on('click', () => {
-    if (payload.actionUrl) {
-      void shell.openExternal(payload.actionUrl)
-      return
-    }
-    spawnDesktopWindow(payload.workspacePath ?? undefined)
+    void openNotificationAction(payload)
   })
   notification.show()
   return true

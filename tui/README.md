@@ -4,8 +4,6 @@
 
 Rust-native terminal interface for DotCraft, built on [Ratatui](https://ratatui.rs/). Connects to the DotCraft AppServer over the Wire Protocol (JSON-RPC) and provides a full-featured AI Agent interaction experience in the terminal.
 
-> **Design Inspiration**: The TUI interface design is inspired by [OpenAI Codex CLI](https://github.com/openai/codex), an excellent open-source terminal AI agent.
-
 ## Features
 
 | Feature | Description |
@@ -13,8 +11,9 @@ Rust-native terminal interface for DotCraft, built on [Ratatui](https://ratatui.
 | **Streaming output** | Agent messages render incrementally with Markdown support (syntax-highlighted code blocks, tables, headings) |
 | **Tool call display** | `• Called ReadFile("src/main.rs") (0.3s)` format with elapsed time and result preview |
 | **StatusIndicator** | Shows `⠋ Working (Ns · esc to interrupt)` as the single busy spinner during active turns/system work |
-| **FooterLine** | Single contextual row: hints, mode indicator, token usage, connection status |
-| **WelcomeScreen** | Startup screen with ASCII logo (size-gated), workspace path, and connection state |
+| **Top status card** | Compact startup/default card with model, workspace, thread, and connection state |
+| **Content-flow composer** | Input follows the latest transcript content for short chats and settles near the bottom for long chats |
+| **FooterLine** | On-demand composer hint row for slash navigation, draft/send hints, connection errors, and active-turn tokens |
 | **Inline SubAgent progress** | Live SubAgent status rendered inline; collapses to a summary when all complete |
 | **Inline Plan view** | Agent todo list rendered inline in the chat flow |
 | **Session management** | `/sessions` opens the session picker (resume / archive / delete) |
@@ -35,7 +34,7 @@ cd tui
 # Standard build (includes WebSocket support)
 cargo build --release
 
-# Without WebSocket (stdio-only mode)
+# Without WebSocket (does not support local Hub or remote mode)
 cargo build --release --no-default-features
 
 # With system clipboard support
@@ -46,18 +45,20 @@ Output binary: `target/release/dotcraft-tui` (Windows: `dotcraft-tui.exe`).
 
 ## Launching
 
-### Mode 1: Subprocess mode (default)
+### Mode 1: Hub-managed local mode (default)
 
-The TUI spawns `dotcraft` (or the binary given by `--server-bin`) as an AppServer child process and communicates over stdio.
+The TUI starts or discovers DotCraft Hub, asks Hub to ensure the workspace AppServer, then connects to the returned AppServer WebSocket endpoint. `--server-bin` points to the `dotcraft` binary used to start Hub. If omitted, TUI first looks for `dotcraft` next to `dotcraft-tui`, then falls back to `dotcraft` on PATH.
+
+The terminal UI appears immediately with the top status card and composer visible. You can edit a draft while Hub/AppServer connection is still in progress; pressing `Enter` before connection succeeds keeps the draft intact and shows the connection status near the composer.
 
 ```bash
-# Launch in the current project directory (dotcraft must be on PATH)
+# Launch in the current project directory
 dotcraft-tui
 
 # Specify workspace path
 dotcraft-tui --workspace /path/to/project
 
-# Specify the dotcraft binary path
+# Specify the dotcraft binary used to start Hub
 dotcraft-tui --server-bin /usr/local/bin/dotcraft
 
 # Via environment variable
@@ -104,7 +105,7 @@ dotcraft-tui --theme /path/to/theme.toml
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--remote <URL>` | Connect to a remote AppServer (WebSocket URL) | — |
-| `--server-bin <PATH>` | AppServer binary path | `dotcraft` |
+| `--server-bin <PATH>` | `dotcraft` binary used to start Hub | sibling `dotcraft`, then PATH |
 | `--workspace <PATH>` | Workspace directory path | current directory |
 | `--theme <PATH>` | Custom theme TOML file path | built-in dark theme |
 | `--lang <LANG>` | UI language (`zh` / `en`) | `zh` |
@@ -113,9 +114,9 @@ dotcraft-tui --theme /path/to/theme.toml
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Send message |
+| `Enter` | Send message when connected; while connecting, keep the draft intact |
 | `Shift+Enter` | Insert newline in input |
-| `Tab` | While running: queue message; idle: slash command completion |
+| `Tab` | While running: queue message; idle: slash or `$skill` completion |
 | `Ctrl+C` | While running: interrupt agent; idle: first press flags quit, second press exits |
 | `Shift+Tab` | Toggle Agent / Plan mode |
 | `Esc` | Running: interrupt; otherwise enter transcript browse mode |
@@ -124,8 +125,7 @@ dotcraft-tui --theme /path/to/theme.toml
 | `Home` / `End` | Enter/continue transcript browse and jump top / bottom |
 | `Mouse wheel` | Scroll transcript history directly (input or browse mode) |
 | `i` (in browse mode) | Return to input editor |
-| `F1` or `/help` | Open key binding help overlay |
-| `?` | Open key binding help overlay (in browse/chat) |
+| `↑` / `↓` in popup | Navigate slash command or `$skill` suggestions |
 | `Ctrl+A` / `Ctrl+E` | Move to line start / end in input editor |
 | `y` | Copy last agent message to clipboard (requires `clipboard` feature) |
 | `s` | When SubAgents are done: toggle detail / collapsed view |
@@ -135,15 +135,21 @@ dotcraft-tui --theme /path/to/theme.toml
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show key binding help overlay |
 | `/sessions` | Open session manager |
 | `/new` | Start a new session |
 | `/clear` | Clear current conversation history |
 | `/load <thread-id>` | Load a specific session by ID |
 | `/agent` | Switch to Agent mode |
 | `/plan` | Switch to Plan mode |
+| `/model [name\|default]` | Open the model picker or set the model |
+| `/skills` | Enable, disable, or inspect skills |
+| `/permissions` | Choose the approval/permission preset for the current or next thread |
 | `/cron` | List cron jobs |
 | `/quit` | Exit the TUI |
+
+## Skill Mentions
+
+Type `$` in the composer to open a skill picker below the input. `↑/↓` navigates, `Tab` or `Enter` inserts the selected skill, and `Esc` closes the picker. Submitted drafts send recognized enabled skills as native `skillRef` input parts while preserving the visible `$skill` text in conversation history.
 
 ## Theme Configuration
 
@@ -165,8 +171,8 @@ mode_plan = "blue"
 status_indicator = "yellow" # "Working" label and spinner color
 
 [footer]
-foreground = "dark_gray"    # footer hint text color
-context_color = "dark_gray" # token counts and connection status color
+foreground = "dark_gray"    # on-demand composer hint text
+context_color = "dark_gray" # active-turn context such as token counts
 
 [code]
 syntect_theme = "base16-ocean.dark"  # code block syntax highlight theme

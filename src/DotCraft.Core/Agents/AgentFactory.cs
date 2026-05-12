@@ -7,6 +7,7 @@ using DotCraft.Context.Compaction;
 using DotCraft.Tracing;
 using DotCraft.Hooks;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Plugins;
 using DotCraft.Security;
 using DotCraft.Skills;
@@ -101,6 +102,7 @@ public sealed class AgentFactory : IAsyncDisposable
             WorkspacePath = workspacePath,
             BotPath = dotcraftPath,
             MemoryStore = memoryStore,
+            DreamStore = new DreamStore(dotcraftPath),
             SkillsLoader = skillsLoader,
             ContextPageManager = contextPageManager,
             ApprovalService = approvalService,
@@ -453,6 +455,7 @@ public sealed class AgentFactory : IAsyncDisposable
                     promptProfile: ctx.PromptProfile,
                     roleInstructions: ctx.RoleInstructions,
                     contextPageManager: ctx.ContextPageManager,
+                    dreamStore: ctx.DreamStore,
                     threadId: ctx.CurrentThreadId)
             ];
         }

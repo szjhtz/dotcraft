@@ -1,17 +1,61 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { pathToFileURL } from 'url'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+const {
+  protocolHandleMock,
+  protocolRegisterSchemesAsPrivilegedMock,
+  netFetchMock
+} = vi.hoisted(() => ({
+  protocolHandleMock: vi.fn(),
+  protocolRegisterSchemesAsPrivilegedMock: vi.fn(),
+  netFetchMock: vi.fn()
+}))
+
+vi.mock('electron', () => ({
+  protocol: {
+    registerSchemesAsPrivileged: protocolRegisterSchemesAsPrivilegedMock,
+    handle: protocolHandleMock
+  },
+  net: {
+    fetch: netFetchMock
+  }
+}))
 import {
   VIEWER_SCHEME,
+  authorizeViewerFile,
   buildViewerUrl,
+  clearAuthorizedViewerFiles,
   getViewerWorkspaceRoot,
+  handleViewerFileRequest,
   installViewerProtocolHandlerForSession,
   isPathInsideWorkspace,
   setViewerWorkspaceRoot,
   viewerUrlToPath
 } from '../viewerFileProtocol'
 
+const tempDirs: string[] = []
+
 beforeEach(() => {
   setViewerWorkspaceRoot('')
+  clearAuthorizedViewerFiles()
+  netFetchMock.mockReset()
+  netFetchMock.mockResolvedValue(new Response('ok', { status: 200 }))
 })
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+function createTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'viewer-file-protocol-'))
+  tempDirs.push(dir)
+  return dir
+}
 
 describe('VIEWER_SCHEME', () => {
   it('is "dotcraft-viewer"', () => {
@@ -105,5 +149,78 @@ describe('installViewerProtocolHandlerForSession', () => {
 
     expect(handle).toHaveBeenCalledTimes(1)
     expect(handle).toHaveBeenCalledWith(VIEWER_SCHEME, expect.any(Function))
+  })
+})
+
+describe('handleViewerFileRequest external authorization', () => {
+  it('serves workspace files without explicit authorization', async () => {
+    const root = createTempDir()
+    const file = join(root, 'inside.png')
+    writeFileSync(file, 'inside')
+    setViewerWorkspaceRoot(root)
+
+    const response = await handleViewerFileRequest(new Request(buildViewerUrl(file)))
+
+    expect(response.status).toBe(200)
+    expect(netFetchMock).toHaveBeenCalledWith(pathToFileURL(file).toString())
+  })
+
+  it('rejects workspace-external files until they are explicitly authorized', async () => {
+    const root = createTempDir()
+    const externalRoot = createTempDir()
+    const file = join(externalRoot, 'outside.png')
+    writeFileSync(file, 'outside')
+    setViewerWorkspaceRoot(root)
+
+    const response = await handleViewerFileRequest(new Request(buildViewerUrl(file)))
+
+    expect(response.status).toBe(403)
+    expect(netFetchMock).not.toHaveBeenCalled()
+  })
+
+  it('serves an explicitly authorized external file', async () => {
+    const root = createTempDir()
+    const externalRoot = createTempDir()
+    const file = join(externalRoot, 'outside.png')
+    writeFileSync(file, 'outside')
+    setViewerWorkspaceRoot(root)
+
+    const authorizedPath = await authorizeViewerFile(file)
+    const response = await handleViewerFileRequest(new Request(buildViewerUrl(file)))
+
+    expect(response.status).toBe(200)
+    expect(netFetchMock).toHaveBeenCalledWith(pathToFileURL(authorizedPath).toString())
+  })
+
+  it('does not authorize sibling files in the same external directory', async () => {
+    const root = createTempDir()
+    const externalRoot = createTempDir()
+    const authorized = join(externalRoot, 'allowed.png')
+    const sibling = join(externalRoot, 'blocked.png')
+    writeFileSync(authorized, 'allowed')
+    writeFileSync(sibling, 'blocked')
+    setViewerWorkspaceRoot(root)
+    await authorizeViewerFile(authorized)
+
+    const response = await handleViewerFileRequest(new Request(buildViewerUrl(sibling)))
+
+    expect(response.status).toBe(403)
+    expect(netFetchMock).not.toHaveBeenCalled()
+  })
+
+  it('clears external authorization when the workspace root changes', async () => {
+    const root = createTempDir()
+    const nextRoot = createTempDir()
+    const externalRoot = createTempDir()
+    const file = join(externalRoot, 'outside.png')
+    writeFileSync(file, 'outside')
+    setViewerWorkspaceRoot(root)
+    await authorizeViewerFile(file)
+    setViewerWorkspaceRoot(nextRoot)
+
+    const response = await handleViewerFileRequest(new Request(buildViewerUrl(file)))
+
+    expect(response.status).toBe(403)
+    expect(netFetchMock).not.toHaveBeenCalled()
   })
 })

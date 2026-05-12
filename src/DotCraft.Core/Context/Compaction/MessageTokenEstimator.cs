@@ -137,7 +137,7 @@ public static class MessageTokenEstimator
             DataContent dc when IsImageOrDocument(dc.MediaType) => EstimateMediaBytes(dc.MediaType),
             UriContent uc when IsImageOrDocument(uc.MediaType) => EstimateMediaBytes(uc.MediaType),
             FunctionCallContent fc => Utf8ByteCount(SerializeFunctionCall(fc)),
-            FunctionResultContent fr => Utf8ByteCount(SerializeFunctionResult(fr)),
+            FunctionResultContent fr => EstimateFunctionResultBytes(fr),
             _ => Utf8ByteCount(SerializeUnknownContent(content)),
         };
     }
@@ -174,14 +174,25 @@ public static class MessageTokenEstimator
         });
     }
 
-    private static string SerializeFunctionResult(FunctionResultContent content)
+    private static long EstimateFunctionResultBytes(FunctionResultContent content)
     {
-        return SerializeForEstimate(new
+        long total = Utf8ByteCount("tool_result")
+                     + Utf8ByteCount("tool_use_id")
+                     + Utf8ByteCount(content.CallId)
+                     + Utf8ByteCount("content")
+                     + 24;
+
+        if (content.Result is string text)
+            return total + Utf8ByteCount(text);
+
+        if (content.Result is IEnumerable<AIContent> items)
         {
-            type = "tool_result",
-            tool_use_id = content.CallId,
-            content = content.Result
-        });
+            foreach (var item in items)
+                total += EstimateContentModelVisibleBytes(item) + 1;
+            return total;
+        }
+
+        return total + Utf8ByteCount(SerializeForEstimate(content.Result));
     }
 
     private static string SerializeUnknownContent(AIContent content)
@@ -251,9 +262,23 @@ public static class MessageTokenEstimator
             {
                 type = "tool_result",
                 tool_use_id = fr.CallId,
-                content = SerializeForEstimate(fr.Result)
+                content = CanonicalizeFunctionResultValue(fr.Result)
             },
             _ => new { type = content.GetType().FullName, content = SerializeUnknownContent(content) }
         };
+    }
+
+    private static object? CanonicalizeFunctionResultValue(object? value)
+    {
+        if (value is null)
+            return null;
+
+        if (value is string text)
+            return text;
+
+        if (value is IEnumerable<AIContent> items)
+            return items.Select(CanonicalizeContent).ToArray();
+
+        return SerializeForEstimate(value);
     }
 }

@@ -25,6 +25,7 @@ export interface ServerCapabilities {
   modelCatalogManagement?: boolean
   workspaceConfigManagement?: boolean
   memoryManagement?: boolean
+  dreams?: boolean
   mcpManagement?: boolean
   mcpServerOrigins?: boolean
   subAgentManagement?: boolean

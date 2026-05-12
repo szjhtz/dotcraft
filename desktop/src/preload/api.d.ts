@@ -360,6 +360,10 @@ declare global {
             welcomeSuggestionsEnabled: boolean | null
             skillsSelfLearningEnabled: boolean | null
             memoryAutoConsolidateEnabled: boolean | null
+            dreamsEnabled: boolean | null
+            dreamsInterval: string | null
+            dreamsThreadLookbackCount: number | null
+            dreamsAutoApply: boolean | null
             defaultApprovalPolicy: 'default' | 'autoApprove' | null
           }
           userDefaults: {
@@ -368,6 +372,10 @@ declare global {
             welcomeSuggestionsEnabled: boolean | null
             skillsSelfLearningEnabled: boolean | null
             memoryAutoConsolidateEnabled: boolean | null
+            dreamsEnabled: boolean | null
+            dreamsInterval: string | null
+            dreamsThreadLookbackCount: number | null
+            dreamsAutoApply: boolean | null
             defaultApprovalPolicy: 'default' | 'autoApprove' | null
           }
         }>
@@ -406,6 +414,7 @@ declare global {
         setTitleBarOverlayTheme(theme: 'dark' | 'light'): Promise<void>
         getWorkspacePath(): Promise<string>
         onOpenChromeSettings(callback: () => void): () => void
+        onOpenThread(callback: (payload: { threadId: string }) => void): () => void
       }
       shell: {
         openPath(path: string): Promise<string>
@@ -491,6 +500,7 @@ declare global {
             absolutePath: string
             limitBytes?: number
           }): Promise<{ text: string; truncated: boolean; encoding: string }>
+          authorizeFile(params: { absolutePath: string }): Promise<{ absolutePath: string }>
           toViewerUrl(params: { absolutePath: string }): Promise<{ url: string }>
           browser: {
             create(params: {

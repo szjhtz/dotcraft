@@ -10,7 +10,7 @@ pub const ENTER_TO_SEND: &str = "Enter to send  Shift+Enter newline  Ctrl+C inte
 pub const APPROVAL_TITLE: &str = "Approval Required";
 pub const PLAN_TITLE_PREFIX: &str = "Plan: ";
 pub const SUBAGENTS_TITLE: &str = "SubAgents";
-pub const PLACEHOLDER: &str = "Type a message or /help...";
+pub const PLACEHOLDER: &str = "Type a message, /skills, or $skill...";
 pub const TYPING_INDICATOR: &str = "▍";
 pub const SCROLL_INDICATOR: &str = "↓ {} more lines";
 pub const TURN_RUNNING: &str = "Running";
@@ -64,11 +64,6 @@ pub const SESSIONS_ARCHIVE_HINT: &str = "a: Archive";
 pub const SESSIONS_DELETE_HINT: &str = "d: Delete";
 pub const SESSIONS_CLOSE_HINT: &str = "Esc: Close";
 
-// Phase 4: help overlay
-pub const HELP_TITLE: &str = "Help";
-pub const HELP_COMMANDS_HEADER: &str = "Commands";
-pub const HELP_KEYBINDINGS_HEADER: &str = "Key Bindings";
-
 // Phase 4: misc
 pub const CRON_NO_JOBS: &str = "No cron jobs configured.";
 pub const THREAD_NOT_FOUND: &str = "Thread not found.";
@@ -86,11 +81,11 @@ pub const WELCOME_MODEL_LABEL: &str = "Model";
 
 // UX polish: footer hints
 pub const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
-pub const SHORTCUTS_HINT: &str = "F1 help";
+pub const SHORTCUTS_HINT: &str = "/skills";
 pub const FOOTER_NO_THREAD: &str = "No thread";
 
 // UX polish round 2: welcome, action feedback
-pub const WELCOME_MESSAGE: &str = "✦ DotCraft v{}\n  Workspace: {}\n  Type a message to start · /help for commands · /sessions for history";
+pub const WELCOME_MESSAGE: &str = "✦ DotCraft v{}\n  Workspace: {}\n  Type a message to start · /skills for skills · /sessions for history";
 pub const NEW_SESSION_HINT: &str = "New conversation. Type a message to begin.";
 pub const SESSION_LOADED_PREFIX: &str = "Session loaded:";
 
@@ -101,9 +96,38 @@ pub const TAB_TO_QUEUE: &str = "tab to queue message";
 pub const ENTER_TO_SEND_HINT: &str = "enter to send · shift+enter newline";
 pub const QUIT_CONFIRM_HINT: &str = "press ctrl+c again to quit";
 pub const WELCOME_HINT_START: &str = "Type a message to start";
-pub const WELCOME_HINT_COMMANDS: &str = "/help for commands · /sessions for history";
+pub const WELCOME_HINT_COMMANDS: &str = "$skill to mention skills · /skills to manage";
 pub const WELCOME_CONNECTING: &str = "Connecting...";
 pub const WELCOME_READY: &str = "Connected — press any key to start";
+pub const WELCOME_WORKSPACE_LABEL: &str = "workspace";
+pub const WELCOME_THREAD_LABEL: &str = "thread";
+pub const WELCOME_STATUS_LABEL: &str = "status";
+pub const WELCOME_MODEL_CHANGE_HINT: &str = "to change";
+pub const WELCOME_CONNECTION_FAILED: &str = "Connection failed";
+pub const WELCOME_TIP_PREFIX: &str = "Tip:";
+pub const COMMAND_POPUP_HINT: &str = "↑/↓ navigate · tab complete · enter run · esc close";
+pub const SKILL_POPUP_HINT: &str = "↑/↓ navigate · tab insert · enter insert · esc close";
+pub const SKILL_POPUP_INSERT_HINT: &str = "Press enter to insert or esc to close";
+pub const SKILLS_PICKER_TITLE_LINE: &str = "Enable/disable skills";
+pub const SKILLS_PICKER_SEARCH_HINT: &str = "type to search";
+pub const SKILLS_PICKER_LOADING: &str = "Loading skills...";
+pub const SKILLS_PICKER_EMPTY: &str = "No matching skills";
+pub const PERMISSIONS_PICKER_TITLE: &str = "Choose permissions";
+pub const PERMISSIONS_PICKER_SUBTITLE: &str = "applies to this thread or the next one";
+pub const PICKER_NAVIGATE_HINT: &str = "navigate";
+pub const PICKER_TOGGLE_HINT: &str = "toggle";
+pub const PICKER_APPLY_HINT: &str = "apply";
+pub const PICKER_CLOSE_HINT: &str = "close";
+pub const PERMISSIONS_DEFAULT_LABEL: &str = "Default";
+pub const PERMISSIONS_DEFAULT_DESC: &str = "Use workspace approval defaults.";
+pub const PERMISSIONS_AUTO_APPROVE_LABEL: &str = "Auto approve";
+pub const PERMISSIONS_AUTO_APPROVE_DESC: &str = "Automatically accept approval-gated operations.";
+pub const PERMISSIONS_INTERRUPT_LABEL: &str = "Interrupt";
+pub const PERMISSIONS_INTERRUPT_DESC: &str = "Cancel the turn instead of asking for approval.";
+pub const PERMISSIONS_WORKSPACE_ONLY_LABEL: &str = "Workspace only";
+pub const PERMISSIONS_WORKSPACE_ONLY_DESC: &str = "Reject operations outside the workspace.";
+pub const PERMISSIONS_ASK_OUTSIDE_LABEL: &str = "Ask outside workspace";
+pub const PERMISSIONS_ASK_OUTSIDE_DESC: &str = "Prompt before outside-workspace operations.";
 pub const CALLING: &str = "Calling";
 pub const CALLED: &str = "Called";
 pub const SUBAGENTS_ACTIVE_HEADER: &str = "SubAgents ({} active, {} done)";

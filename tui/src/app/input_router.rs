@@ -1,9 +1,15 @@
 // Maps terminal key/paste/resize events to AppState mutations.
 // Phase 2: Shift+Enter newline, Tab reasoning toggle, PageUp/Down, Home/End.
 // Phase 3: Approval overlay key handling, ApprovalDecision action.
-// Phase 4: ThreadPicker overlay, HelpOverlay, F1/? global binding.
+// Phase 4: ThreadPicker overlay and command/skill popups.
 
-use crate::app::state::{AppState, FocusTarget, TurnStatus};
+use crate::{
+    app::state::{
+        AppState, CommandPopupState, FocusTarget, PermissionOption, SkillCacheState,
+        SkillPopupState, SkillSuggestion, SkillsPickerState, TurnStatus,
+    },
+    ui::overlays::{command_popup, skill_popup},
+};
 
 /// Actions available in the ThreadPicker overlay.
 #[derive(Debug)]
@@ -16,6 +22,18 @@ pub enum ThreadPickerOp {
 
 #[derive(Debug)]
 pub enum ModelPickerOp {
+    Apply,
+    Close,
+}
+
+#[derive(Debug)]
+pub enum SkillsPickerOp {
+    Toggle,
+    Close,
+}
+
+#[derive(Debug)]
+pub enum PermissionsPickerOp {
     Apply,
     Close,
 }
@@ -37,14 +55,16 @@ pub enum InputAction {
     ThreadPickerAction(ThreadPickerOp),
     /// User performed an action in the model-picker overlay.
     ModelPickerAction(ModelPickerOp),
-    /// Dismiss the current non-approval overlay (HelpOverlay, etc.).
+    /// Dismiss the current non-approval overlay.
     CloseOverlay,
-    /// Open the HelpOverlay.
-    OpenHelp,
     /// Toggle Agent/Plan mode (Shift+Tab).
     ToggleMode,
     /// Force a full terminal redraw (Ctrl+L).
     ForceRedraw,
+    /// User performed an action in the skills picker overlay.
+    SkillsPickerAction(SkillsPickerOp),
+    /// User performed an action in the permissions picker overlay.
+    PermissionsPickerAction(PermissionsPickerOp),
     /// No action needed beyond the AppState mutation already applied.
     None,
 }
@@ -76,11 +96,6 @@ pub fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent) -> Inpu
         return InputAction::ToggleMode;
     }
 
-    // Global: F1 opens help regardless of focus.
-    if key.code == KeyCode::F(1) {
-        return InputAction::OpenHelp;
-    }
-
     match state.focus {
         FocusTarget::InputEditor => handle_input_editor(state, key),
         FocusTarget::ChatView => handle_chat_view(state, key),
@@ -92,6 +107,19 @@ fn handle_input_editor(state: &mut AppState, key: crossterm::event::KeyEvent) ->
 
     // ── Command popup interception ──────────────────────────────────────
     if state.command_popup.is_some() {
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('p')) {
+            if let Some(popup) = state.command_popup.as_mut() {
+                popup.move_up(command_popup::MAX_POPUP_ROWS);
+            }
+            return InputAction::None;
+        }
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('n')) {
+            if let Some(popup) = state.command_popup.as_mut() {
+                popup.move_down(command_popup::MAX_POPUP_ROWS);
+            }
+            return InputAction::None;
+        }
+
         match key.code {
             KeyCode::Tab | KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
                 if let Some(popup) = state.command_popup.take() {
@@ -103,19 +131,15 @@ fn handle_input_editor(state: &mut AppState, key: crossterm::event::KeyEvent) ->
                 }
                 return InputAction::None;
             }
-            KeyCode::Up => {
+            KeyCode::Up if key.modifiers == KeyModifiers::NONE => {
                 if let Some(popup) = state.command_popup.as_mut() {
-                    if popup.selected > 0 {
-                        popup.selected -= 1;
-                    }
+                    popup.move_up(command_popup::MAX_POPUP_ROWS);
                 }
                 return InputAction::None;
             }
-            KeyCode::Down => {
+            KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
                 if let Some(popup) = state.command_popup.as_mut() {
-                    if popup.selected + 1 < popup.items.len() {
-                        popup.selected += 1;
-                    }
+                    popup.move_down(command_popup::MAX_POPUP_ROWS);
                 }
                 return InputAction::None;
             }
@@ -126,6 +150,49 @@ fn handle_input_editor(state: &mut AppState, key: crossterm::event::KeyEvent) ->
             _ => {
                 // Fall through to normal editing; popup will be updated after.
                 state.command_popup = None;
+            }
+        }
+    }
+
+    // ── Skill mention popup interception ────────────────────────────────
+    if state.skill_popup.is_some() {
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('p')) {
+            if let Some(popup) = state.skill_popup.as_mut() {
+                popup.move_up(skill_popup::MAX_POPUP_ROWS);
+            }
+            return InputAction::None;
+        }
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('n')) {
+            if let Some(popup) = state.skill_popup.as_mut() {
+                popup.move_down(skill_popup::MAX_POPUP_ROWS);
+            }
+            return InputAction::None;
+        }
+
+        match key.code {
+            KeyCode::Tab | KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
+                accept_selected_skill(state);
+                return InputAction::None;
+            }
+            KeyCode::Up if key.modifiers == KeyModifiers::NONE => {
+                if let Some(popup) = state.skill_popup.as_mut() {
+                    popup.move_up(skill_popup::MAX_POPUP_ROWS);
+                }
+                return InputAction::None;
+            }
+            KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
+                if let Some(popup) = state.skill_popup.as_mut() {
+                    popup.move_down(skill_popup::MAX_POPUP_ROWS);
+                }
+                return InputAction::None;
+            }
+            KeyCode::Esc => {
+                state.skill_popup = None;
+                return InputAction::None;
+            }
+            _ => {
+                // Fall through to normal editing; popup will be updated after.
+                state.skill_popup = None;
             }
         }
     }
@@ -285,24 +352,19 @@ fn handle_input_editor(state: &mut AppState, key: crossterm::event::KeyEvent) ->
         }
 
         KeyCode::Tab => {
-            // Open command popup if input starts with '/'
-            if state.input_text.starts_with('/') {
-                let filtered = crate::ui::overlays::command_popup::filter_commands(
-                    &state.input_text,
-                    &state.command_catalog,
-                );
-                if !filtered.is_empty() {
-                    state.command_popup = Some(crate::app::state::CommandPopupState {
-                        items: filtered,
-                        selected: 0,
-                    });
-                }
+            // Open command/skill popup if the caret is inside a trigger token.
+            if command_popup::slash_command_filter(&state.input_text, state.input_cursor).is_some()
+                || skill_popup::skill_mention_filter(&state.input_text, state.input_cursor)
+                    .is_some()
+            {
+                sync_inline_popups(state);
             } else if !state.input_text.is_empty() && state.turn_status != TurnStatus::Idle {
                 // Queue follow-up text while a turn is running; drained on turn completion.
                 let text = std::mem::take(&mut state.input_text);
                 state.input_cursor = 0;
                 exit_input_history_recall(state);
                 state.command_popup = None;
+                state.skill_popup = None;
                 state.pending_input.push(text);
             }
             InputAction::None
@@ -323,34 +385,196 @@ fn handle_input_editor(state: &mut AppState, key: crossterm::event::KeyEvent) ->
         _ => InputAction::None,
     };
 
-    // Auto-show or update command popup whenever input starts with '/'.
-    if state.input_text.starts_with('/') {
-        let filtered = crate::ui::overlays::command_popup::filter_commands(
-            &state.input_text,
-            &state.command_catalog,
-        );
-        if filtered.is_empty() {
-            state.command_popup = None;
-        } else {
-            let sel = state
-                .command_popup
-                .as_ref()
-                .map(|p| p.selected.min(filtered.len().saturating_sub(1)))
-                .unwrap_or(0);
-            state.command_popup = Some(crate::app::state::CommandPopupState {
-                items: filtered,
-                selected: sel,
-            });
-        }
-    } else {
-        state.command_popup = None;
-    }
+    sync_inline_popups(state);
 
     action
 }
 
 fn exit_input_history_recall(state: &mut AppState) {
     state.input_history_pos = None;
+}
+
+fn sync_inline_popups(state: &mut AppState) {
+    let filtered = command_popup::filter_commands_for_input(
+        &state.input_text,
+        state.input_cursor,
+        &state.command_catalog,
+    );
+    if !filtered.is_empty() {
+        state.skill_popup = None;
+        if let Some(popup) = state.command_popup.as_mut() {
+            popup.replace_items(filtered, command_popup::MAX_POPUP_ROWS);
+        } else {
+            let mut popup = CommandPopupState::new(filtered);
+            popup.ensure_visible(command_popup::MAX_POPUP_ROWS);
+            state.command_popup = Some(popup);
+        }
+        return;
+    }
+    state.command_popup = None;
+
+    let filtered = skill_popup::filter_skills_for_input(
+        &state.input_text,
+        state.input_cursor,
+        skill_suggestions(state),
+    );
+    if filtered.is_empty() {
+        state.skill_popup = None;
+        return;
+    }
+
+    if let Some(popup) = state.skill_popup.as_mut() {
+        popup.replace_items(filtered, skill_popup::MAX_POPUP_ROWS);
+    } else {
+        let mut popup = SkillPopupState::new(filtered);
+        popup.ensure_visible(skill_popup::MAX_POPUP_ROWS);
+        state.skill_popup = Some(popup);
+    }
+}
+
+fn skill_suggestions(state: &AppState) -> Vec<SkillSuggestion> {
+    let SkillCacheState::Ready(skills) = &state.skill_cache else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<SkillSuggestion> = skills
+        .iter()
+        .filter(|skill| skill.available && skill.enabled)
+        .map(|skill| {
+            let display_name = skill
+                .display_name
+                .clone()
+                .unwrap_or_else(|| skill.name.clone());
+            let description = skill
+                .short_description
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| skill.description.clone());
+            let source_label = skill
+                .plugin_display_name
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|plugin| format!("[Plugin] {plugin}"))
+                .unwrap_or_else(|| format!("[{}]", skill.source));
+            SkillSuggestion {
+                name: skill.name.clone(),
+                display_name,
+                description,
+                source_label,
+                enabled: skill.enabled,
+                available: skill.available,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    out
+}
+
+fn accept_selected_skill(state: &mut AppState) {
+    let Some(popup) = state.skill_popup.take() else {
+        return;
+    };
+    let Some(skill) = popup.items.get(popup.selected) else {
+        return;
+    };
+    let Some(token) = skill_popup::skill_mention_filter(&state.input_text, state.input_cursor)
+    else {
+        return;
+    };
+    let start = token.start;
+    let end = token.end;
+
+    exit_input_history_recall(state);
+    let insert = format!("${} ", skill.name);
+    state.input_text.replace_range(start..end, &insert);
+    state.input_cursor = start + insert.len();
+}
+
+fn filtered_skill_indices(picker: &SkillsPickerState) -> Vec<usize> {
+    let filter = picker.search.trim().to_ascii_lowercase();
+    let mut indices: Vec<usize> = picker
+        .skills
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, skill)| {
+            if filter.is_empty() {
+                return Some(idx);
+            }
+            let display = skill
+                .display_name
+                .as_deref()
+                .unwrap_or(skill.name.as_str())
+                .to_ascii_lowercase();
+            let description = skill.description.to_ascii_lowercase();
+            (skill.name.to_ascii_lowercase().contains(&filter)
+                || display.contains(&filter)
+                || description.contains(&filter))
+            .then_some(idx)
+        })
+        .collect();
+    indices.sort_by(|a, b| {
+        let a_skill = &picker.skills[*a];
+        let b_skill = &picker.skills[*b];
+        let a_name = a_skill
+            .display_name
+            .as_deref()
+            .unwrap_or(a_skill.name.as_str());
+        let b_name = b_skill
+            .display_name
+            .as_deref()
+            .unwrap_or(b_skill.name.as_str());
+        a_name.cmp(b_name)
+    });
+    indices
+}
+
+fn clamp_skills_picker(picker: &mut SkillsPickerState) {
+    let len = filtered_skill_indices(picker).len();
+    if len == 0 {
+        picker.selected = 0;
+        picker.scroll_offset = 0;
+        return;
+    }
+
+    picker.selected = picker.selected.min(len - 1);
+    let visible_rows = skill_popup::MAX_POPUP_ROWS.min(len).max(1);
+    if picker.selected < picker.scroll_offset {
+        picker.scroll_offset = picker.selected;
+    } else {
+        let bottom = picker.scroll_offset + visible_rows - 1;
+        if picker.selected > bottom {
+            picker.scroll_offset = picker.selected + 1 - visible_rows;
+        }
+    }
+    picker.scroll_offset = picker.scroll_offset.min(len.saturating_sub(visible_rows));
+}
+
+fn move_skills_picker_up(picker: &mut SkillsPickerState) {
+    let len = filtered_skill_indices(picker).len();
+    if len == 0 {
+        picker.selected = 0;
+    } else {
+        picker.selected = if picker.selected == 0 {
+            len - 1
+        } else {
+            picker.selected - 1
+        };
+    }
+    clamp_skills_picker(picker);
+}
+
+fn move_skills_picker_down(picker: &mut SkillsPickerState) {
+    let len = filtered_skill_indices(picker).len();
+    if len == 0 {
+        picker.selected = 0;
+    } else {
+        picker.selected = if picker.selected + 1 >= len {
+            0
+        } else {
+            picker.selected + 1
+        };
+    }
+    clamp_skills_picker(picker);
 }
 
 fn handle_chat_view(state: &mut AppState, key: crossterm::event::KeyEvent) -> InputAction {
@@ -436,9 +660,6 @@ fn handle_chat_view(state: &mut AppState, key: crossterm::event::KeyEvent) -> In
             state.input_history_pos = None;
             InputAction::None
         }
-
-        // F1 or '?' opens the help overlay from chat view.
-        KeyCode::F(1) | KeyCode::Char('?') => InputAction::OpenHelp,
 
         _ => InputAction::None,
     }
@@ -583,18 +804,6 @@ pub fn handle_thread_picker(state: &mut AppState, key: crossterm::event::KeyEven
     }
 }
 
-/// Handle key events when the HelpOverlay is active.
-pub fn handle_help_overlay(key: crossterm::event::KeyEvent) -> InputAction {
-    use crossterm::event::KeyCode;
-
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::F(1) => {
-            InputAction::CloseOverlay
-        }
-        _ => InputAction::None,
-    }
-}
-
 /// Handle key events when the ModelPicker overlay is active.
 pub fn handle_model_picker(state: &mut AppState, key: crossterm::event::KeyEvent) -> InputAction {
     use crossterm::event::KeyCode;
@@ -625,5 +834,251 @@ pub fn handle_model_picker(state: &mut AppState, key: crossterm::event::KeyEvent
         KeyCode::Enter => InputAction::ModelPickerAction(ModelPickerOp::Apply),
         KeyCode::Esc | KeyCode::Char('q') => InputAction::ModelPickerAction(ModelPickerOp::Close),
         _ => InputAction::None,
+    }
+}
+
+pub fn handle_skills_picker(state: &mut AppState, key: crossterm::event::KeyEvent) -> InputAction {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let Some(picker) = state.skills_picker.as_mut() else {
+        return InputAction::None;
+    };
+
+    match key.code {
+        KeyCode::Up if key.modifiers == KeyModifiers::NONE => {
+            move_skills_picker_up(picker);
+            InputAction::None
+        }
+        KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
+            move_skills_picker_down(picker);
+            InputAction::None
+        }
+        KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+            move_skills_picker_up(picker);
+            InputAction::None
+        }
+        KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
+            move_skills_picker_down(picker);
+            InputAction::None
+        }
+        KeyCode::Backspace => {
+            picker.search.pop();
+            clamp_skills_picker(picker);
+            InputAction::None
+        }
+        KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+            picker.search.clear();
+            clamp_skills_picker(picker);
+            InputAction::None
+        }
+        KeyCode::Char(c)
+            if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            picker.search.push(c);
+            clamp_skills_picker(picker);
+            InputAction::None
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            InputAction::SkillsPickerAction(SkillsPickerOp::Toggle)
+        }
+        KeyCode::Esc | KeyCode::Char('q') => InputAction::SkillsPickerAction(SkillsPickerOp::Close),
+        _ => InputAction::None,
+    }
+}
+
+pub fn selected_skill_name(state: &AppState) -> Option<String> {
+    let picker = state.skills_picker.as_ref()?;
+    let indices = filtered_skill_indices(picker);
+    let actual_idx = indices.get(picker.selected)?;
+    picker
+        .skills
+        .get(*actual_idx)
+        .map(|skill| skill.name.clone())
+}
+
+pub fn handle_permissions_picker(
+    state: &mut AppState,
+    key: crossterm::event::KeyEvent,
+) -> InputAction {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let Some(picker) = state.permissions_picker.as_mut() else {
+        return InputAction::None;
+    };
+    let len = picker.options.len();
+
+    match key.code {
+        KeyCode::Up if key.modifiers == KeyModifiers::NONE => {
+            if len > 0 {
+                picker.selected = if picker.selected == 0 {
+                    len - 1
+                } else {
+                    picker.selected - 1
+                };
+            }
+            InputAction::None
+        }
+        KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
+            if len > 0 {
+                picker.selected = if picker.selected + 1 >= len {
+                    0
+                } else {
+                    picker.selected + 1
+                };
+            }
+            InputAction::None
+        }
+        KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+            if len > 0 {
+                picker.selected = if picker.selected == 0 {
+                    len - 1
+                } else {
+                    picker.selected - 1
+                };
+            }
+            InputAction::None
+        }
+        KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
+            if len > 0 {
+                picker.selected = if picker.selected + 1 >= len {
+                    0
+                } else {
+                    picker.selected + 1
+                };
+            }
+            InputAction::None
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            InputAction::PermissionsPickerAction(PermissionsPickerOp::Apply)
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            InputAction::PermissionsPickerAction(PermissionsPickerOp::Close)
+        }
+        _ => InputAction::None,
+    }
+}
+
+pub fn selected_permission_option(state: &AppState) -> Option<PermissionOption> {
+    let picker = state.permissions_picker.as_ref()?;
+    picker.options.get(picker.selected).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn skill(name: &str, display: &str, description: &str) -> crate::wire::types::SkillInfo {
+        crate::wire::types::SkillInfo {
+            name: name.to_string(),
+            description: description.to_string(),
+            display_name: Some(display.to_string()),
+            short_description: None,
+            source: "builtin".to_string(),
+            plugin_id: None,
+            plugin_display_name: None,
+            available: true,
+            unavailable_reason: None,
+            enabled: true,
+            path: format!("/skills/{name}/SKILL.md"),
+            has_variant: None,
+            default_prompt: None,
+            metadata: None,
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+    }
+
+    fn state_with_commands(count: usize) -> AppState {
+        let mut state = AppState::new("workspace".to_string());
+        state.command_catalog = (0..count)
+            .map(|idx| {
+                crate::app::state::SlashCommandDescriptor::new(
+                    format!("/cmd{idx:02}"),
+                    format!("Command {idx}"),
+                    "test",
+                )
+            })
+            .collect();
+        state
+    }
+
+    #[test]
+    fn command_popup_scrolls_selected_item_into_view() {
+        let mut state = state_with_commands(12);
+        handle_key(&mut state, key(KeyCode::Char('/')));
+
+        for _ in 0..command_popup::MAX_POPUP_ROWS {
+            handle_key(&mut state, key(KeyCode::Down));
+        }
+
+        let popup = state.command_popup.expect("command popup");
+        assert_eq!(popup.selected, command_popup::MAX_POPUP_ROWS);
+        assert!(popup.scroll_offset > 0);
+        assert!(popup.selected < popup.scroll_offset + command_popup::MAX_POPUP_ROWS);
+    }
+
+    #[test]
+    fn command_popup_supports_ctrl_p_and_ctrl_n() {
+        let mut state = state_with_commands(3);
+        handle_key(&mut state, key(KeyCode::Char('/')));
+
+        handle_key(&mut state, ctrl('n'));
+        assert_eq!(state.command_popup.as_ref().expect("popup").selected, 1);
+
+        handle_key(&mut state, ctrl('p'));
+        assert_eq!(state.command_popup.as_ref().expect("popup").selected, 0);
+    }
+
+    #[test]
+    fn command_popup_hides_after_command_name_token() {
+        let mut state = state_with_commands(1);
+        state.command_catalog[0].name = "/agent".to_string();
+
+        for ch in "/agent ".chars() {
+            handle_key(&mut state, key(KeyCode::Char(ch)));
+        }
+
+        assert!(state.command_popup.is_none());
+        assert_eq!(state.input_text, "/agent ");
+    }
+
+    #[test]
+    fn command_popup_clamps_selection_when_filter_changes() {
+        let mut state = state_with_commands(12);
+        handle_key(&mut state, key(KeyCode::Char('/')));
+        for _ in 0..command_popup::MAX_POPUP_ROWS {
+            handle_key(&mut state, key(KeyCode::Down));
+        }
+
+        for ch in "cmd1".chars() {
+            handle_key(&mut state, key(KeyCode::Char(ch)));
+        }
+
+        let popup = state.command_popup.expect("command popup");
+        assert!(popup.selected < popup.items.len());
+        assert!(popup.scroll_offset < popup.items.len());
+    }
+
+    #[test]
+    fn skill_popup_opens_and_inserts_selected_skill() {
+        let mut state = AppState::new("workspace".to_string());
+        state.skill_cache =
+            SkillCacheState::Ready(vec![skill("browser-use", "Browser", "Web automation")]);
+
+        handle_key(&mut state, key(KeyCode::Char('$')));
+        assert!(state.skill_popup.is_some());
+
+        handle_key(&mut state, key(KeyCode::Enter));
+
+        assert_eq!(state.input_text, "$browser-use ");
+        assert_eq!(state.input_cursor, "$browser-use ".len());
+        assert!(state.skill_popup.is_none());
     }
 }

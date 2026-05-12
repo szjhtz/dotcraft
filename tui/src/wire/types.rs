@@ -95,6 +95,8 @@ pub struct ServerCapabilities {
     pub command_management: Option<bool>,
     pub model_catalog_management: Option<bool>,
     pub workspace_config_management: Option<bool>,
+    pub skills_management: Option<bool>,
+    pub skill_variants: Option<bool>,
 }
 
 // ── thread/goal/* ─────────────────────────────────────────────────────────
@@ -180,6 +182,39 @@ pub struct CommandExecuteThread {
     pub display_name: Option<String>,
 }
 
+// ── skills/* ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+    pub source: String,
+    pub plugin_id: Option<String>,
+    pub plugin_display_name: Option<String>,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+    pub enabled: bool,
+    pub path: String,
+    pub has_variant: Option<bool>,
+    pub default_prompt: Option<String>,
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListResult {
+    pub skills: Vec<SkillInfo>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsSetEnabledResult {
+    pub skill: SkillInfo,
+}
+
 #[cfg(test)]
 mod tests {
     use super::ClientCapabilities;
@@ -196,7 +231,8 @@ mod tests {
 
         let json = serde_json::to_value(caps).expect("serialize");
         assert_eq!(
-            json.get("commandExecutionStreaming").and_then(|v| v.as_bool()),
+            json.get("commandExecutionStreaming")
+                .and_then(|v| v.as_bool()),
             Some(true)
         );
         assert_eq!(

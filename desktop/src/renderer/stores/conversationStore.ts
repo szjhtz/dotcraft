@@ -37,6 +37,8 @@ import { parsePlanMarkdown } from '../utils/planMarkdown'
 
 export type PlanTodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 
+export type MaintenanceKind = 'compacting' | 'consolidating'
+
 export interface PlanTodoItem {
   id: string
   content: string
@@ -134,6 +136,8 @@ interface ConversationState {
   outputTokens: number
   /** Transient system status translation key, e.g. "systemStatus.compacting". */
   systemLabel: string | null
+  /** Thread-level maintenance that should keep input in queue mode. */
+  maintenanceKind: MaintenanceKind | null
   /** Queued follow-up message (sent when current turn completes) */
   pendingMessage: PendingComposerMessage | null
   /** Server-persisted FIFO inputs queued behind the active turn. */
@@ -227,6 +231,7 @@ interface ConversationActions {
     errorThreshold: number
     percentLeft: number
   } | null): void
+  setMaintenanceKind(kind: MaintenanceKind | string | null | undefined): void
   setPendingMessage(msg: PendingComposerMessage | null): void
   setQueuedInputs(inputs: QueuedTurnInput[]): void
   setThreadMode(mode: ThreadMode): void
@@ -297,6 +302,7 @@ const initialState: ConversationState = {
   inputTokens: 0,
   outputTokens: 0,
   systemLabel: null,
+  maintenanceKind: null,
   pendingMessage: null,
   queuedInputs: [],
   threadMode: 'agent',
@@ -479,9 +485,11 @@ const SYSTEM_LABELS: Record<string, string | null> = {
   compacted: null,
   compactFailed: null,
   compactSkipped: null,
+  compactCancelled: null,
   consolidated: null,
   consolidationSkipped: null,
-  consolidationFailed: null
+  consolidationFailed: null,
+  consolidationCancelled: null
 }
 
 function systemLabelForEvent(
@@ -492,6 +500,32 @@ function systemLabelForEvent(
     return 'systemStatus.compacting.manual'
   }
   return SYSTEM_LABELS[kind]
+}
+
+function maintenanceKindForSystemEvent(
+  kind: string,
+  params?: { turnId?: string | null }
+): MaintenanceKind | null | undefined {
+  if (kind === 'consolidating') return 'consolidating'
+  if (kind === 'compacting' && !params?.turnId) return 'compacting'
+  if (
+    kind === 'compacted'
+    || kind === 'compactSkipped'
+    || kind === 'compactFailed'
+    || kind === 'compactCancelled'
+    || kind === 'consolidated'
+    || kind === 'consolidationSkipped'
+    || kind === 'consolidationFailed'
+    || kind === 'consolidationCancelled'
+  ) {
+    return null
+  }
+  return undefined
+}
+
+function normalizeMaintenanceKind(kind: MaintenanceKind | string | null | undefined): MaintenanceKind | null {
+  if (kind === 'compacting' || kind === 'consolidating') return kind
+  return null
 }
 
 function computeSeverity(tokens: number, snapshot: {
@@ -782,6 +816,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       turnStartedAt: runningTurn
         ? (runningTurn.startedAt ? new Date(runningTurn.startedAt).getTime() : Date.now())
         : null,
+      maintenanceKind: null,
       changedFiles: rehydratedChangedFiles,
       itemDiffs: rehydratedItemDiffs,
       streamingItemDiffs: new Map<string, FileDiff>(),
@@ -811,6 +846,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           inputTokens: 0,
           outputTokens: 0,
           systemLabel: null,
+          maintenanceKind: null,
           subAgentEntries: [],
           streamingItemDiffs: new Map<string, FileDiff>(),
           streamingBaselines: new Map<string, StreamingFileBaseline>()
@@ -846,6 +882,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         inputTokens: 0,
         outputTokens: 0,
         systemLabel: null,
+        maintenanceKind: null,
         subAgentEntries: [],
         streamingItemDiffs: new Map<string, FileDiff>(),
         streamingBaselines: new Map<string, StreamingFileBaseline>()
@@ -1646,11 +1683,15 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
   onSystemEvent(kind, params) {
     const label = systemLabelForEvent(kind, params)
+    const maintenanceKind = maintenanceKindForSystemEvent(kind, params)
     if (label !== undefined) {
       set({ systemLabel: label })
     }
+    if (maintenanceKind !== undefined) {
+      set({ maintenanceKind })
+    }
 
-    if (kind === 'compacting' || kind === 'compacted' || kind === 'compactSkipped' || kind === 'compactFailed') {
+    if (kind === 'compacting' || kind === 'compacted' || kind === 'compactSkipped' || kind === 'compactFailed' || kind === 'compactCancelled') {
       const tokens = typeof params?.tokenCount === 'number' ? params.tokenCount : null
       set((state) => ({
         contextUsage: applyTokensToContextUsage(
@@ -1670,6 +1711,10 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       return
     }
     set({ contextUsage: toContextUsage(snapshot) })
+  },
+
+  setMaintenanceKind(kind) {
+    set({ maintenanceKind: normalizeMaintenanceKind(kind) })
   },
 
   setPendingMessage(msg) {
@@ -1696,7 +1741,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       turnStartedAt: Date.now(),
       inputTokens: 0,
       outputTokens: 0,
-      systemLabel: null
+      systemLabel: null,
+      maintenanceKind: null
     }))
   },
 

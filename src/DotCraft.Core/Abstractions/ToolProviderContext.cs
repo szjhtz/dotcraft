@@ -6,6 +6,7 @@ using DotCraft.Cron;
 using DotCraft.Tracing;
 using DotCraft.Mcp;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Security;
 using DotCraft.Skills;
 using DotCraft.Lsp;
@@ -74,6 +75,11 @@ public sealed class ToolProviderContext
     /// The memory store for context persistence.
     /// </summary>
     public required MemoryStore MemoryStore { get; init; }
+
+    /// <summary>
+    /// Optional Dreams store for passive workspace memory context.
+    /// </summary>
+    public DreamStore? DreamStore { get; init; }
 
     /// <summary>
     /// The skills loader for skill-based tools.

@@ -73,6 +73,40 @@ public sealed class ContextUsageTokenCounterTests
     }
 
     [Fact]
+    public void EstimateFromAnchor_ImageToolResultDeltaDoesNotScaleWithImageBytes()
+    {
+        var imageBytes = new byte[1_000_000];
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "first user"),
+            new(ChatRole.Assistant, "first assistant"),
+            new(
+                ChatRole.Tool,
+                (IList<AIContent>)
+                [
+                    new FunctionResultContent(
+                        "call-1",
+                        (IList<AIContent>)
+                        [
+                            new TextContent("Image: screenshot.png (1,000,000 bytes, image/png)"),
+                            new DataContent(imageBytes, "image/png")
+                        ])
+                ])
+        };
+        var anchor = new ContextUsageAnchor(
+            Tokens: 50_000,
+            MessageCount: 2,
+            PrefixFingerprint: MessageTokenEstimator.ComputePrefixFingerprint(messages, 2));
+
+        var tokens = ContextUsageTokenCounter.EstimateFromAnchor(anchor, messages);
+
+        Assert.NotNull(tokens);
+        var delta = tokens.Value - anchor.Tokens;
+        Assert.InRange(delta, 2_000, 20_000);
+        Assert.True(delta < imageBytes.Length / 16);
+    }
+
+    [Fact]
     public void EstimateFromAnchor_ReturnsNull_WhenBoundaryNoLongerMatchesHistory()
     {
         var messages = new List<ChatMessage>

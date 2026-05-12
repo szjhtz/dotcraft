@@ -3,6 +3,7 @@ using DotCraft.Automations.Protocol;
 using DotCraft.Channels;
 using DotCraft.Configuration;
 using DotCraft.Cron;
+using DotCraft.Dreams;
 using DotCraft.Heartbeat;
 using DotCraft.Hosting;
 using DotCraft.Modules;
@@ -19,7 +20,8 @@ public interface IAppServerChannelRunner : IChannelStatusProvider, IExternalChan
     void Initialize(
         ISessionService sessionService,
         HeartbeatService heartbeatService,
-        CronService cronService);
+        CronService cronService,
+        DreamsService dreamsService);
 
     Task StartWebPoolAsync();
 
@@ -59,8 +61,9 @@ internal sealed class ChannelRunnerAdapter(ChannelRunner inner) : IAppServerChan
     public void Initialize(
         ISessionService sessionService,
         HeartbeatService heartbeatService,
-        CronService cronService) =>
-        inner.Initialize(sessionService, heartbeatService, cronService);
+        CronService cronService,
+        DreamsService dreamsService) =>
+        inner.Initialize(sessionService, heartbeatService, cronService, dreamsService);
 
     public Task StartWebPoolAsync() => inner.StartWebPoolAsync();
 

@@ -7,6 +7,7 @@ Choose a document by goal. First-time users should start with [Getting Started](
 | Goal | Recommended doc |
 |------|-----------------|
 | Download Desktop, initialize a workspace, configure API key, and run once | [Getting Started](./getting-started.md) |
+| Understand DotCraft's core features: project memory, Skills, Dreams, multi-protocol support, and channel integrations | [Features](./features.md) |
 | Use the graphical desktop client | [Desktop Guide](./desktop_guide.md) |
 | Use the full terminal interface | [TUI Guide](./tui_guide.md) |
 | Configure API key, model, endpoint, and workspace overrides | [Configuration Guide](./config_guide.md) |

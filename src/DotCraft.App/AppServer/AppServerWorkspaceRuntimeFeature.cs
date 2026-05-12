@@ -123,7 +123,7 @@ internal sealed class AppServerWorkspaceRuntimeFeature(IServiceProvider services
                 context.ModuleRegistry);
             if (_channelRunner != null)
             {
-                _channelRunner.Initialize(context.SessionService, context.HeartbeatService, context.CronService);
+                _channelRunner.Initialize(context.SessionService, context.HeartbeatService, context.CronService, context.DreamsService);
                 await _channelRunner.StartWebPoolAsync();
             }
 

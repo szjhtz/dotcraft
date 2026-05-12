@@ -13,6 +13,7 @@ use crate::{
         format_invocation_display_with_plan, format_result_summary,
         invocation_needs_calling_called_prefix_with_plan,
     },
+    ui::welcome_screen::{session_header_lines, tip_line},
 };
 use ratatui::{
     buffer::Buffer,
@@ -53,15 +54,75 @@ impl<'a> ChatView<'a> {
         self.width = w;
         self
     }
-}
 
-impl Widget for ChatView<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        // 2 cols for the left gutter, 2 for potential right margin.
-        let render_width = area.width.saturating_sub(4).max(20);
+    pub fn preferred_height(state: &AppState, theme: &Theme, strings: &Strings, width: u16) -> u16 {
+        if width == 0 {
+            return 0;
+        }
 
+        let view = ChatView::new(state, theme, strings).with_width(width);
+        let render_width = width.saturating_sub(4).max(20);
+        let lines = view.build_lines(render_width, width);
+        Paragraph::new(lines)
+            .block(Block::default().borders(Borders::NONE))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .min(u16::MAX as usize) as u16
+    }
+
+    fn build_lines(&self, render_width: u16, area_width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut subagent_block_rendered = false;
+
+        let has_conversation_content = self.state.history.iter().any(|entry| {
+            matches!(
+                entry,
+                HistoryEntry::UserMessage { .. }
+                    | HistoryEntry::AgentMessage { .. }
+                    | HistoryEntry::ToolCall { .. }
+            )
+        });
+        if !has_conversation_content
+            && self.state.turn_status == TurnStatus::Idle
+            && self.state.streaming.message_buffer.is_empty()
+        {
+            let connection_error = if self.state.connected {
+                None
+            } else {
+                self.state
+                    .history
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match entry {
+                        HistoryEntry::Error { message } => Some(message.as_str()),
+                        _ => None,
+                    })
+            };
+            let thread_label = self
+                .state
+                .current_thread_name
+                .as_deref()
+                .or(self.state.current_thread_id.as_deref());
+            lines.extend(session_header_lines(
+                env!("CARGO_PKG_VERSION"),
+                &self.state.workspace_path,
+                self.state
+                    .current_model_override
+                    .as_deref()
+                    .or(self.state.workspace_model.as_deref())
+                    .or(Some(self.strings.model_default_label)),
+                thread_label,
+                self.state.connected,
+                connection_error,
+                self.state.tick_count,
+                self.theme,
+                self.strings,
+                area_width,
+            ));
+            lines.push(Line::default());
+            lines.push(tip_line(self.strings, self.theme));
+            lines.push(Line::default());
+        }
 
         // ── Committed history entries ──────────────────────────────────────
         let history = &self.state.history;
@@ -131,6 +192,16 @@ impl Widget for ChatView<'_> {
                 self.render_inline_plan_v2(plan, render_width, &mut lines);
             }
         }
+
+        lines
+    }
+}
+
+impl Widget for ChatView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // 2 cols for the left gutter, 2 for potential right margin.
+        let render_width = area.width.saturating_sub(4).max(20);
+        let mut lines = self.build_lines(render_width, area.width);
 
         // ── Compute scroll ────────────────────────────────────────────────
         // Use Paragraph::line_count() instead of lines.len() so that visual
@@ -275,7 +346,11 @@ impl ChatView<'_> {
 
     /// Format tool call arguments as a compact inline invocation.
     fn format_invocation(&self, name: &str, args: &str) -> String {
-        format_invocation_display_with_plan(name, args, self.state.plan.as_ref().map(|p| p.todos.as_slice()))
+        format_invocation_display_with_plan(
+            name,
+            args,
+            self.state.plan.as_ref().map(|p| p.todos.as_slice()),
+        )
     }
 
     /// Render an active (in-flight) tool call.
@@ -336,12 +411,13 @@ impl ChatView<'_> {
                     let last_idx = show_count.saturating_sub(1);
                     for (i, line) in output_lines.iter().take(show_count).enumerate() {
                         let is_last = i == last_idx;
-                        let truncated_suffix =
-                            if is_last && output_lines.len() > TOOL_ACTIVE_SHELL_PREVIEW_MAX_LINES {
-                                "…"
-                            } else {
-                                ""
-                            };
+                        let truncated_suffix = if is_last
+                            && output_lines.len() > TOOL_ACTIVE_SHELL_PREVIEW_MAX_LINES
+                        {
+                            "…"
+                        } else {
+                            ""
+                        };
                         out.push(Line::from(vec![
                             Span::styled("    │ ".to_string(), self.theme.dim),
                             Span::styled(
@@ -365,11 +441,12 @@ impl ChatView<'_> {
             let last_idx = show_count.saturating_sub(1);
             for (i, line) in preview_lines.iter().take(show_count).enumerate() {
                 let is_last = i == last_idx;
-                let truncated_suffix = if is_last && preview_lines.len() > TOOL_ACTIVE_FILE_PREVIEW_MAX_LINES {
-                    "…"
-                } else {
-                    ""
-                };
+                let truncated_suffix =
+                    if is_last && preview_lines.len() > TOOL_ACTIVE_FILE_PREVIEW_MAX_LINES {
+                        "…"
+                    } else {
+                        ""
+                    };
                 out.push(Line::from(vec![
                     Span::styled("    │ ".to_string(), self.theme.dim),
                     Span::styled(
@@ -638,9 +715,15 @@ impl ChatView<'_> {
                     self.theme.dim,
                 )
             } else if entry.current_tool.is_some() {
-                (Span::styled("•  ".to_string(), self.theme.tool_active), self.theme.tool_active)
+                (
+                    Span::styled("•  ".to_string(), self.theme.tool_active),
+                    self.theme.tool_active,
+                )
             } else {
-                (Span::styled("•  ".to_string(), self.theme.dim), self.theme.dim)
+                (
+                    Span::styled("•  ".to_string(), self.theme.dim),
+                    self.theme.dim,
+                )
             };
 
             let tool_text = if entry.is_completed {
@@ -715,7 +798,12 @@ impl ChatView<'_> {
         width: u16,
         out: &mut Vec<Line<'static>>,
     ) {
-        out.extend(render_inline_plan_lines(plan, width, self.theme, self.strings));
+        out.extend(render_inline_plan_lines(
+            plan,
+            width,
+            self.theme,
+            self.strings,
+        ));
         out.push(Line::default());
     }
 
@@ -1001,7 +1089,8 @@ mod tests {
     };
 
     fn plain_text(lines: &[Line<'static>]) -> Vec<String> {
-        lines.iter()
+        lines
+            .iter()
             .map(|line| {
                 line.spans
                     .iter()

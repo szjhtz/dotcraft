@@ -7,6 +7,7 @@ using DotCraft.Context;
 using DotCraft.Context.Compaction;
 using DotCraft.Hooks;
 using DotCraft.Memory;
+using DotCraft.Dreams;
 using DotCraft.Mcp;
 using DotCraft.Plugins;
 using DotCraft.Protocol.AppServer;
@@ -40,6 +41,39 @@ internal sealed record GoalTurnSnapshot(
         this with { AccountedUsage = usage, LastAccountedAt = accountedAt };
 }
 
+internal sealed class ThreadMaintenanceState(string kind) : IDisposable
+{
+    public string Kind { get; } = kind;
+
+    public CancellationTokenSource Cancellation { get; } = new();
+
+    public CancellationToken Token => Cancellation.Token;
+
+    public void Cancel() => Cancellation.Cancel();
+
+    public void Dispose() => Cancellation.Dispose();
+}
+
+internal sealed class ThreadMaintenanceRegistration(
+    SessionService owner,
+    string threadId,
+    ThreadMaintenanceState state) : IDisposable
+{
+    private int _disposed;
+
+    public string Kind => state.Kind;
+
+    public CancellationToken Token => state.Token;
+
+    public bool IsCancellationRequested => state.Token.IsCancellationRequested;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            owner.CompleteThreadMaintenance(threadId, state);
+    }
+}
+
 /// <summary>
 /// Session Core implementation. Manages Thread/Turn/Item lifecycle, orchestrates agent
 /// execution, emits the structured event stream, and delegates persistence to SessionPersistenceService.
@@ -69,6 +103,7 @@ public sealed class SessionService(
     private readonly ConcurrentDictionary<string, AIAgent> _threadAgents = new();
     private readonly ConcurrentDictionary<TurnKey, SessionApprovalService> _pendingApprovals = new();
     private readonly ConcurrentDictionary<TurnKey, CancellationTokenSource> _runningTurns = new();
+    private readonly ConcurrentDictionary<string, ThreadMaintenanceState> _threadMaintenance = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, McpClientManager> _threadMcpManagers = new();
     private readonly ConcurrentDictionary<string, AgentModeManager> _threadModeManagers = new();
     private readonly ConcurrentDictionary<string, ThreadEventBroker> _threadEventBrokers = new();
@@ -286,6 +321,7 @@ public sealed class SessionService(
         && !IsPlanMode(thread)
         && thread.HistoryMode == HistoryMode.Server
         && !thread.Turns.Any(turn => turn.Status is TurnStatus.Running or TurnStatus.WaitingApproval)
+        && !_threadMaintenance.ContainsKey(thread.Id)
         && !thread.QueuedInputs.Any(input => string.Equals(input.Status, "queued", StringComparison.OrdinalIgnoreCase)
             || string.Equals(input.Status, "guidancePending", StringComparison.OrdinalIgnoreCase));
 
@@ -1319,6 +1355,8 @@ Choose the next concrete action that advances the goal. Before doing substantial
 
         if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
             throw new InvalidOperationException($"Thread '{threadId}' already has a running Turn. Wait for it to complete or cancel it first.");
+
+        ThrowIfThreadMaintenanceActive(threadId);
 
         if (thread.HistoryMode == HistoryMode.Client && messages is not { Length: > 0 })
             throw new InvalidOperationException($"Thread '{threadId}' requires client-managed history, but no messages were provided.");
@@ -2412,7 +2450,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                     logger?.LogError(ex, "Failed to persist thread state after turn completion for thread {ThreadId}", threadId);
                 }
 
-                TryScheduleMemoryConsolidation(
+                var maintenanceScheduled = TryScheduleMemoryConsolidation(
                     threadId,
                     thread,
                     turn,
@@ -2426,7 +2464,8 @@ Choose the next concrete action that advances the goal. Before doing substantial
                         ? SessionThreadRuntimeSignal.TurnCompletedAwaitingPlanConfirmation
                         : SessionThreadRuntimeSignal.TurnCompleted);
 
-                await TryStartNextQueuedTurnAsync(threadId, CancellationToken.None);
+                if (!maintenanceScheduled)
+                    await TryStartNextQueuedTurnAsync(threadId, CancellationToken.None);
                 await MaybeContinueGoalIfIdleAsync(threadId, CancellationToken.None);
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -2598,6 +2637,24 @@ Choose the next concrete action that advances the goal. Before doing substantial
     {
         if (_runningTurns.TryGetValue(new TurnKey(threadId, turnId), out var cts))
             cts.Cancel();
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task CancelThreadMaintenanceAsync(string threadId, CancellationToken ct = default)
+    {
+        if (_threadMaintenance.TryGetValue(threadId, out var maintenance))
+        {
+            try
+            {
+                maintenance.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Maintenance reached its terminal state while the interrupt request was in flight.
+            }
+        }
+
         return Task.CompletedTask;
     }
 
@@ -2803,141 +2860,172 @@ Choose the next concrete action that advances the goal. Before doing substantial
             throw new InvalidOperationException($"Thread '{threadId}' has no history to compact.");
         if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
             throw new InvalidOperationException($"Thread '{threadId}' has a running Turn. Wait for it to complete or cancel it first.");
+        ThrowIfThreadMaintenanceActive(threadId);
 
         using var gateLock = await sessionGate.AcquireAsync(threadId, ct);
         thread = await GetOrLoadThreadAsync(threadId, ct);
         if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
             throw new InvalidOperationException($"Thread '{threadId}' has a running Turn. Wait for it to complete or cancel it first.");
+        ThrowIfThreadMaintenanceActive(threadId);
 
-        await EnsurePerThreadAgentIfMissingAsync(threadId, thread, ct);
-        var agent = _threadAgents.GetValueOrDefault(threadId, defaultAgent);
-        var session = await persistence.LoadOrCreateSessionAsync(agent, threadId, ct);
-        var pipeline = GetCompactionPipelineForThread(thread);
-        var historyForEstimate = SnapshotSessionHistoryForConsolidation(session, thread);
-        var promptSnapshot = TryGetLastPromptRequestSnapshot(threadId);
-        var fallbackTools = promptSnapshot?.Tools is { Count: > 0 }
-            ? null
-            : await RebuildCurrentThreadToolsForCompactionAsync(thread, ct);
-        var tokenTracker = agentFactory.GetOrCreateTokenTracker(threadId);
-        var usageEstimate = EstimateContextTokens(
-            threadId,
-            historyForEstimate,
-            tokenTracker.LastInputTokens);
-        var before = (int)Math.Min(int.MaxValue, usageEstimate.Tokens);
-        var beforeThreshold = pipeline.EvaluateThreshold(before);
-        var broker = GetOrCreateBroker(threadId);
+        var maintenance = RegisterThreadMaintenance(threadId, "compacting");
 
-        broker.PublishSystemEvent(
-            "compacting",
-            percentLeft: beforeThreshold.PercentLeft,
-            tokenCount: beforeThreshold.Tokens);
+        async Task<ThreadCompactResult> FinishAsync(ThreadCompactResult result)
+        {
+            maintenance.Dispose();
+            await TryStartNextQueuedTurnAsync(threadId, CancellationToken.None);
+            return result;
+        }
 
-        CompactionStatus status;
+        using var linkedMaintenanceCts = CancellationTokenSource.CreateLinkedTokenSource(ct, maintenance.Token);
+        var maintenanceCt = linkedMaintenanceCts.Token;
+
         try
         {
-            var compactResult = await pipeline.TryManualCompactHistoryAsync(
-                historyForEstimate,
+            await EnsurePerThreadAgentIfMissingAsync(threadId, thread, maintenanceCt);
+            var agent = _threadAgents.GetValueOrDefault(threadId, defaultAgent);
+            var session = await persistence.LoadOrCreateSessionAsync(agent, threadId, maintenanceCt);
+            var pipeline = GetCompactionPipelineForThread(thread);
+            var historyForEstimate = SnapshotSessionHistoryForConsolidation(session, thread);
+            var promptSnapshot = TryGetLastPromptRequestSnapshot(threadId);
+            var fallbackTools = promptSnapshot?.Tools is { Count: > 0 }
+                ? null
+                : await RebuildCurrentThreadToolsForCompactionAsync(thread, maintenanceCt);
+            var tokenTracker = agentFactory.GetOrCreateTokenTracker(threadId);
+            var usageEstimate = EstimateContextTokens(
                 threadId,
-                thread.LastActiveAt,
-                ct,
-                inputTokenHint: before,
-                snapshot: promptSnapshot,
-                fallbackTools: fallbackTools);
-            status = compactResult.Status;
-            if (status.Success)
-            {
-                session.SetInMemoryChatHistory(
-                    [.. compactResult.Messages],
-                    jsonSerializerOptions: SessionPersistenceJsonOptions.Default);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Manual compaction failed for thread {ThreadId}", threadId);
+                historyForEstimate,
+                tokenTracker.LastInputTokens);
+            var before = (int)Math.Min(int.MaxValue, usageEstimate.Tokens);
+            var beforeThreshold = pipeline.EvaluateThreshold(before);
+            var broker = GetOrCreateBroker(threadId);
+
             broker.PublishSystemEvent(
-                "compactFailed",
-                message: ex.Message,
+                "compacting",
                 percentLeft: beforeThreshold.PercentLeft,
                 tokenCount: beforeThreshold.Tokens);
-            return new ThreadCompactResult
+
+            CompactionStatus status;
+            try
             {
-                Outcome = "failed",
-                Message = ex.Message,
-                ContextUsage = TryGetContextUsageSnapshot(threadId)
-            };
-        }
-
-        switch (status.Outcome)
-        {
-            case CompactionOutcome.Micro:
-            case CompactionOutcome.Partial:
-            {
-                tokenTracker.Reset();
-                await persistence.SaveSessionAsync(agent, session, threadId, ct);
-                var contextUsage = await SaveContextUsageSnapshotAsync(
+                var compactResult = await pipeline.TryManualCompactHistoryAsync(
+                    historyForEstimate,
                     threadId,
-                    status.ThresholdAfter.Tokens,
-                    ct);
-                _contextUsageAnchors.TryRemove(threadId, out _);
-                ReleaseStableContextPages(threadId);
-                traceCollector?.RecordContextCompaction(threadId);
-
-                broker.PublishSystemEvent(
-                    "compacted",
-                    percentLeft: status.ThresholdAfter.PercentLeft,
-                    tokenCount: status.ThresholdAfter.Tokens);
-
-                AppendManualCompactionNotice(thread, status, broker);
-                thread.LastActiveAt = DateTimeOffset.UtcNow;
-                await PersistThreadWithMaterializationAsync(thread, ct);
-                ThreadRuntimeSignalForBroadcast?.Invoke(
-                    threadId,
-                    SessionThreadRuntimeSignal.ContextCompacted);
-
-                return new ThreadCompactResult
+                    thread.LastActiveAt,
+                    maintenanceCt,
+                    inputTokenHint: before,
+                    snapshot: promptSnapshot,
+                    fallbackTools: fallbackTools);
+                status = compactResult.Status;
+                if (status.Success)
                 {
-                    Outcome = CompactionOutcomeToWire(status.Outcome),
-                    ContextUsage = contextUsage
-                };
+                    session.SetInMemoryChatHistory(
+                        [.. compactResult.Messages],
+                        jsonSerializerOptions: SessionPersistenceJsonOptions.Default);
+                }
             }
-
-            case CompactionOutcome.Skipped:
+            catch (OperationCanceledException)
+            {
                 broker.PublishSystemEvent(
-                    "compactSkipped",
-                    message: status.FailureReason,
-                    percentLeft: status.ThresholdAfter.PercentLeft,
-                    tokenCount: status.ThresholdAfter.Tokens);
-                return new ThreadCompactResult
+                    "compactCancelled",
+                    message: "cancelled",
+                    percentLeft: beforeThreshold.PercentLeft,
+                    tokenCount: beforeThreshold.Tokens);
+                return await FinishAsync(new ThreadCompactResult
                 {
-                    Outcome = "skipped",
-                    Message = status.FailureReason,
+                    Outcome = "cancelled",
+                    Message = "cancelled",
                     ContextUsage = TryGetContextUsageSnapshot(threadId)
-                };
-
-            case CompactionOutcome.Failed:
+                });
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Manual compaction failed for thread {ThreadId}", threadId);
                 broker.PublishSystemEvent(
                     "compactFailed",
-                    message: status.FailureReason,
-                    percentLeft: status.ThresholdAfter.PercentLeft,
-                    tokenCount: status.ThresholdAfter.Tokens);
-                return new ThreadCompactResult
+                    message: ex.Message,
+                    percentLeft: beforeThreshold.PercentLeft,
+                    tokenCount: beforeThreshold.Tokens);
+                return await FinishAsync(new ThreadCompactResult
                 {
                     Outcome = "failed",
-                    Message = status.FailureReason,
+                    Message = ex.Message,
                     ContextUsage = TryGetContextUsageSnapshot(threadId)
-                };
+                });
+            }
 
-            default:
-                return new ThreadCompactResult
+            switch (status.Outcome)
+            {
+                case CompactionOutcome.Micro:
+                case CompactionOutcome.Partial:
                 {
-                    Outcome = CompactionOutcomeToWire(status.Outcome),
-                    Message = status.FailureReason,
-                    ContextUsage = TryGetContextUsageSnapshot(threadId)
-                };
+                    tokenTracker.Reset();
+                    await persistence.SaveSessionAsync(agent, session, threadId, maintenanceCt);
+                    var contextUsage = await SaveContextUsageSnapshotAsync(
+                        threadId,
+                        status.ThresholdAfter.Tokens,
+                        maintenanceCt);
+                    _contextUsageAnchors.TryRemove(threadId, out _);
+                    ReleaseStableContextPages(threadId);
+                    traceCollector?.RecordContextCompaction(threadId);
+
+                    broker.PublishSystemEvent(
+                        "compacted",
+                        percentLeft: status.ThresholdAfter.PercentLeft,
+                        tokenCount: status.ThresholdAfter.Tokens);
+
+                    AppendManualCompactionNotice(thread, status, broker);
+                    thread.LastActiveAt = DateTimeOffset.UtcNow;
+                    await PersistThreadWithMaterializationAsync(thread, maintenanceCt);
+                    ThreadRuntimeSignalForBroadcast?.Invoke(
+                        threadId,
+                        SessionThreadRuntimeSignal.ContextCompacted);
+
+                    return await FinishAsync(new ThreadCompactResult
+                    {
+                        Outcome = CompactionOutcomeToWire(status.Outcome),
+                        ContextUsage = contextUsage
+                    });
+                }
+
+                case CompactionOutcome.Skipped:
+                    broker.PublishSystemEvent(
+                        "compactSkipped",
+                        message: status.FailureReason,
+                        percentLeft: status.ThresholdAfter.PercentLeft,
+                        tokenCount: status.ThresholdAfter.Tokens);
+                    return await FinishAsync(new ThreadCompactResult
+                    {
+                        Outcome = "skipped",
+                        Message = status.FailureReason,
+                        ContextUsage = TryGetContextUsageSnapshot(threadId)
+                    });
+
+                case CompactionOutcome.Failed:
+                    broker.PublishSystemEvent(
+                        "compactFailed",
+                        message: status.FailureReason,
+                        percentLeft: status.ThresholdAfter.PercentLeft,
+                        tokenCount: status.ThresholdAfter.Tokens);
+                    return await FinishAsync(new ThreadCompactResult
+                    {
+                        Outcome = "failed",
+                        Message = status.FailureReason,
+                        ContextUsage = TryGetContextUsageSnapshot(threadId)
+                    });
+
+                default:
+                    return await FinishAsync(new ThreadCompactResult
+                    {
+                        Outcome = CompactionOutcomeToWire(status.Outcome),
+                        Message = status.FailureReason,
+                        ContextUsage = TryGetContextUsageSnapshot(threadId)
+                    });
+            }
+        }
+        finally
+        {
+            maintenance.Dispose();
         }
     }
 
@@ -2955,15 +3043,18 @@ Choose the next concrete action that advances the goal. Before doing substantial
             throw new InvalidOperationException($"Thread '{threadId}' has no history to consolidate.");
         if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
             throw new InvalidOperationException($"Thread '{threadId}' has a running Turn. Wait for it to complete or cancel it first.");
+        ThrowIfThreadMaintenanceActive(threadId);
 
         IReadOnlyList<ChatMessage> history;
         SessionTurn completedTurn;
         PromptRequestSnapshot? requestSnapshot;
+        ThreadMaintenanceRegistration maintenance;
         using (await sessionGate.AcquireAsync(threadId, ct))
         {
             thread = await GetOrLoadThreadAsync(threadId, ct);
             if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
                 throw new InvalidOperationException($"Thread '{threadId}' has a running Turn. Wait for it to complete or cancel it first.");
+            ThrowIfThreadMaintenanceActive(threadId);
 
             completedTurn = thread.Turns.LastOrDefault(t => t.Status == TurnStatus.Completed)
                 ?? throw new InvalidOperationException($"Thread '{threadId}' has no completed turn to consolidate.");
@@ -2975,22 +3066,32 @@ Choose the next concrete action that advances the goal. Before doing substantial
             if (history.Count == 0)
                 throw new InvalidOperationException($"Thread '{threadId}' has no model-visible history to consolidate.");
 
-            _turnsSinceConsolidation[threadId] = 0;
             requestSnapshot = TryGetLastPromptRequestSnapshot(threadId);
+            maintenance = RegisterThreadMaintenance(threadId, "consolidating");
+            _turnsSinceConsolidation[threadId] = 0;
         }
 
         var broker = GetOrCreateBroker(threadId);
         broker.PublishSystemEvent("consolidating");
 
-        return await RunMemoryConsolidationAsync(
-            threadId,
-            thread,
-            completedTurn,
-            history,
-            requestSnapshot,
-            () => completedTurn.Items.Count + 1,
-            broker,
-            ct);
+        using var linkedMaintenanceCts = CancellationTokenSource.CreateLinkedTokenSource(ct, maintenance.Token);
+        try
+        {
+            return await RunMemoryConsolidationAsync(
+                threadId,
+                thread,
+                completedTurn,
+                history,
+                requestSnapshot,
+                () => completedTurn.Items.Count + 1,
+                broker,
+                linkedMaintenanceCts.Token);
+        }
+        finally
+        {
+            maintenance.Dispose();
+            await TryStartNextQueuedTurnAsync(threadId, CancellationToken.None);
+        }
     }
 
     // =========================================================================
@@ -3131,6 +3232,44 @@ Choose the next concrete action that advances the goal. Before doing substantial
     private void PublishQueueUpdated(string threadId, IReadOnlyList<QueuedTurnInput> queuedInputs) =>
         GetOrCreateBroker(threadId).PublishThreadQueueUpdated(queuedInputs);
 
+    private ThreadMaintenanceRegistration RegisterThreadMaintenance(string threadId, string kind)
+    {
+        var state = new ThreadMaintenanceState(kind);
+        if (!_threadMaintenance.TryAdd(threadId, state))
+        {
+            state.Dispose();
+            throw new InvalidOperationException(
+                $"Thread '{threadId}' has active thread maintenance. Wait for it to complete or cancel it first.");
+        }
+
+        ThreadRuntimeSignalForBroadcast?.Invoke(
+            threadId,
+            kind == "compacting"
+                ? SessionThreadRuntimeSignal.MaintenanceCompactingStarted
+                : SessionThreadRuntimeSignal.MaintenanceConsolidatingStarted);
+        return new ThreadMaintenanceRegistration(this, threadId, state);
+    }
+
+    internal void CompleteThreadMaintenance(string threadId, ThreadMaintenanceState state)
+    {
+        if (_threadMaintenance.TryGetValue(threadId, out var current) && ReferenceEquals(current, state))
+        {
+            _threadMaintenance.TryRemove(threadId, out _);
+            ThreadRuntimeSignalForBroadcast?.Invoke(threadId, SessionThreadRuntimeSignal.MaintenanceCompleted);
+        }
+
+        state.Dispose();
+    }
+
+    private void ThrowIfThreadMaintenanceActive(string threadId)
+    {
+        if (_threadMaintenance.TryGetValue(threadId, out var maintenance))
+        {
+            throw new InvalidOperationException(
+                $"Thread '{threadId}' has active thread maintenance ({maintenance.Kind}). Wait for it to complete or cancel it first.");
+        }
+    }
+
     private sealed class SemaphoreSlimReleaser(SemaphoreSlim semaphore) : IDisposable
     {
         public void Dispose() => semaphore.Release();
@@ -3154,6 +3293,8 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 if (queueIndex < 0)
                     return;
                 if (thread.Turns.Any(t => t.Status is TurnStatus.Running or TurnStatus.WaitingApproval))
+                    return;
+                if (_threadMaintenance.ContainsKey(threadId))
                     return;
 
                 queued = queue[queueIndex];
@@ -3639,7 +3780,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
         return false;
     }
 
-    private void TryScheduleMemoryConsolidation(
+    private bool TryScheduleMemoryConsolidation(
         string threadId,
         SessionThread thread,
         SessionTurn turn,
@@ -3648,12 +3789,15 @@ Choose the next concrete action that advances the goal. Before doing substantial
         SessionEventChannel eventChannel,
         Func<int> nextItemSequence)
     {
+        if (ThreadVisibility.IsInternal(thread))
+            return false;
+
         var consolidator = agentFactory.Consolidator;
         var memoryConfig = _appConfigMonitor?.Current.Memory
             ?? agentFactory.ToolProviderContext.Config.Memory;
 
         if (consolidator is null || !memoryConfig.AutoConsolidateEnabled)
-            return;
+            return false;
 
         var interval = Math.Max(1, memoryConfig.ConsolidateEveryNTurns);
         var count = _turnsSinceConsolidation.AddOrUpdate(
@@ -3662,11 +3806,21 @@ Choose the next concrete action that advances the goal. Before doing substantial
             static (_, previous) => previous + 1);
 
         if (count < interval)
-            return;
+            return false;
 
         var history = SnapshotSessionHistoryForConsolidation(session, thread);
         if (history.Count == 0)
-            return;
+            return false;
+
+        ThreadMaintenanceRegistration maintenance;
+        try
+        {
+            maintenance = RegisterThreadMaintenance(threadId, "consolidating");
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
 
         _turnsSinceConsolidation[threadId] = 0;
         eventChannel.EmitSystemEvent("consolidating");
@@ -3674,16 +3828,26 @@ Choose the next concrete action that advances the goal. Before doing substantial
         var broker = GetOrCreateBroker(threadId);
         _ = Task.Run(async () =>
         {
-            await RunMemoryConsolidationAsync(
-                threadId,
-                thread,
-                turn,
-                history,
-                requestSnapshot,
-                nextItemSequence,
-                broker,
-                CancellationToken.None);
+            try
+            {
+                await RunMemoryConsolidationAsync(
+                    threadId,
+                    thread,
+                    turn,
+                    history,
+                    requestSnapshot,
+                    nextItemSequence,
+                    broker,
+                    maintenance.Token);
+            }
+            finally
+            {
+                maintenance.Dispose();
+                await TryStartNextQueuedTurnAsync(threadId, CancellationToken.None);
+            }
         });
+
+        return true;
     }
 
     private async Task<ThreadMemoryConsolidationResult> RunMemoryConsolidationAsync(
@@ -3770,7 +3934,12 @@ Choose the next concrete action that advances the goal. Before doing substantial
         }
         catch (OperationCanceledException)
         {
-            throw;
+            broker.PublishSystemEvent("consolidationCancelled", message: "cancelled");
+            return new ThreadMemoryConsolidationResult
+            {
+                Outcome = "cancelled",
+                Message = "cancelled"
+            };
         }
         catch (Exception ex)
         {
@@ -4054,6 +4223,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
             Directory.CreateDirectory(craftPath);
 
             var scopedMemory = new MemoryStore(craftPath);
+            var scopedDreamStore = new DreamStore(craftPath);
             var scopedSkills = new SkillsLoader(craftPath);
 
             scopedContext = new ToolProviderContext
@@ -4065,6 +4235,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
                 WorkspacePath = config.WorkspaceOverride,
                 BotPath = craftPath,
                 MemoryStore = scopedMemory,
+                DreamStore = scopedDreamStore,
                 SkillsLoader = scopedSkills,
                 ContextPageManager = baseCtx.ContextPageManager,
                 ApprovalService = baseCtx.ApprovalService,
@@ -4227,6 +4398,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
             WorkspacePath = source.WorkspacePath,
             BotPath = source.BotPath,
             MemoryStore = source.MemoryStore,
+            DreamStore = source.DreamStore,
             SkillsLoader = source.SkillsLoader,
             ContextPageManager = source.ContextPageManager,
             ApprovalService = source.ApprovalService,
@@ -4271,6 +4443,7 @@ Choose the next concrete action that advances the goal. Before doing substantial
             WorkspacePath = source.WorkspacePath,
             BotPath = source.BotPath,
             MemoryStore = source.MemoryStore,
+            DreamStore = source.DreamStore,
             SkillsLoader = source.SkillsLoader,
             ContextPageManager = source.ContextPageManager,
             SkillMutationApplier = source.SkillMutationApplier,

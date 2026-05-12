@@ -213,8 +213,9 @@ Fields:
 - `Turns` (ordered list of Turn)
   - Append-only. Turns are never removed from a Thread.
 - `QueuedInputs` (ordered list of QueuedTurnInput)
-  - FIFO inputs submitted while a Turn is running. The queue is part of canonical thread state and is persisted in the rollout file.
-  - When a running Turn completes successfully, Session Core dequeues at most one queued input and starts it as the next Turn. Failed or cancelled Turns do not automatically consume queued inputs.
+  - FIFO inputs submitted while a Turn or thread maintenance operation is active. The queue is part of canonical thread state and is persisted in the rollout file.
+  - When a running Turn completes successfully and no thread maintenance is active, Session Core dequeues at most one queued input and starts it as the next Turn. Failed or cancelled Turns do not automatically consume queued inputs.
+  - When thread maintenance completes, skips, fails, or is cancelled, Session Core dequeues at most one queued input and starts it as the next Turn if the thread is otherwise idle.
 
 #### 4.1.1.1 QueuedTurnInput
 
@@ -310,6 +311,7 @@ Fields:
   - `ApprovalResponse` — User's approval decision (approved/rejected).
   - `Error` — An error occurred during the Turn.
   - `SystemNotice` — Persistent system-level marker in the conversation timeline (e.g. context compaction point). Emits `item/started` + `item/completed` back-to-back; no streaming phase.
+- Thread maintenance — A thread-level busy state for long-running maintenance outside the normal Turn stream, currently manual context compaction and memory consolidation. While active, new input is accepted only through the queued-input path and starts after the maintenance terminal event.
 - `Status` (enum: `Started`, `Streaming`, `Completed`)
   - `Started` — Item has been created, payload may be partial or empty.
   - `Streaming` — Item is receiving incremental updates (deltas). Valid for `AgentMessage`, `ReasoningContent`, runtime-projected `CommandExecution`, and AppServer-projected streamed `ToolCall` argument previews.
@@ -622,6 +624,7 @@ rather than part of the model conversation.
 **Invariants**:
 
 - At most one Turn may be `Running` or `WaitingApproval` on a Thread at any time.
+- At most one thread maintenance operation may be active on a Thread at any time.
 - A Thread may have Turns from different channels (cross-channel resume). Each Turn records which channel originated it.
 
 ### 5.2 Turn Lifecycle
@@ -648,7 +651,7 @@ rather than part of the model conversation.
 
 - `SubmitInput(threadId, content)` → `Running`
   - Session Core creates a new Turn, creates a `UserMessage` Item from the input, invokes the agent.
-  - Precondition: Thread status is `Active` and no other Turn is `Running` or `WaitingApproval`.
+  - Precondition: Thread status is `Active` and no other Turn is `Running` or `WaitingApproval`, and no thread maintenance is active.
 
 - `Running` → `WaitingApproval`
   - The agent's tool execution encounters a sensitive operation requiring user approval.
@@ -873,7 +876,8 @@ SessionEvent
       "kind": string,          // One of: "compactWarning", "compactError",
                                 //         "compacting", "compacted", "compactSkipped", "compactFailed",
                                 //         "consolidating", "consolidated", "consolidationSkipped",
-                                //         "consolidationFailed"
+                                //         "consolidationFailed", "compactCancelled",
+                                //         "consolidationCancelled"
       "message": string,       // Human-readable description (nullable)
       "percentLeft": double,   // Fraction of the effective context window still unused (nullable; 0.0-1.0)
       "tokenCount": long       // Current estimated prompt token usage (nullable)
@@ -891,19 +895,22 @@ SessionEvent
     | `compacting` | Auto-compaction is starting. `percentLeft`/`tokenCount` reflect the pre-compaction state. | Synchronous, before the `CompactionPipeline` runs. |
     | `compacted` | Compaction finished successfully. Token tracker has been reset and `percentLeft`/`tokenCount` reflect the post-compaction state. | Synchronous, immediately after the pipeline returns `Micro` or `Partial`. |
     | `compactSkipped` | Compaction was evaluated but not executed (e.g. below threshold, nothing new to summarize, circuit breaker tripped). | Synchronous, immediately after the pipeline returns `Skipped`. |
-    | `compactFailed` | Compaction attempted but failed (LLM error, cancellation). The circuit breaker may trip after several consecutive failures. | Synchronous, immediately after the pipeline returns `Failed`. |
+    | `compactFailed` | Compaction attempted but failed (LLM error). The circuit breaker may trip after several consecutive failures. | Synchronous, immediately after the pipeline returns `Failed`. |
+    | `compactCancelled` | Thread-scoped manual compaction was interrupted by the user. | Asynchronous/thread-scoped, when the maintenance cancellation token is signalled. |
     | `consolidating` | Memory consolidation is starting. Consolidation is driven by Session Core after every configured number of successful Turns, independent from compaction. | Reserved for asynchronous memory-maintenance notifications. |
     | `consolidated` | Memory consolidation completed successfully. MEMORY.md and HISTORY.md have been updated. | Reserved for asynchronous memory-maintenance notifications. |
     | `consolidationSkipped` | Memory consolidation completed without writing MEMORY.md or HISTORY.md (for example, no `save_memory` call or no valid changes). UIs should dismiss any active consolidation status and should not show a success marker. | Asynchronous, after the background consolidation task returns no changes. |
     | `consolidationFailed` | Memory consolidation failed (LLM error, provider error, or persistence failure). UIs should dismiss any active consolidation status. | Asynchronous, after the background consolidation task throws. |
+    | `consolidationCancelled` | Memory consolidation was interrupted by the user. UIs should dismiss any active consolidation status. | Asynchronous, after the maintenance cancellation token is signalled. |
 
   - **Emission rules**:
     - System events are emitted during the Turn's post-processing phase (after agent execution completes, before `turn/completed`), except when raised reactively (see below).
     - The threshold advisory events (`compactWarning`, `compactError`) carry `percentLeft` and `tokenCount` so UIs can render a "context almost full" warning bar without needing a separate usage request.
     - Auto-compaction events (`compacting`, `compacted`, `compactSkipped`, `compactFailed`) are synchronous within Step 5k and always fire in the order `compacting` → one terminal event (`compacted` / `compactSkipped` / `compactFailed`).
-    - Manual compaction uses `ISessionService.CompactThreadAsync(threadId)` and is exposed to AppServer clients as `thread/compact/start`. It is allowed only for Active, server-managed threads with existing history and no `Running` / `WaitingApproval` turn. It emits the same `compacting` → terminal `system/event` sequence through the thread event broker. It first tries partial compaction; if no older prefix exists, or the partial attempt cannot produce a summary, it falls back to full-history compaction. On success, Session Core saves the compacted agent session, updates context usage, and appends a persisted `SystemNotice` with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn.
+    - Manual compaction uses `ISessionService.CompactThreadAsync(threadId)` and is exposed to AppServer clients as `thread/compact/start`. It is allowed only for Active, server-managed threads with existing history and no `Running` / `WaitingApproval` turn or active thread maintenance. It registers thread maintenance with `maintenanceKind = "compacting"`, emits the same `compacting` → terminal `system/event` sequence through the thread event broker, and prevents new turns from starting until the terminal event. It first tries partial compaction; if no older prefix exists, or the partial attempt cannot produce a summary, it falls back to full-history compaction. On success, Session Core saves the compacted agent session, updates context usage, and appends a persisted `SystemNotice` with `kind = "compacted"` and `trigger = "manual"` to the latest completed turn. On cancellation it emits `compactCancelled` and does not append a notice.
     - The pipeline may also be invoked **reactively** from the Turn's error path when the model rejects a request with `prompt_too_long` / `context_length_exceeded`. In that case the Turn still fails, but `compacting` followed by `compacted` / `compactFailed` is emitted first so UIs know the history was repaired before the user retries.
-    - Memory consolidation is a fire-and-forget maintenance task scheduled by Session Core after a configured number of successful Turns and after the baseline thread/session persistence attempt for that Turn has finished. It is not spawned by the compaction pipeline, and Turn completion is **not** deferred for consolidation. Its start event (`consolidating`) is emitted through the turn-scoped `SessionEventChannel`; its terminal events (`consolidated` / `consolidationSkipped` / `consolidationFailed`) are emitted through the thread event broker with `turnId = null`. On `consolidated`, Session Core persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the completed Turn and broadcasts `item/started` + `item/completed` through the thread event broker. Manual consolidation uses `ISessionService.ConsolidateThreadMemoryAsync(threadId)` and is exposed to AppServer clients as `thread/memory/consolidate/start`. It is allowed only for Active, server-managed, idle threads with at least one completed Turn and non-empty model-visible history; it bypasses `Memory.AutoConsolidateEnabled`, emits thread-scoped `consolidating` → terminal `system/event`, awaits the maintenance result, and appends the same persistent notice on success. See [Memory Consolidation](memory-consolidation.md) for the design contract.
+    - Memory consolidation is a background maintenance task scheduled by Session Core after a configured number of successful Turns and after the baseline thread/session persistence attempt for that Turn has finished. It is not spawned by the compaction pipeline, and Turn completion is **not** deferred for consolidation. Its start event (`consolidating`) is emitted through the turn-scoped `SessionEventChannel`; its terminal events (`consolidated` / `consolidationSkipped` / `consolidationFailed` / `consolidationCancelled`) are emitted through the thread event broker with `turnId = null`. While consolidation is active, Session Core registers thread maintenance with `maintenanceKind = "consolidating"`; new input is queued and is not drained until the terminal event. On `consolidated`, Session Core persists a `SystemNotice` item with `kind = "memoryConsolidated"` into the completed Turn and broadcasts `item/started` + `item/completed` through the thread event broker. Manual consolidation uses `ISessionService.ConsolidateThreadMemoryAsync(threadId)` and is exposed to AppServer clients as `thread/memory/consolidate/start`. It is allowed only for Active, server-managed, idle threads with at least one completed Turn, no active thread maintenance, and non-empty model-visible history; it bypasses `Memory.AutoConsolidateEnabled`, emits thread-scoped `consolidating` → terminal `system/event`, awaits the maintenance result, and appends the same persistent notice on success. See [Memory Consolidation](memory-consolidation.md) for the design contract.
+    - `ISessionService.CancelThreadMaintenanceAsync(threadId)` interrupts active thread maintenance. AppServer exposes this as `thread/maintenance/interrupt`.
     - Turn-scoped system events are emitted through the turn-scoped `SessionEventChannel`, so they are guaranteed to arrive before `turn/completed`. Thread-scoped maintenance events may arrive later.
     - The `message` field carries a localized human-readable description suitable for display (on `compactSkipped` / `compactFailed` / `consolidationSkipped` / `consolidationFailed` it may contain a machine-readable reason, e.g. `circuit_breaker_tripped`, `no_summarizable_prefix`, `summary_unavailable`, `save_memory_not_called`).
   - **Adapters**: Adapters that display session maintenance status (e.g., CLI spinner for consolidation, status text for compaction) should consume `system/event` notifications. Adapters that do not need maintenance status may ignore this event type or opt out via `optOutNotificationMethods`.

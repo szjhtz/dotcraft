@@ -13,6 +13,10 @@ describe('SettingsView workspace core readers', () => {
         welcomeSuggestionsEnabled: null,
         skillsSelfLearningEnabled: null,
         memoryAutoConsolidateEnabled: null,
+        dreamsEnabled: null,
+        dreamsInterval: null,
+        dreamsThreadLookbackCount: null,
+        dreamsAutoApply: null,
         defaultApprovalPolicy: null
       },
       userDefaults: {
@@ -21,6 +25,10 @@ describe('SettingsView workspace core readers', () => {
         welcomeSuggestionsEnabled: null,
         skillsSelfLearningEnabled: null,
         memoryAutoConsolidateEnabled: null,
+        dreamsEnabled: null,
+        dreamsInterval: null,
+        dreamsThreadLookbackCount: null,
+        dreamsAutoApply: null,
         defaultApprovalPolicy: null
       }
     })
@@ -47,11 +55,19 @@ describe('SettingsView workspace core readers', () => {
       workspace: {
         skillsSelfLearningEnabled: true,
         memoryAutoConsolidateEnabled: false,
+        dreamsEnabled: false,
+        dreamsInterval: '1.00:00:00',
+        dreamsThreadLookbackCount: 50,
+        dreamsAutoApply: true,
         defaultApprovalPolicy: 'autoApprove'
       },
       userDefaults: {
         skillsSelfLearningEnabled: false,
         memoryAutoConsolidateEnabled: true,
+        dreamsEnabled: true,
+        dreamsInterval: '12:00:00',
+        dreamsThreadLookbackCount: 20,
+        dreamsAutoApply: false,
         defaultApprovalPolicy: 'default'
       }
     })
@@ -67,6 +83,10 @@ describe('SettingsView workspace core readers', () => {
         welcomeSuggestionsEnabled: null,
         skillsSelfLearningEnabled: true,
         memoryAutoConsolidateEnabled: false,
+        dreamsEnabled: false,
+        dreamsInterval: '24:00:00',
+        dreamsThreadLookbackCount: 50,
+        dreamsAutoApply: true,
         defaultApprovalPolicy: 'autoApprove'
       },
       userDefaults: {
@@ -75,6 +95,10 @@ describe('SettingsView workspace core readers', () => {
         welcomeSuggestionsEnabled: null,
         skillsSelfLearningEnabled: false,
         memoryAutoConsolidateEnabled: true,
+        dreamsEnabled: true,
+        dreamsInterval: '12:00:00',
+        dreamsThreadLookbackCount: 20,
+        dreamsAutoApply: false,
         defaultApprovalPolicy: 'default'
       }
     })

@@ -7,6 +7,7 @@
 | 目标 | 推荐文档 |
 |------|----------|
 | 下载 Desktop、初始化工作区、配置 API Key、第一次运行 | [快速开始](./getting-started.md) |
+| 了解 DotCraft 核心特色：项目记忆、Skills、Dreams、多协议和渠道集成 | [特色功能](./features.md) |
 | 使用图形化桌面客户端 | [Desktop 指南](./desktop_guide.md) |
 | 在终端里使用完整界面 | [TUI 指南](./tui_guide.md) |
 | 配置 API Key、模型、Endpoint 和工作区覆盖 | [配置指南](./config_guide.md) |

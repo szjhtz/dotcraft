@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, FileText, Pencil, Sparkle, Target, Terminal } from 'lucide-react'
+import { Bot, FileText, Image as ImageIcon, Pencil, Sparkle, Target, Terminal } from 'lucide-react'
 import { useLocale, useT } from '../../contexts/LocaleContext'
 import { translate } from '../../../shared/locales'
 import { useConversationStore } from '../../stores/conversationStore'
@@ -10,7 +10,7 @@ import { ImageLightbox } from './ImageLightbox'
 import { MessageCopyButton } from './MessageCopyButton'
 import { parseUserMessageSegments, segmentsFromNativeInputParts } from './parseUserMessageSegments'
 import type { ConversationItem, InputPart, UserMessageImageRef } from '../../types/conversation'
-import { openImagePathInViewer } from '../../utils/conversationDeepLink'
+import { openConversationLink, openImagePathInViewer } from '../../utils/conversationDeepLink'
 import { stripSystemReminderBlocks } from '../../utils/systemReminderText'
 import { ActionTooltip } from '../ui/ActionTooltip'
 
@@ -68,7 +68,7 @@ export function UserMessageBlock({
   const [hydratedImages, setHydratedImages] = useState<Array<{ url: string; absolutePath?: string }>>(
     (imageDataUrls ?? []).map((url) => ({ url }))
   )
-  const [failedImageCount, setFailedImageCount] = useState(0)
+  const [failedImages, setFailedImages] = useState<UserMessageImageRef[]>([])
   const workspacePath = useConversationStore((s) => s.workspacePath)
   const activeThreadId = useThreadStore((s) => s.activeThreadId)
   const hasImages = hydratedImages.length > 0
@@ -100,18 +100,18 @@ export function UserMessageBlock({
       if (Array.isArray(imageDataUrls) && imageDataUrls.length > 0) {
         if (cancelled) return
         setHydratedImages(imageDataUrls.map((url) => ({ url })))
-        setFailedImageCount(0)
+        setFailedImages([])
         return
       }
       if (!Array.isArray(images) || images.length === 0) {
         if (cancelled) return
         setHydratedImages([])
-        setFailedImageCount(0)
+        setFailedImages([])
         return
       }
 
       const loaded: Array<{ url: string; absolutePath?: string }> = []
-      let failed = 0
+      const failed: UserMessageImageRef[] = []
       for (const image of images) {
         const cached = imageDataUrlCache.get(image.path)
         if (cached) {
@@ -125,15 +125,15 @@ export function UserMessageBlock({
             imageDataUrlCache.set(image.path, dataUrl)
             loaded.push({ url: dataUrl, absolutePath: image.path })
           } else {
-            failed++
+            failed.push(image)
           }
         } catch {
-          failed++
+          failed.push(image)
         }
       }
       if (cancelled) return
       setHydratedImages(loaded)
-      setFailedImageCount(failed)
+      setFailedImages(failed)
     }
 
     void hydrateImages()
@@ -265,7 +265,7 @@ export function UserMessageBlock({
             </>
           ) : (
             <>
-          {hasImages && (
+          {(hasImages || failedImages.length > 0) && (
           <div
             style={{
               display: 'flex',
@@ -318,12 +318,48 @@ export function UserMessageBlock({
                 />
               </button>
             ))}
+            {failedImages.map((imageItem, idx) => {
+              const label = imageItem.fileName || basename(imageItem.path)
+              return (
+                <button
+                  key={`failed-image-${imageItem.path}-${idx}`}
+                  type="button"
+                  onClick={() => {
+                    if (!workspacePath || !activeThreadId) return
+                    void openImagePathInViewer({
+                      absolutePath: imageItem.path,
+                      workspacePath,
+                      threadId: activeThreadId,
+                      t
+                    })
+                  }}
+                  disabled={!workspacePath || !activeThreadId}
+                  aria-label={t('conversation.openImageAttachmentAria', { file: label })}
+                  title={imageItem.path}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    maxWidth: '180px',
+                    padding: '6px 8px',
+                    border: '1px solid var(--border-default)',
+                    borderRadius: '6px',
+                    background: 'var(--bg-secondary)',
+                    color: 'var(--text-secondary)',
+                    cursor: workspacePath && activeThreadId ? 'pointer' : 'default',
+                    font: 'inherit',
+                    fontSize: '12px',
+                    lineHeight: 1.2
+                  }}
+                >
+                  <ImageIcon size={14} strokeWidth={1.9} aria-hidden style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {label}
+                  </span>
+                </button>
+              )
+            })}
           </div>
-        )}
-        {!hasImages && failedImageCount > 0 && (
-          <span style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>
-            {failedImageCount === 1 ? 'Image unavailable' : `${failedImageCount} images unavailable`}
-          </span>
         )}
         {textSegments.length > 0 && (
           <span>
@@ -333,8 +369,10 @@ export function UserMessageBlock({
               ) : seg.type === 'fileRef' ? (
                 <FileRefChip
                   key={`f-${idx}-${seg.relativePath}`}
-                  relativePath={seg.relativePath}
+                  displayPath={seg.relativePath}
+                  targetPath={seg.targetPath ?? seg.relativePath}
                   workspacePath={workspacePath}
+                  activeThreadId={activeThreadId}
                 />
               ) : seg.type === 'commandRef' ? (
                 <CommandRefChip key={`c-${idx}-${seg.commandText}`} commandText={seg.commandText} />
@@ -521,22 +559,40 @@ function CommandRefChip({ commandText }: { commandText: string }): JSX.Element {
 }
 
 function FileRefChip({
-  relativePath,
-  workspacePath
+  displayPath,
+  targetPath,
+  workspacePath,
+  activeThreadId
 }: {
-  relativePath: string
+  displayPath: string
+  targetPath: string
   workspacePath: string
+  activeThreadId: string | null
 }): JSX.Element {
-  const fileName = relativePath.split(/[/\\]/).pop() ?? relativePath
-  const isAbsolutePath = /^[a-zA-Z]:[\\/]/.test(relativePath) || relativePath.startsWith('/') || relativePath.startsWith('\\\\')
+  const t = useT()
+  const fileName = displayPath.split(/[/\\]/).pop() ?? displayPath
+  const isAbsolutePath = /^[a-zA-Z]:[\\/]/.test(targetPath) || targetPath.startsWith('/') || targetPath.startsWith('\\\\')
   const title =
     workspacePath.length > 0 && !isAbsolutePath
-      ? `${workspacePath.replace(/[/\\]+$/, '')}/${relativePath.replace(/^[/\\]+/, '')}`
-      : relativePath
+      ? `${workspacePath.replace(/[/\\]+$/, '')}/${targetPath.replace(/^[/\\]+/, '')}`
+      : targetPath
+  const canOpen = workspacePath.length > 0 && !!activeThreadId
 
   return (
-    <span
+    <button
+      type="button"
       title={title}
+      aria-label={t('conversation.openFileRefAria', { file: fileName })}
+      disabled={!canOpen}
+      onClick={() => {
+        if (!canOpen || !activeThreadId) return
+        void openConversationLink({
+          target: targetPath,
+          workspacePath,
+          threadId: activeThreadId,
+          t
+        })
+      }}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -552,13 +608,19 @@ function FileRefChip({
           lineHeight: 1.25,
           whiteSpace: 'nowrap',
           userSelect: 'none',
-          maxWidth: 'var(--inline-reference-max-width)'
+          maxWidth: 'var(--inline-reference-max-width)',
+          cursor: canOpen ? 'pointer' : 'default',
+          font: 'inherit'
         }}
       >
       <FileText size={12} strokeWidth={2.1} aria-hidden />
       <span>{fileName}</span>
-    </span>
+    </button>
   )
+}
+
+function basename(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() ?? filePath
 }
 
 function TriggerSourcePill({

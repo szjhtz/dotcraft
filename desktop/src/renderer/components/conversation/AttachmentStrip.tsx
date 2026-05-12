@@ -2,7 +2,7 @@ import type { ComposerFileAttachment, ImageAttachment } from '../../types/conver
 import { useConversationStore } from '../../stores/conversationStore'
 import { useThreadStore } from '../../stores/threadStore'
 import { useT } from '../../contexts/LocaleContext'
-import { openImagePathInViewer } from '../../utils/conversationDeepLink'
+import { openConversationLink, openImagePathInViewer } from '../../utils/conversationDeepLink'
 import { ActionTooltip } from '../ui/ActionTooltip'
 
 interface AttachmentStripProps {
@@ -54,13 +54,7 @@ export function AttachmentStrip({
   const activeThreadId = useThreadStore((s) => s.activeThreadId)
   if (images.length === 0 && files.length === 0) return null
 
-  const normalizePath = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '')
-  const isWorkspaceBacked = (candidatePath: string): boolean => {
-    if (!workspacePath) return false
-    const workspaceNorm = normalizePath(workspacePath).toLowerCase()
-    const candidateNorm = normalizePath(candidatePath).toLowerCase()
-    return candidateNorm === workspaceNorm || candidateNorm.startsWith(`${workspaceNorm}/`)
-  }
+  const canOpenAttachment = workspacePath.length > 0 && !!activeThreadId
 
   return (
     <div
@@ -85,7 +79,7 @@ export function AttachmentStrip({
           <button
             type="button"
             onClick={() => {
-              if (!activeThreadId || !isWorkspaceBacked(img.tempPath)) return
+              if (!activeThreadId || !workspacePath) return
               void openImagePathInViewer({
                 absolutePath: img.tempPath,
                 workspacePath,
@@ -93,15 +87,16 @@ export function AttachmentStrip({
                 t
               })
             }}
-            disabled={!activeThreadId || !isWorkspaceBacked(img.tempPath)}
+            disabled={!canOpenAttachment}
+            aria-label={t('conversation.openImageAttachmentAria', { file: img.fileName })}
             style={{
               padding: 0,
               border: 'none',
               background: 'transparent',
               lineHeight: 0,
               borderRadius: '3px',
-              cursor: activeThreadId && isWorkspaceBacked(img.tempPath) ? 'pointer' : 'default',
-              opacity: activeThreadId && isWorkspaceBacked(img.tempPath) ? 1 : 0.9
+              cursor: canOpenAttachment ? 'pointer' : 'default',
+              opacity: canOpenAttachment ? 1 : 0.9
             }}
           >
             <img
@@ -150,19 +145,46 @@ export function AttachmentStrip({
           }}
           title={file.path}
         >
-          <span aria-hidden style={{ flexShrink: 0 }}>
-            📄
-          </span>
-          <span
+          <button
+            type="button"
+            onClick={() => {
+              if (!activeThreadId || !workspacePath) return
+              void openConversationLink({
+                target: file.path,
+                workspacePath,
+                threadId: activeThreadId,
+                t
+              })
+            }}
+            disabled={!canOpenAttachment}
+            aria-label={t('conversation.openFileRefAria', { file: file.fileName })}
             style={{
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: '150px'
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              minWidth: 0,
+              padding: 0,
+              border: 'none',
+              background: 'transparent',
+              color: 'inherit',
+              cursor: canOpenAttachment ? 'pointer' : 'default',
+              font: 'inherit'
             }}
           >
-            {file.fileName}
-          </span>
+            <span aria-hidden style={{ flexShrink: 0 }}>
+              📄
+            </span>
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '150px'
+              }}
+            >
+              {file.fileName}
+            </span>
+          </button>
           <ActionTooltip label={removeFileLabel} placement="top">
           <button
             type="button"

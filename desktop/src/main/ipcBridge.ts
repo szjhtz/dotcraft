@@ -33,7 +33,7 @@ import {
   readTextFile,
   listViewerFiles
 } from './viewerIpc'
-import { buildViewerUrl } from './viewerFileProtocol'
+import { authorizeViewerFile, buildViewerUrl } from './viewerFileProtocol'
 import { partitionForWorkspace, viewerBrowserManager } from './viewerBrowser'
 import { viewerTerminalManager } from './viewerTerminal'
 import { browserUseManager, type BrowserUseApprovalResponsePayload } from './browserUseManager'
@@ -370,6 +370,10 @@ interface WorkspaceCoreConfigSnapshot {
   welcomeSuggestionsEnabled: boolean | null
   skillsSelfLearningEnabled: boolean | null
   memoryAutoConsolidateEnabled: boolean | null
+  dreamsEnabled: boolean | null
+  dreamsInterval: string | null
+  dreamsThreadLookbackCount: number | null
+  dreamsAutoApply: boolean | null
   defaultApprovalPolicy: 'default' | 'autoApprove' | null
 }
 
@@ -399,6 +403,31 @@ function readNestedBoolean(
   return typeof raw === 'boolean' ? raw : null
 }
 
+function readNestedString(
+  record: Record<string, unknown>,
+  sectionKey: string,
+  fieldKey: string
+): string | null {
+  const section = getCaseInsensitiveRecordValue(record, sectionKey)
+  if (section == null || typeof section !== 'object' || Array.isArray(section)) {
+    return null
+  }
+  return normalizeOptionalStringValue(getCaseInsensitiveRecordValue(section as Record<string, unknown>, fieldKey))
+}
+
+function readNestedInteger(
+  record: Record<string, unknown>,
+  sectionKey: string,
+  fieldKey: string
+): number | null {
+  const section = getCaseInsensitiveRecordValue(record, sectionKey)
+  if (section == null || typeof section !== 'object' || Array.isArray(section)) {
+    return null
+  }
+  const raw = getCaseInsensitiveRecordValue(section as Record<string, unknown>, fieldKey)
+  return typeof raw === 'number' && Number.isInteger(raw) ? raw : null
+}
+
 function readSkillsSelfLearningEnabled(record: Record<string, unknown>): boolean | null {
   const skills = getCaseInsensitiveRecordValue(record, 'Skills')
   if (skills == null || typeof skills !== 'object' || Array.isArray(skills)) {
@@ -426,6 +455,10 @@ async function readCoreConfigSnapshot(configPath: string): Promise<WorkspaceCore
       welcomeSuggestionsEnabled: readNestedBoolean(parsed, 'WelcomeSuggestions', 'Enabled'),
       skillsSelfLearningEnabled: readSkillsSelfLearningEnabled(parsed),
       memoryAutoConsolidateEnabled: readNestedBoolean(parsed, 'Memory', 'AutoConsolidateEnabled'),
+      dreamsEnabled: readNestedBoolean(parsed, 'Dreams', 'Enabled'),
+      dreamsInterval: readNestedString(parsed, 'Dreams', 'Interval'),
+      dreamsThreadLookbackCount: readNestedInteger(parsed, 'Dreams', 'ThreadLookbackCount'),
+      dreamsAutoApply: readNestedBoolean(parsed, 'Dreams', 'AutoApply'),
       defaultApprovalPolicy: readDefaultApprovalPolicy(parsed)
     }
   } catch (error) {
@@ -437,6 +470,10 @@ async function readCoreConfigSnapshot(configPath: string): Promise<WorkspaceCore
         welcomeSuggestionsEnabled: null,
         skillsSelfLearningEnabled: null,
         memoryAutoConsolidateEnabled: null,
+        dreamsEnabled: null,
+        dreamsInterval: null,
+        dreamsThreadLookbackCount: null,
+        dreamsAutoApply: null,
         defaultApprovalPolicy: null
       }
     }
@@ -839,6 +876,10 @@ export function registerIpcHandlers(
             welcomeSuggestionsEnabled: null,
             skillsSelfLearningEnabled: null,
             memoryAutoConsolidateEnabled: null,
+            dreamsEnabled: null,
+            dreamsInterval: null,
+            dreamsThreadLookbackCount: null,
+            dreamsAutoApply: null,
             defaultApprovalPolicy: null
           },
           userDefaults: await readCoreConfigSnapshot(path.join(os.homedir(), '.craft', 'config.json'))
@@ -1290,6 +1331,17 @@ export function registerIpcHandlers(
         throw new Error(translate(mainLocale(callbacks), 'ipc.noWorkspaceOpen'))
       }
       return readTextFile(params.absolutePath, workspacePath, params.limitBytes)
+    }
+  )
+
+  handleSafe(
+    'workspace:viewer:authorize-file',
+    async (_event, params: { absolutePath: string }): Promise<{ absolutePath: string }> => {
+      if (!workspacePath) {
+        throw new Error(translate(mainLocale(callbacks), 'ipc.noWorkspaceOpen'))
+      }
+      const absolutePath = await authorizeViewerFile(params.absolutePath)
+      return { absolutePath }
     }
   )
 
@@ -1870,6 +1922,7 @@ export function unregisterIpcHandlers(): void {
   ipcMain.removeHandler('workspace:viewer:list-files')
   ipcMain.removeHandler('workspace:viewer:classify')
   ipcMain.removeHandler('workspace:viewer:read-text')
+  ipcMain.removeHandler('workspace:viewer:authorize-file')
   ipcMain.removeHandler('viewer:browser:create')
   ipcMain.removeHandler('viewer:browser:destroy')
   ipcMain.removeHandler('viewer:browser:navigate')

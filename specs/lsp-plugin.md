@@ -166,7 +166,7 @@ Compatibility read aliases are accepted for common LSP config examples:
 | `env` | `environmentVariables` |
 | `startupTimeout` | `startupTimeoutMs` |
 
-`startupTimeout` is interpreted as milliseconds for compatibility with OpenClaude-style plugin manifests. DotCraft-authored plugins should prefer `startupTimeoutMs`.
+`startupTimeout` is interpreted as milliseconds as a compatibility read alias for existing plugin examples. DotCraft-authored plugins should prefer `startupTimeoutMs`.
 
 ---
 
@@ -347,4 +347,4 @@ Tests are not required for purely presentational copy, but are required for mani
 1. Should DotCraft expose `lsp/list` and `lsp/status/list`, or keep LSP visible only through plugin details and general config schema?
 2. Should `Tools.Lsp.Enabled` remain default `false` after an LSP plugin install, or should built-in curated LSP plugins be allowed to request an enable prompt during install?
 3. Should plugin variables support string substitution in `workspaceFolder`, or stay limited to command, arguments, and environment variables?
-4. Should Desktop recommend LSP plugins based on file extensions and installed binaries, following OpenClaude's pattern, or should recommendation wait until there is a curated LSP plugin catalog?
+4. Should Desktop recommend LSP plugins based on file extensions and installed binaries, or should recommendation wait until there is a curated LSP plugin catalog?

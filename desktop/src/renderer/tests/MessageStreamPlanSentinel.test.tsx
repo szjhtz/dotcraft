@@ -309,10 +309,11 @@ describe('MessageStream plan-accept sentinel filtering', () => {
     fireEvent.click(buttons[0])
     const editTextarea = screen.getByRole('textbox', { name: 'Edit message text' })
     expect(editTextarea).toHaveValue('Retry this one')
-    expect(editTextarea.parentElement?.getAttribute('style')).toContain(
+    const editingMessageContainer = editTextarea.parentElement?.parentElement
+    expect(editingMessageContainer?.getAttribute('style')).toContain(
       'width: min(100%, var(--conversation-reading-width))'
     )
-    expect(editTextarea.parentElement?.getAttribute('style')).toContain(
+    expect(editingMessageContainer?.getAttribute('style')).toContain(
       'max-width: var(--conversation-reading-width)'
     )
     expect(screen.queryByText('Earlier message')).toBeInTheDocument()

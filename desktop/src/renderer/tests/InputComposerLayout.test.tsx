@@ -277,6 +277,46 @@ describe('InputComposer layout', () => {
     expect(screen.queryByRole('button', { name: 'Stop turn' })).toBeNull()
   })
 
+  it('queues Enter submissions while thread maintenance is active', async () => {
+    useConversationStore.setState({
+      turnStatus: 'idle',
+      activeTurnId: null,
+      maintenanceKind: 'consolidating'
+    })
+
+    renderComposer()
+
+    const textbox = screen.getByRole('textbox')
+    textbox.textContent = 'next while memory is consolidating'
+    fireEvent.input(textbox)
+    fireEvent.keyDown(textbox, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('turn/enqueue', expect.objectContaining({
+        threadId: 'thread-1'
+      }))
+    })
+    expect(appServerSendRequest).not.toHaveBeenCalledWith('turn/start', expect.anything())
+  })
+
+  it('uses maintenance interrupt for an empty busy composer without an active turn', async () => {
+    useConversationStore.setState({
+      turnStatus: 'idle',
+      activeTurnId: null,
+      maintenanceKind: 'consolidating'
+    })
+
+    renderComposer()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop turn' }))
+
+    await waitFor(() => {
+      expect(appServerSendRequest).toHaveBeenCalledWith('thread/maintenance/interrupt', {
+        threadId: 'thread-1'
+      })
+    })
+  })
+
   it('summarizes queued non-text inputs with localized labels', async () => {
     settingsGet.mockResolvedValue({ locale: 'zh-Hans' })
     useConversationStore.setState({

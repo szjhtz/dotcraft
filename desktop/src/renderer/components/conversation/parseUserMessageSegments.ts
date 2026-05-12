@@ -3,7 +3,7 @@ import { serializeSkillMarker } from './richInputSerialization'
 
 export type UserMessageSegment =
   | { type: 'text'; value: string }
-  | { type: 'fileRef'; relativePath: string }
+  | { type: 'fileRef'; relativePath: string; targetPath?: string }
   | { type: 'commandRef'; commandText: string }
   | { type: 'skillRef'; skillName: string }
 
@@ -117,7 +117,14 @@ export function segmentsFromNativeInputParts(parts: InputPart[]): UserMessageSeg
         break
       }
       case 'fileRef':
-        out.push({ type: 'fileRef', relativePath: part.displayPath ?? part.path })
+        {
+          const displayPath = part.displayPath ?? part.path
+          out.push({
+            type: 'fileRef',
+            relativePath: displayPath,
+            ...(displayPath !== part.path ? { targetPath: part.path } : {})
+          })
+        }
         break
       case 'commandRef':
         {

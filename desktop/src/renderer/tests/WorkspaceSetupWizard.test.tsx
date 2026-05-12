@@ -88,12 +88,11 @@ describe('WorkspaceSetupWizard', () => {
     })
 
     expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('gpt-4.1')
-    expect((screen.getByLabelText('Language') as HTMLSelectElement).value).toBe('English')
     expect(
       screen.getAllByText(
         'Inherited from your user settings. Editing this value only overrides this workspace.'
       ).length
-    ).toBe(3)
+    ).toBe(2)
     expect(
       screen.getByText('Leave this blank to keep using the API key from your user settings.')
     ).toBeInTheDocument()
@@ -147,7 +146,6 @@ describe('WorkspaceSetupWizard', () => {
     expect((screen.getByLabelText('API endpoint') as HTMLInputElement).value).toBe(
       'https://workspace-only.example/v1'
     )
-    expect((screen.getByLabelText('Language') as HTMLSelectElement).value).toBe('Chinese')
   })
 
   it('renders model dropdown when model list is available', async () => {
@@ -175,7 +173,7 @@ describe('WorkspaceSetupWizard', () => {
       expect(control.tagName).toBe('SELECT')
       return control
     })
-    expect((modelControl as HTMLSelectElement).value).toBe('gpt-4o-mini')
+    expect((modelControl as HTMLSelectElement).value).toBe('deepseek-chat')
     fireEvent.change(modelControl, { target: { value: 'gpt-4.1' } })
     expect((modelControl as HTMLSelectElement).value).toBe('gpt-4.1')
   })

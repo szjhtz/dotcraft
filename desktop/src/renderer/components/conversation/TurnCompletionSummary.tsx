@@ -146,9 +146,7 @@ export const TurnCompletionSummary = memo(function TurnCompletionSummary({ turnI
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <FilePathLink filePath={file.filePath} />
                 {file.isNewFile && (
-                  <span style={{ color: 'var(--text-dimmed)', marginLeft: '6px', fontSize: '11px' }}>
-                    {t('changesFile.newBadge')}
-                  </span>
+                  <NewFileDot label={t('diffViewer.newFile')} />
                 )}
               </span>
               <FileStats additions={file.additions} deletions={file.deletions} status={file.status} />
@@ -201,6 +199,27 @@ function FilePathLink({ filePath }: FilePathLinkProps): JSX.Element {
       {filePath}
     </button>
   )
+}
+
+function NewFileDot({ label }: { label: string }): JSX.Element {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      style={newFileDotStyle}
+    />
+  )
+}
+
+const newFileDotStyle: CSSProperties = {
+  display: 'inline-block',
+  width: '7px',
+  height: '7px',
+  marginLeft: '6px',
+  borderRadius: '999px',
+  background: 'var(--success)',
+  verticalAlign: 'middle'
 }
 
 interface FileStatsProps {

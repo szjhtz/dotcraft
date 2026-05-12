@@ -4,6 +4,8 @@
  *
  * Security contract:
  *  - A workspace must be selected; when cleared, all requests return 403.
+ *  - Workspace files are served by workspace boundary; external files require
+ *    an explicit per-file authorization from a renderer action.
  *  - The requested path must resolve to a regular file.
  *  - Path traversal through malformed URL payloads is rejected by path decoding.
  *
@@ -32,6 +34,7 @@ const VIEWER_HOST = 'workspace'
 let currentWorkspaceRoot = ''
 let defaultProtocolHandlerInstalled = false
 const installedSessionProtocols = new WeakSet<object>()
+const authorizedExternalFiles = new Set<string>()
 
 /**
  * Must be called before `app.whenReady()` to mark the scheme as privileged.
@@ -82,16 +85,18 @@ export async function handleViewerFileRequest(request: Request): Promise<Respons
     }
 
     const insideWorkspace = await isPathInsideWorkspace(absPath, root)
-    if (!insideWorkspace) {
+    const resolvedExternalPath = insideWorkspace ? null : await resolveAuthorizedExternalFile(absPath)
+    if (!insideWorkspace && !resolvedExternalPath) {
       return new Response(null, { status: 403 })
     }
 
-    const stat = await fs.stat(absPath)
+    const filePath = resolvedExternalPath ?? absPath
+    const stat = await fs.stat(filePath)
     if (!stat.isFile()) {
       return new Response(null, { status: 403 })
     }
 
-    return net.fetch(pathToFileURL(absPath).toString())
+    return net.fetch(pathToFileURL(filePath).toString())
   } catch {
     return new Response(null, { status: 500 })
   }
@@ -99,6 +104,7 @@ export async function handleViewerFileRequest(request: Request): Promise<Respons
 
 /** Update the allowed workspace root. Pass '' to deny all requests. */
 export function setViewerWorkspaceRoot(workspaceRoot: string): void {
+  authorizedExternalFiles.clear()
   currentWorkspaceRoot = workspaceRoot
 }
 
@@ -119,9 +125,36 @@ export async function isPathInsideWorkspace(targetPath: string, workspaceRoot: s
   }
 }
 
+export async function authorizeViewerFile(absolutePath: string): Promise<string> {
+  if (!path.isAbsolute(absolutePath)) {
+    throw new Error('Viewer authorization requires an absolute file path')
+  }
+  const resolved = await fs.realpath(path.resolve(absolutePath))
+  const stat = await fs.stat(resolved)
+  if (!stat.isFile()) {
+    throw new Error(`Not a file: ${absolutePath}`)
+  }
+  authorizedExternalFiles.add(resolved)
+  return resolved
+}
+
+export function clearAuthorizedViewerFiles(): void {
+  authorizedExternalFiles.clear()
+}
+
+async function resolveAuthorizedExternalFile(absolutePath: string): Promise<string | null> {
+  try {
+    const resolved = await fs.realpath(path.resolve(absolutePath))
+    return authorizedExternalFiles.has(resolved) ? resolved : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Builds a `dotcraft-viewer://` URL for the given absolute file path.
- * The absolute path must be workspace-scoped before calling this.
+ * The absolute path must be workspace-scoped or explicitly authorized before it
+ * is served by the protocol handler.
  */
 export function buildViewerUrl(absolutePath: string): string {
   const normalized = normalizeAbsolutePathForViewerUrl(absolutePath)

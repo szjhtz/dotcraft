@@ -9,6 +9,7 @@ using DotCraft.Context.Compaction;
 using DotCraft.Localization;
 using DotCraft.Lsp;
 using DotCraft.Mcp;
+using DotCraft.Dreams;
 using DotCraft.Protocol;
 using Microsoft.Extensions.AI;
 
@@ -104,6 +105,12 @@ public sealed class AppConfig
     /// </summary>
     [ConfigField(Ignore = true)]
     public MemoryConfig Memory { get; set; } = new();
+
+    /// <summary>
+    /// Background Dreams settings.
+    /// </summary>
+    [ConfigField(Ignore = true)]
+    public DreamsConfig Dreams { get; set; } = new();
 
     /// <summary>
     /// Model used for memory consolidation. When empty, uses <see cref="Model"/> (same as main agent).

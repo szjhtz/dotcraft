@@ -11,7 +11,8 @@ const zhSidebar: DefaultTheme.Sidebar = [
   {
     text: '开始使用',
     items: [
-      { text: '快速开始', link: '/getting-started' }
+      { text: '快速开始', link: '/getting-started' },
+      { text: '特色功能', link: '/features' }
     ]
   },
   {
@@ -105,7 +106,8 @@ const enSidebar: DefaultTheme.Sidebar = [
   {
     text: 'Get Started',
     items: [
-      { text: 'Getting Started', link: '/en/getting-started' }
+      { text: 'Getting Started', link: '/en/getting-started' },
+      { text: 'Features', link: '/en/features' }
     ]
   },
   {
@@ -196,7 +198,7 @@ const enSidebar: DefaultTheme.Sidebar = [
 ]
 
 const zhNav: DefaultTheme.NavItem[] = [
-  { text: '功能', link: '/#features' },
+  { text: '功能', link: '/features' },
   { text: '开始使用', link: '/getting-started' },
   { text: '文档索引', link: '/reference' },
   {
@@ -216,7 +218,7 @@ const zhNav: DefaultTheme.NavItem[] = [
 ]
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: 'Features', link: '/en/#features' },
+  { text: 'Features', link: '/en/features' },
   { text: 'Get Started', link: '/en/getting-started' },
   { text: 'Docs Index', link: '/en/reference' },
   {

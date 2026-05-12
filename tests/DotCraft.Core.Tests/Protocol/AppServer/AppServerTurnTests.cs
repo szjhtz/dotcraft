@@ -483,6 +483,24 @@ public sealed class AppServerTurnTests : IDisposable
     }
 
     [Fact]
+    public async Task ThreadMaintenanceInterrupt_CallsCancelThreadMaintenanceAsync()
+    {
+        var thread = await _h.Service.CreateThreadAsync(_h.Identity);
+
+        var msg = _h.BuildRequest(AppServerMethods.ThreadMaintenanceInterrupt, new
+        {
+            threadId = thread.Id
+        });
+        await _h.ExecuteRequestAsync(msg);
+
+        var doc = await _h.Transport.ReadNextSentAsync();
+        AppServerTestHarness.AssertIsSuccessResponse(doc);
+
+        Assert.Single(_h.Service.CancelledMaintenances);
+        Assert.Equal(thread.Id, _h.Service.CancelledMaintenances[0]);
+    }
+
+    [Fact]
     public async Task TurnEnqueue_ReturnsQueuedInputAndFullQueue()
     {
         var thread = await _h.Service.CreateThreadAsync(_h.Identity);

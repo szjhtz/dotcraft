@@ -14,6 +14,9 @@ internal static class HubNotificationClient
         string title,
         string? body,
         string severity,
+        string? threadId = null,
+        string? actionUrl = null,
+        bool? openDesktopOnClick = null,
         CancellationToken cancellationToken = default)
     {
         if (!ManagedAppServerEnvironment.IsManaged)
@@ -36,7 +39,10 @@ internal static class HubNotificationClient
                     title,
                     body,
                     severity,
-                    source = "appserver"
+                    source = "appserver",
+                    threadId,
+                    actionUrl,
+                    openDesktopOnClick
                 })
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);

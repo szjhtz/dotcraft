@@ -17,16 +17,19 @@ internal sealed class TestableSessionService : ISessionService, IThreadAgentRefr
     private readonly Dictionary<string, SessionThread> _cache = new();
     private readonly Dictionary<string, Queue<SessionEvent[]>> _submitQueue = new();
     private readonly List<(string threadId, string turnId)> _cancelledTurns = new();
+    private readonly List<string> _cancelledMaintenances = new();
     private readonly List<(string threadId, string turnId, string requestId, SessionApprovalDecision decision)> _resolvedApprovals = new();
     private readonly List<SessionEventType> _yieldedSubmitEventTypes = new();
 
     public IReadOnlyList<(string threadId, string turnId)> CancelledTurns => _cancelledTurns;
+    public IReadOnlyList<string> CancelledMaintenances => _cancelledMaintenances;
     public IReadOnlyList<(string threadId, string turnId, string requestId, SessionApprovalDecision decision)> ResolvedApprovals => _resolvedApprovals;
     public IReadOnlyList<SessionEventType> YieldedSubmitEventTypes => _yieldedSubmitEventTypes;
     public IReadOnlyList<AIContent> LastSubmittedContent { get; private set; } = [];
     public IReadOnlyList<ChatMessage>? LastSubmittedMessages { get; private set; }
     public CancellationToken LastSubmitCancellationToken { get; private set; }
     public Func<string, IList<AIContent>, ChatMessage[]?, IEnumerable<SessionEvent>>? SubmitInputHandler { get; set; }
+    public Func<SessionThread, CancellationToken, Task>? CreateThreadHandler { get; set; }
     public Func<string, CancellationToken, Task<ThreadMemoryConsolidationResult>>? ConsolidateThreadMemoryHandler { get; set; }
     public IReadOnlyList<string> RefreshedThreadAgents => _refreshedThreadAgents;
     private readonly List<string> _refreshedThreadAgents = new();
@@ -98,6 +101,9 @@ internal sealed class TestableSessionService : ISessionService, IThreadAgentRefr
             thread.ChannelContext = identity.ChannelContext;
             thread.Metadata["channelContext"] = identity.ChannelContext;
         }
+        if (CreateThreadHandler != null)
+            await CreateThreadHandler(thread, ct);
+
         _cache[thread.Id] = thread;
         await _store.SaveThreadAsync(thread, ct);
         ThreadCreatedForBroadcast?.Invoke(thread);
@@ -467,6 +473,12 @@ internal sealed class TestableSessionService : ISessionService, IThreadAgentRefr
     public Task CancelTurnAsync(string threadId, string turnId, CancellationToken ct = default)
     {
         _cancelledTurns.Add((threadId, turnId));
+        return Task.CompletedTask;
+    }
+
+    public Task CancelThreadMaintenanceAsync(string threadId, CancellationToken ct = default)
+    {
+        _cancelledMaintenances.Add(threadId);
         return Task.CompletedTask;
     }
 

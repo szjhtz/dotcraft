@@ -58,6 +58,8 @@ npx electron-builder --win   # or --mac / --linux
 
 **Image attachments** — Pasted/dropped images are saved under `.craft/attachments/images/` and user message metadata stores attachment path + MIME/name, so switching threads or restarting the app can rehydrate thumbnails from disk.
 
+**File viewer** — File chips and local file links in chat can open in the built-in viewer, including explicitly referenced files outside the workspace. External files are authorized one file at a time.
+
 **Detail panel** (`Ctrl+Shift+B`) — **Changes**: diffs for edits; revert/re-apply where supported. **Plan** / **Terminal** when available.
 
 **Git** — The app can **stage selected changed files and commit** with a message from the Changes flow (`window.api.git.commit`). It does **not** replace a full Git client (no clone, pull, or branch UI here).

@@ -400,6 +400,110 @@ body {
 .stat-value.warning { color: var(--warning); }
 .stat-value.info { color: var(--info); }
 
+.dreams-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.dreams-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dreams-run-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dreams-run-card.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.dreams-run-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dreams-run-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.dreams-run-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.dreams-detail-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 15px;
+}
+
+.dreams-detail-title {
+  font-size: 13px;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+
+.dreams-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.dreams-code {
+  max-height: 280px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dreams-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.dreams-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+@media (max-width: 980px) {
+  .dreams-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Session list */
 .session-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -1564,6 +1668,11 @@ body {
         <span>Sessions</span>
       </button>
 
+      <button type="button" class="nav-tab" data-panel="dreams" id="navTabDreams" disabled onclick="switchPanel('dreams')" title="Dreams endpoints are not available for this workspace.">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.6 4.5L18 9l-4.4 1.5L12 15l-1.6-4.5L6 9l4.4-1.5L12 3Z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"/><path d="M5 13l.8 2.2L8 16l-2.2.8L5 19l-.8-2.2L2 16l2.2-.8L5 13Z"/></svg>
+        <span>Dreams</span>
+      </button>
+
       <button type="button" class="nav-tab" data-panel="automations" id="navTabAutomations" disabled onclick="switchPanel('automations')" title="Automations requires Gateway with the Automations module enabled.">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
         <span>Automations</span>
@@ -1692,6 +1801,38 @@ body {
         </div>
       </div>
 
+      <!-- Dreams Panel -->
+      <div class="panel" id="panel-dreams">
+        <div class="panel-header">
+          <div class="panel-title">Dreams</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <button class="btn" onclick="refreshDreams()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Refresh
+            </button>
+            <button class="btn btn-accent" onclick="runDreamsNow()">
+              Run now
+            </button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="stats-grid" id="dreamsStats"></div>
+          <div class="dreams-grid">
+            <section>
+              <div class="dreams-detail-title">Run history</div>
+              <div id="dreamsRunList" class="dreams-run-list">
+                <div class="empty-state">No Dreams runs.</div>
+              </div>
+            </section>
+            <section id="dreamsRunDetail">
+              <div class="dreams-detail-card">
+                <div class="empty-state">Select a Dreams run to review.</div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
       <!-- Automations Panel (read-only; Gateway + Automations module) -->
       <div class="panel" id="panel-automations">
         <div class="panel-header">
@@ -1788,6 +1929,11 @@ const DASHBOARD_SETTINGS_CALLOUT_KEY = 'dotcraft.dashboard.settingsCalloutSeen';
 
 let automationsAvailable = false;
 let _automationsLastData = null;
+let dreamsAvailable = false;
+let dreamsStatus = null;
+let dreamsRuns = [];
+let selectedDreamRunId = null;
+let selectedDreamRunDetails = null;
 
 function iconSvg(name, size = 16, extra = '') {
   const icons = {
@@ -1885,6 +2031,10 @@ function switchPanel(panel) {
     showToast('Automations requires Gateway with the Automations module enabled.', 'info');
     return;
   }
+  if (panel === 'dreams' && !dreamsAvailable) {
+    showToast('Dreams endpoints are not available for this workspace.', 'info');
+    return;
+  }
   currentPanel = panel;
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panel));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + panel));
@@ -1895,6 +2045,7 @@ function switchPanel(panel) {
   else if (panel === 'token-usage') refreshTokenUsage();
   else if (panel === 'settings') refreshSettings();
   else if (panel === 'automations') refreshAutomations();
+  else if (panel === 'dreams') refreshDreams();
 }
 
 async function fetchJson(url) {
@@ -1906,6 +2057,15 @@ async function fetchJson(url) {
     console.error('Fetch error:', e);
     return null;
   }
+}
+
+async function postJson(url) {
+  const res = await fetch(API + url, { method: 'POST', credentials: 'same-origin' });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(body?.error || 'Request failed');
+  }
+  return body;
 }
 
 function formatNumber(n) {
@@ -4168,6 +4328,7 @@ function applySetupModeUi() {
   if (!settingsSetupMode) {
     navTabs.forEach(tab => tab.style.display = '');
     applyAutomationsNavState();
+    applyDreamsNavState();
     document.getElementById('statusText').textContent = 'Connected';
     document.getElementById('liveDot').style.display = '';
     return;
@@ -4221,6 +4382,254 @@ function checkAuthEnabled() {
 }
 
 // Automations (read-only dashboard; Gateway + Automations module)
+
+function dreamStatusLabel(run) {
+  const status = run?.status || 'unknown';
+  const review = run?.reviewStatus ? ` · ${run.reviewStatus}` : '';
+  const auto = run?.autoApplied ? ' · auto-applied' : '';
+  return `${status}${review}${auto}`;
+}
+
+function dreamBadgeClass(value) {
+  if (value === 'succeeded' || value === 'applied') return 'badge-success';
+  if (value === 'running' || value === 'pending') return 'badge-info';
+  if (value === 'failed' || value === 'discarded') return 'badge-warning';
+  if (value === 'canceled' || value === 'archived') return 'badge-accent';
+  return 'badge-info';
+}
+
+function lineDiffSummary(oldText, newText) {
+  const oldLines = String(oldText || '').split(/\r?\n/);
+  const newLines = String(newText || '').split(/\r?\n/);
+  const oldSet = new Set(oldLines.filter(Boolean));
+  const newSet = new Set(newLines.filter(Boolean));
+  let additions = 0;
+  let removals = 0;
+  for (const line of newSet) if (!oldSet.has(line)) additions++;
+  for (const line of oldSet) if (!newSet.has(line)) removals++;
+  return { additions, removals };
+}
+
+function renderLineDiff(oldText, newText) {
+  const oldLines = String(oldText || '').split(/\r?\n/);
+  const newLines = String(newText || '').split(/\r?\n/);
+  const max = Math.max(oldLines.length, newLines.length);
+  const rows = [];
+  for (let i = 0; i < max; i++) {
+    const oldLine = oldLines[i] ?? '';
+    const newLine = newLines[i] ?? '';
+    if (oldLine === newLine) {
+      rows.push(`<span style="display:block;color:var(--text-primary)"> ${escapeHtml(oldLine)}</span>`);
+    } else {
+      if (oldLine) rows.push(`<span style="display:block;color:var(--error)">-${escapeHtml(oldLine)}</span>`);
+      if (newLine) rows.push(`<span style="display:block;color:var(--success)">+${escapeHtml(newLine)}</span>`);
+    }
+  }
+  return rows.join('') || '<span style="color:var(--text-muted)">No index changes.</span>';
+}
+
+async function probeDreams() {
+  try {
+    const res = await fetch('/dashboard/api/dreams/status');
+    dreamsAvailable = res.ok;
+    if (res.ok) dreamsStatus = await res.json();
+  } catch {
+    dreamsAvailable = false;
+  }
+  applyDreamsNavState();
+}
+
+function applyDreamsNavState() {
+  const tab = document.getElementById('navTabDreams');
+  if (!tab) return;
+  tab.disabled = !dreamsAvailable;
+  tab.title = dreamsAvailable ? 'Review Dreams stores and runs.' : 'Dreams endpoints are not available for this workspace.';
+  if (!dreamsAvailable && currentPanel === 'dreams') switchPanel('dashboard');
+}
+
+function renderDreamsStats() {
+  const statsEl = document.getElementById('dreamsStats');
+  if (!statsEl) return;
+  const lastRun = dreamsStatus?.lastRun;
+  statsEl.innerHTML = `
+    <div class="stat-card"><div class="stat-label">Active Store</div><div class="stat-value accent" style="font-size:16px;word-break:break-all">${escapeHtml(dreamsStatus?.activeDreamStoreId || 'None')}</div></div>
+    <div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value warning">${formatNumber(dreamsStatus?.pendingCount || 0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Auto Apply</div><div class="stat-value ${dreamsStatus?.autoApply ? 'success' : ''}">${dreamsStatus?.autoApply ? 'On' : 'Off'}</div></div>
+    <div class="stat-card"><div class="stat-label">Last Run</div><div class="stat-value info" style="font-size:16px">${escapeHtml(dreamStatusLabel(lastRun))}</div></div>
+  `;
+}
+
+function renderDreamsRunList() {
+  const listEl = document.getElementById('dreamsRunList');
+  if (!listEl) return;
+  if (!dreamsRuns.length) {
+    listEl.innerHTML = '<div class="empty-state">No Dreams runs.</div>';
+    return;
+  }
+  listEl.innerHTML = dreamsRuns.map(run => {
+    const selected = run.id === selectedDreamRunId;
+    const runTime = run.endedAt || run.startedAt;
+    const statusBadge = `<span class="badge ${dreamBadgeClass(run.status)}">${escapeHtml(run.status)}</span>`;
+    const reviewBadge = run.reviewStatus ? `<span class="badge ${dreamBadgeClass(run.reviewStatus)}">${escapeHtml(run.reviewStatus)}</span>` : '';
+    const autoBadge = run.autoApplied ? '<span class="badge badge-success">auto</span>' : '';
+    return `
+      <article class="dreams-run-card ${selected ? 'active' : ''}">
+        <div class="dreams-run-header">
+          <button class="btn btn-compact" onclick="selectDreamRun('${encodeURIComponent(run.id)}')">Review</button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${statusBadge}${reviewBadge}${autoBadge}</div>
+        </div>
+        <div class="dreams-run-id">${escapeHtml(run.id)}</div>
+        <div class="dreams-run-meta">
+          ${runTime ? escapeHtml(new Date(runTime).toLocaleString()) : 'Unknown time'}<br>
+          ${formatNumber(run.processedThreadCount || 0)} threads${run.outputStoreId ? ` · ${escapeHtml(run.outputStoreId)}` : ''}
+        </div>
+      </article>`;
+  }).join('');
+}
+
+function renderDreamsRunDetail() {
+  const detailEl = document.getElementById('dreamsRunDetail');
+  if (!detailEl) return;
+  const data = selectedDreamRunDetails;
+  const run = data?.run || dreamsRuns.find(r => r.id === selectedDreamRunId);
+  if (!run) {
+    detailEl.innerHTML = '<div class="dreams-detail-card"><div class="empty-state">Select a Dreams run to review.</div></div>';
+    return;
+  }
+  const preview = data?.preview || null;
+  const activeIndex = preview?.activeIndexMarkdown || '';
+  const outputIndex = preview?.outputIndexMarkdown || '';
+  const diff = lineDiffSummary(activeIndex, outputIndex);
+  const canApply = run.status === 'succeeded' && run.reviewStatus !== 'discarded' && run.reviewStatus !== 'archived';
+  const canDiscard = run.reviewStatus === 'pending';
+  const canCancel = run.status === 'running';
+  const canArchive = run.status !== 'running' && run.reviewStatus !== 'archived';
+  const traceLink = run.threadId
+    ? `<button class="btn" onclick="openDreamTrace('${encodeURIComponent(run.threadId)}')">Open trace</button>`
+    : '';
+  detailEl.innerHTML = `
+    <div class="dreams-detail-card">
+      <div class="dreams-run-header" style="margin-bottom:12px">
+        <div>
+          <div class="dreams-detail-title">${escapeHtml(run.id)}</div>
+          <div class="dreams-run-meta">${escapeHtml(dreamStatusLabel(run))}${run.message ? ` · ${escapeHtml(run.message)}` : ''}</div>
+        </div>
+        <div class="dreams-actions">
+          ${traceLink}
+          ${canCancel ? `<button class="btn" onclick="dreamAction('${encodeURIComponent(run.id)}','cancel')">Cancel</button>` : ''}
+          ${canApply ? `<button class="btn btn-accent" onclick="dreamAction('${encodeURIComponent(run.id)}','apply')">${run.reviewStatus === 'pending' ? 'Apply pending' : 'Make active'}</button>` : ''}
+          ${canDiscard ? `<button class="btn" onclick="dreamAction('${encodeURIComponent(run.id)}','discard')">Discard</button>` : ''}
+          ${canArchive ? `<button class="btn" onclick="dreamAction('${encodeURIComponent(run.id)}','archive')">Archive</button>` : ''}
+        </div>
+      </div>
+      <div class="stats-grid" style="margin-bottom:12px">
+        <div class="stat-card"><div class="stat-label">Output Store</div><div class="stat-value accent" style="font-size:16px;word-break:break-all">${escapeHtml(run.outputStoreId || 'None')}</div></div>
+        <div class="stat-card"><div class="stat-label">Index Change</div><div class="stat-value success">+${diff.additions} / -${diff.removals}</div></div>
+        <div class="stat-card"><div class="stat-label">Evidence Reads</div><div class="stat-value info">${formatNumber(run.evidenceReadCount || 0)}</div></div>
+        <div class="stat-card"><div class="stat-label">Topic Files</div><div class="stat-value">${formatNumber(run.topicFilesWritten || 0)}</div></div>
+      </div>
+      ${run.errorType || run.message ? `<div class="message message-warning" style="margin-bottom:12px">${escapeHtml([run.errorType, run.message].filter(Boolean).join(': '))}</div>` : ''}
+      <details class="dreams-details" open>
+        <summary>Index diff</summary>
+        <pre class="dreams-code">${renderLineDiff(activeIndex, outputIndex)}</pre>
+      </details>
+      <details class="dreams-details">
+        <summary>Raw indexes</summary>
+        <div class="dreams-grid" style="margin-top:10px">
+          <div><div class="stat-label">Active index</div><pre class="dreams-code">${escapeHtml(activeIndex || 'No active index content.')}</pre></div>
+          <div><div class="stat-label">Output index</div><pre class="dreams-code">${escapeHtml(outputIndex || 'No output index content.')}</pre></div>
+        </div>
+      </details>
+      <details class="dreams-details">
+        <summary>Topics and manifest</summary>
+        <pre class="dreams-code">${escapeHtml([
+          `Active topics: ${(preview?.activeTopicPaths || []).join(', ') || 'none'}`,
+          `Output topics: ${(preview?.outputTopicPaths || []).join(', ') || 'none'}`,
+          `Input manifest path: ${run.inputManifestPath || 'none'}`,
+          '',
+          preview?.inputManifestMarkdown || ''
+        ].join('\n'))}</pre>
+      </details>
+    </div>`;
+}
+
+async function refreshDreams() {
+  if (!dreamsAvailable) return;
+  dreamsStatus = await fetchJson('/dreams/status');
+  const list = await fetchJson('/dreams/runs');
+  dreamsRuns = Array.isArray(list?.runs) ? list.runs : [];
+  if (selectedDreamRunId && !dreamsRuns.some(run => run.id === selectedDreamRunId)) {
+    selectedDreamRunId = null;
+    selectedDreamRunDetails = null;
+  }
+  if (!selectedDreamRunId && dreamsRuns.length) {
+    selectedDreamRunId = dreamsRuns.find(run => run.reviewStatus === 'pending')?.id || dreamsRuns[0].id;
+  }
+  renderDreamsStats();
+  renderDreamsRunList();
+  if (selectedDreamRunId) await loadDreamRun(selectedDreamRunId);
+  else renderDreamsRunDetail();
+}
+
+async function loadDreamRun(runId) {
+  const data = await fetchJson('/dreams/runs/' + encodeURIComponent(runId));
+  if (data) {
+    selectedDreamRunDetails = data;
+    selectedDreamRunId = data.run?.id || runId;
+  }
+  renderDreamsStats();
+  renderDreamsRunList();
+  renderDreamsRunDetail();
+}
+
+function selectDreamRun(encodedRunId) {
+  const runId = decodeURIComponent(encodedRunId);
+  selectedDreamRunId = runId;
+  history.replaceState(null, '', '#dreams/run/' + encodeURIComponent(runId));
+  loadDreamRun(runId);
+}
+
+async function runDreamsNow() {
+  if (!dreamsAvailable) return;
+  try {
+    await postJson('/dreams/run');
+    showToast('Dreams run requested.', 'success');
+    await refreshDreams();
+  } catch (error) {
+    showToast(error.message || 'Dreams run failed.', 'error');
+  }
+}
+
+async function dreamAction(encodedRunId, action) {
+  const runId = decodeURIComponent(encodedRunId);
+  try {
+    await postJson('/dreams/runs/' + encodeURIComponent(runId) + '/' + action);
+    showToast(`Dreams ${action} complete.`, 'success');
+    await refreshDreams();
+    await loadDreamRun(runId);
+  } catch (error) {
+    showToast(error.message || `Dreams ${action} failed.`, 'error');
+  }
+}
+
+function openDreamTrace(encodedThreadId) {
+  const threadId = decodeURIComponent(encodedThreadId);
+  openSession(threadId);
+}
+
+function handleDashboardHash() {
+  const hash = window.location.hash || '';
+  if (hash === '#dreams') {
+    switchPanel('dreams');
+    return;
+  }
+  const match = /^#dreams\/run\/(.+)$/.exec(hash);
+  if (match) {
+    selectedDreamRunId = decodeURIComponent(match[1]);
+    switchPanel('dreams');
+    loadDreamRun(selectedDreamRunId);
+  }
+}
 
 /** Enables or disables the Automations nav tab based on /orchestrators/automations/state (must run after applySetupModeUi resets tab display). */
 function applyAutomationsNavState() {
@@ -4385,10 +4794,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     refreshDashboard();
     connectSSE();
     checkAuthEnabled();
+    await probeDreams();
+    if (dreamsAvailable) {
+      handleDashboardHash();
+    }
     probeAutomations().then(() => { if (automationsAvailable) refreshAutomations(); });
   } else if (settingsData && !settingsHasApiKey) {
     switchPanel('settings');
   }
+  window.addEventListener('hashchange', handleDashboardHash);
   document.getElementById('autoScrollBtn').style.borderColor = 'var(--accent)';
   document.getElementById('autoScrollBtn').style.color = 'var(--accent-light)';
 });

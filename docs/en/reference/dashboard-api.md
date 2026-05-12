@@ -51,6 +51,27 @@ Requests an Automations state refresh.
 
 Returns the configuration schema used by the Dashboard Settings page.
 
+### `GET /dashboard/api/dreams/status`
+
+Returns current workspace Dreams config, run status, active store, and latest run.
+
+### `GET /dashboard/api/dreams/runs`
+
+Returns Dreams run records. Archived runs are omitted by default.
+
+### `GET /dashboard/api/dreams/runs/{runId}`
+
+Returns one Dreams run, active/output index preview, and topic paths for Dashboard review.
+
+### `POST /dashboard/api/dreams/run`
+
+Requests an immediate Dreams run.
+
+### `POST /dashboard/api/dreams/runs/{runId}/{action}`
+
+Runs a Dreams review action. `action` supports `apply`, `discard`, `archive`, and `cancel`.
+`apply` also makes any succeeded, non-discarded, non-archived run the active store.
+
 ### `DELETE /api/sessions/{sessionKey}`
 
 Deletes one Dashboard session record.

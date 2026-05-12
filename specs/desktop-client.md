@@ -2,9 +2,9 @@
 
 | Field | Value |
 |-------|-------|
-| **Version** | 0.3.3 |
+| **Version** | 0.3.4 |
 | **Status** | Living |
-| **Date** | 2026-05-08 |
+| **Date** | 2026-05-11 |
 | **Parent Spec** | [AppServer Protocol](appserver-protocol.md) |
 | **Related Specs** | [Plugin Architecture](plugin-architecture.md), [Goal Design](goal-design.md) |
 
@@ -176,7 +176,7 @@ This section defines how protocol messages affect user-visible behavior. It inte
 | `cron/stateChanged` | Automation status views refresh to reflect the current job state. |
 | `thread/goal/updated` | Goal-aware surfaces for the affected thread update from the server snapshot without forcing thread navigation. |
 | `thread/goal/cleared` | Goal-aware surfaces for the affected thread remove the current goal snapshot without forcing thread navigation. |
-| `workspace/configChanged` | Settings-adjacent surfaces re-fetch impacted regions (`skills`, `mcp`, `externalChannel`, workspace config fields, including welcome-suggestion personalization state) without requiring manual full-page refresh. |
+| `workspace/configChanged` | Settings-adjacent surfaces re-fetch impacted regions (`skills`, `mcp`, `externalChannel`, workspace config fields, including welcome-suggestion personalization state and Dreams memory settings) without requiring manual full-page refresh. |
 
 ### 4.6 General Rules
 
@@ -310,6 +310,8 @@ The slash reference surface includes Desktop-owned system actions above custom C
 - Plan mode is always shown with the label "Plan mode". Its hint reflects the current mode: "Enable Plan mode" in Agent mode and "Disable Plan mode" in Plan mode. Selecting it uses the same local mode toggle path as `Shift+Tab` and calls `thread/mode/set`.
 - Manual compaction is shown as "Compact" with the hint "Compact this session's context" only when `capabilities.manualCompaction = true`, the active thread has at least one turn, and no turn is running or waiting for approval. Selecting it calls `thread/compact/start` with the active `threadId` and a long maintenance timeout of 300 seconds.
 - Manual memory consolidation is shown as "Consolidate" / "整理" with the hint "Consolidate long-term memory" only when `capabilities.manualMemoryConsolidation = true`, the active thread has at least one turn, and no turn is running or waiting for approval. Selecting it calls `thread/memory/consolidate/start` with the active `threadId` and a long maintenance timeout of 300 seconds.
+- When `system/event` or `thread/runtimeChanged` reports active maintenance (`maintenanceKind = "compacting"` or `"consolidating"`), the composer uses the same busy interaction pattern as a running turn: sending a non-empty draft queues it with `turn/enqueue`, and the empty-draft stop control calls `thread/maintenance/interrupt`.
+- If a normal `turn/start` races with a maintenance transition and is rejected as busy, Desktop preserves the draft and retries through `turn/enqueue`.
 - If manual compaction returns `outcome = "skipped"` or `outcome = "failed"`, Desktop shows the returned message using the same compact status surface. Short histories should normally compact through the server's full-history fallback.
 - If manual memory consolidation returns `outcome = "skipped"` or `outcome = "failed"`, Desktop shows the returned message using the same transient status surface.
 - Selecting a system action from slash search clears the slash query from the composer instead of leaving `/` behind.
@@ -394,7 +396,12 @@ Required behavior:
 - `ApiKey` and `EndPoint` are proxy-aware fields. When the managed proxy is active, the fields are locked to proxy-managed values and are not directly editable.
 - The legacy shared footer Save/Cancel pattern is retired. Settings actions are group-scoped (for example Apply, Restart, or Apply & Restart) based on the tier semantics of that group.
 - Desktop exposes a workspace-level `Personalization` tab with an `Enable personalized welcome suggestions` toggle backed by workspace config rather than client-global preferences.
+- Desktop groups Personalization settings into Conversation, Learning, Memory, and Dreams cards when the corresponding capabilities are available. Empty groups are hidden.
 - Toggling personalized welcome suggestions applies immediately for the active workspace. On success, the client reacts to the resulting `workspace/configChanged` notification and updates the welcome surface without requiring manual refresh or app restart.
+- When `capabilities.dreams = true`, Desktop exposes Dreams under `Personalization` with controls for scheduled background memory organization, auto-update, frequency, recent-thread lookback, latest run status, a manual "Run now" action, and a "Manage Dreams" run-history entry.
+- Desktop hides Dreams controls when `capabilities.dreams` is absent or false. Entering the Personalization surface loads `dreams/status`; saving Dreams settings or receiving `workspace/configChanged` with the `memory` region refreshes the status.
+- Manual Dreams runs call `dreams/run`, disable the action while `running = true`, and poll `dreams/status` until the run completes or the client times out. Desktop shows concise succeeded, skipped, and failed states.
+- The Dreams management surface calls `dreams/list`, shows lightweight run history, and opens Dashboard review links at `dashboardUrl#dreams/run/<runId>`. It does not show raw markdown, index diffs, or final review decisions. Pending Dreams output is not presented as prompt-active memory until it is applied through Dashboard/API, unless `Dreams.AutoApply` was enabled before the successful run.
 - Edit-race policy is deterministic:
   - Tier A (live-apply) preserves local in-flight edits when the client receives an echo notification for the same logical change.
   - Tier C (process-restart staged edits) discards stale staged values with a user-visible notice when proxy activation invalidates those staged values.
@@ -573,6 +580,7 @@ This section defines the user-visible workflow for Desktop-managed TypeScript ch
 ### 10.1 Viewer Panel (Reserved)
 
 - Desktop reserves an auxiliary right-side **viewer panel** surface that coexists with the existing changes / plan / terminal tabs and lets users open native file viewers and embedded browser tabs without leaving the workspace.
+- Chat-local file references, including absolute local paths and `file://` links, may open in the viewer panel even when the file is outside the active workspace. External local files must be served only after a user-triggered exact-file authorization; authorizing one external file must not authorize its parent directory or sibling files.
 - The viewer panel must preserve the same principles this document applies to the rest of desktop behavior: protocol-driven where applicable, explicit status and recovery, and clear separation between workflow rules and visual implementation.
 
 ### 10.2 Browser Use Automation
