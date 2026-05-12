@@ -27,7 +27,9 @@ public sealed class AcpBridgeHandler(
     HookRunner? hookRunner = null,
     PlanStore? planStore = null,
     AcpLogger? logger = null,
-    AppServerProcess? appServerProcess = null)
+    AppServerProcess? appServerProcess = null,
+    int extForwardTimeoutSeconds = 120,
+    int permissionRequestTimeoutSeconds = 120)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -62,6 +64,8 @@ public sealed class AcpBridgeHandler(
     private readonly ConcurrentDictionary<string, string> _activeToolNames = new();
 
     private readonly AppServerProcess? _appServerProcess = appServerProcess;
+    private readonly TimeSpan _extForwardTimeout = TimeSpan.FromSeconds(extForwardTimeoutSeconds);
+    private readonly TimeSpan _permissionRequestTimeout = TimeSpan.FromSeconds(permissionRequestTimeoutSeconds);
 
     public const int ProtocolVersion = 1;
     internal const string DefaultModelValue = "__dotcraft_default__";
@@ -82,7 +86,7 @@ public sealed class AcpBridgeHandler(
                 logger?.LogError($"Error handling {request.Method}", ex);
                 AnsiConsole.MarkupLine($"[red][[ACP]] Error handling {Markup.Escape(request.Method)}: {Markup.Escape(ex.Message)}[/]");
                 if (!request.IsNotification)
-                    acpTransport.SendError(request.Id, -32603, ex.Message);
+                    await acpTransport.SendErrorAsync(request.Id, -32603, ex.Message);
             }
         }
     }
@@ -116,7 +120,7 @@ public sealed class AcpBridgeHandler(
                     catch (Exception ex)
                     {
                         logger?.LogError("Unhandled prompt exception", ex);
-                        acpTransport.SendError(request.Id, -32603, ex.Message);
+                        await acpTransport.SendErrorAsync(request.Id, -32603, ex.Message);
                     }
                 }, ct);
                 break;
@@ -131,7 +135,7 @@ public sealed class AcpBridgeHandler(
                 break;
             default:
                 if (!request.IsNotification)
-                    acpTransport.SendError(request.Id, -32601, $"Method not found: {request.Method}");
+                    await acpTransport.SendErrorAsync(request.Id, -32601, $"Method not found: {request.Method}");
                 break;
         }
     }
@@ -169,7 +173,7 @@ public sealed class AcpBridgeHandler(
 
             logger?.LogError("Wire initialize failed", ex);
             logger?.LogError(detail);
-            acpTransport.SendError(request.Id, -32603, detail);
+            await acpTransport.SendErrorAsync(request.Id, -32603, detail);
             return;
         }
 
@@ -203,7 +207,7 @@ public sealed class AcpBridgeHandler(
 
         _initialized = true;
         wire.ServerRequestHandler = OnWireServerRequestAsync;
-        acpTransport.SendResponse(request.Id, result);
+        await acpTransport.SendResponseAsync(request.Id, result);
 
         var caps = new List<string>();
         if (_clientCapabilities?.Fs?.ReadTextFile == true) caps.Add("fs.read");
@@ -234,7 +238,7 @@ public sealed class AcpBridgeHandler(
 
     private async Task HandleSessionNewAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var p = Deserialize<SessionNewParams>(request.Params);
         ThreadConfiguration? config = null;
@@ -263,25 +267,25 @@ public sealed class AcpBridgeHandler(
         if (hookRunner != null)
             await hookRunner.RunAsync(HookEvent.SessionStart, new HookInput { SessionId = threadId }, ct);
 
-        acpTransport.SendResponse(request.Id, new SessionNewResult
+        await acpTransport.SendResponseAsync(request.Id, new SessionNewResult
         {
             SessionId = threadId,
             ConfigOptions = await BuildConfigOptionsAsync(mode, model, ct)
         });
 
-        BroadcastSlashCommands(threadId);
+        await BroadcastSlashCommands(threadId);
         logger?.LogEvent($"Session created: {threadId}");
         AnsiConsole.MarkupLine($"[green][[ACP]][/] Session created: {Markup.Escape(threadId)}");
     }
 
     private async Task HandleSessionLoadAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var p = Deserialize<SessionLoadParams>(request.Params);
         if (p == null || string.IsNullOrWhiteSpace(p.SessionId))
         {
-            acpTransport.SendError(request.Id, -32602, "Invalid params");
+            await acpTransport.SendErrorAsync(request.Id, -32602, "Invalid params");
             return;
         }
 
@@ -314,14 +318,14 @@ public sealed class AcpBridgeHandler(
                 if (turn.Items == null) continue;
                 foreach (var item in turn.Items)
                 {
-                    ReplayItemAsAcpUpdate(sessionId, item);
+                    await ReplayItemAsAcpUpdate(sessionId, item);
                 }
             }
         }
 
         var loadedMode = thread?.Configuration?.Mode ?? "agent";
         var loadedModel = thread?.Configuration?.Model;
-        acpTransport.SendResponse(request.Id, new SessionLoadResult
+        await acpTransport.SendResponseAsync(request.Id, new SessionLoadResult
         {
             SessionId = sessionId,
             ConfigOptions = await BuildConfigOptionsAsync(loadedMode, loadedModel, ct)
@@ -330,12 +334,12 @@ public sealed class AcpBridgeHandler(
         if (hookRunner != null)
             await hookRunner.RunAsync(HookEvent.SessionStart, new HookInput { SessionId = sessionId }, ct);
 
-        BroadcastSlashCommands(sessionId);
+        await BroadcastSlashCommands(sessionId);
         logger?.LogEvent($"Session loaded: {sessionId}");
         AnsiConsole.MarkupLine($"[green][[ACP]][/] Session loaded: {Markup.Escape(sessionId)}");
     }
 
-    private void ReplayItemAsAcpUpdate(string sessionId, SessionWireItem item)
+    private async Task ReplayItemAsAcpUpdate(string sessionId, SessionWireItem item)
     {
         string? updateKind = null;
         if (item.Type == ItemType.UserMessage)
@@ -352,7 +356,7 @@ public sealed class AcpBridgeHandler(
         if (text == null)
             return;
 
-        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
@@ -409,7 +413,7 @@ public sealed class AcpBridgeHandler(
 
     private async Task HandleSessionListAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var listDoc = await wire.SendRequestAsync(AppServerMethods.ThreadList, new
         {
@@ -435,17 +439,17 @@ public sealed class AcpBridgeHandler(
             })
             .ToList();
 
-        acpTransport.SendResponse(request.Id, new SessionListResult { Sessions = sessions });
+        await acpTransport.SendResponseAsync(request.Id, new SessionListResult { Sessions = sessions });
     }
 
     private async Task HandleDotCraftSessionDeleteAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var p = Deserialize<SessionDeleteParams>(request.Params);
         if (p == null || string.IsNullOrWhiteSpace(p.SessionId))
         {
-            acpTransport.SendError(request.Id, -32602, "Invalid params");
+            await acpTransport.SendErrorAsync(request.Id, -32602, "Invalid params");
             return;
         }
 
@@ -458,17 +462,17 @@ public sealed class AcpBridgeHandler(
         _activeTurnIds.TryRemove(p.SessionId, out _);
 
         await wire.SendRequestAsync(AppServerMethods.ThreadArchive, new { threadId = p.SessionId }, ct: ct);
-        acpTransport.SendResponse(request.Id, new SessionDeleteResult());
+        await acpTransport.SendResponseAsync(request.Id, new SessionDeleteResult());
     }
 
     private async Task HandleSessionPromptAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var p = Deserialize<SessionPromptParams>(request.Params);
         if (p == null)
         {
-            acpTransport.SendError(request.Id, -32602, "Invalid params");
+            await acpTransport.SendErrorAsync(request.Id, -32602, "Invalid params");
             return;
         }
 
@@ -561,18 +565,21 @@ public sealed class AcpBridgeHandler(
                     turnCancelled = true;
                 }
 
-                MapWireNotificationToAcp(sessionId, method, @params);
+                await MapWireNotificationToAcp(sessionId, method, @params);
+                // Yield to let concurrent server requests (permission, ext/acp) acquire the write lock,
+                // preventing lock convoy during streaming bursts (see dotcraft-unity disconnection issue).
+                await Task.Yield();
             }
 
             if (turnFailed)
             {
-                acpTransport.SendError(request.Id, -32603, turnFailMessage ?? "Turn failed");
+                await acpTransport.SendErrorAsync(request.Id, -32603, turnFailMessage ?? "Turn failed");
                 return;
             }
 
             if (turnCancelled)
             {
-                acpTransport.SendResponse(request.Id, new SessionPromptResult { StopReason = AcpStopReason.Cancelled });
+                await acpTransport.SendResponseAsync(request.Id, new SessionPromptResult { StopReason = AcpStopReason.Cancelled });
                 return;
             }
 
@@ -580,22 +587,22 @@ public sealed class AcpBridgeHandler(
             {
                 var structuredPlan = await planStore.LoadStructuredPlanAsync(sessionId);
                 if (structuredPlan != null)
-                    SendPlanUpdate(sessionId, structuredPlan);
+                    await SendPlanUpdate(sessionId, structuredPlan);
             }
 
             logger?.LogEvent($"Prompt complete [session={sessionId}] stop=end_turn (AppServer wire)");
-            acpTransport.SendResponse(request.Id, new SessionPromptResult { StopReason = AcpStopReason.EndTurn });
+            await acpTransport.SendResponseAsync(request.Id, new SessionPromptResult { StopReason = AcpStopReason.EndTurn });
         }
         catch (OperationCanceledException)
         {
             logger?.LogEvent($"Prompt cancelled [session={sessionId}]");
-            acpTransport.SendResponse(request.Id, new SessionPromptResult { StopReason = AcpStopReason.Cancelled });
+            await acpTransport.SendResponseAsync(request.Id, new SessionPromptResult { StopReason = AcpStopReason.Cancelled });
         }
         catch (Exception ex)
         {
             logger?.LogError($"Prompt error [session={sessionId}]", ex);
             AnsiConsole.MarkupLine($"[red][[ACP]][/] Prompt error: {Markup.Escape(ex.Message)}");
-            acpTransport.SendError(request.Id, -32603, ex.Message);
+            await acpTransport.SendErrorAsync(request.Id, -32603, ex.Message);
         }
         finally
         {
@@ -749,7 +756,7 @@ public sealed class AcpBridgeHandler(
             {
                 var resultElement = await acpTransport.SendClientRequestAsync(
                     AcpMethods.RequestPermission, permParams,
-                    timeout: TimeSpan.FromSeconds(120), ct: ct);
+                    timeout: _permissionRequestTimeout, ct: ct);
                 var result = resultElement.Deserialize<RequestPermissionResult>(JsonOptions);
                 var decision = result?.Outcome?.OptionId switch
                 {
@@ -775,7 +782,8 @@ public sealed class AcpBridgeHandler(
             try
             {
                 var paramObj = ParamsForIdeExtForward(wireParams);
-                var el = await acpTransport.SendClientRequestAsync(ideMethod, paramObj, ct).ConfigureAwait(false);
+                var el = await acpTransport.SendClientRequestAsync(ideMethod, paramObj, ct,
+                    timeout: _extForwardTimeout).ConfigureAwait(false);
                 return JsonSerializer.Deserialize<object>(el.GetRawText(), JsonOptions) ?? new { };
             }
             catch
@@ -818,7 +826,7 @@ public sealed class AcpBridgeHandler(
         return string.Join('/', parts);
     }
 
-    private void MapWireNotificationToAcp(string sessionId, string method, JsonElement @params)
+    private async Task MapWireNotificationToAcp(string sessionId, string method, JsonElement @params)
     {
         switch (method)
         {
@@ -826,14 +834,14 @@ public sealed class AcpBridgeHandler(
             {
                 var delta = @params.TryGetProperty("delta", out var d) ? d.GetString() : null;
                 if (!string.IsNullOrEmpty(delta))
-                    SendMessageChunk(sessionId, delta);
+                    await SendMessageChunk(sessionId, delta);
                 break;
             }
             case AppServerMethods.ItemReasoningDelta:
             {
                 var delta = @params.TryGetProperty("delta", out var d) ? d.GetString() : null;
                 if (!string.IsNullOrEmpty(delta))
-                    SendThoughtChunk(sessionId, delta);
+                    await SendThoughtChunk(sessionId, delta);
                 break;
             }
             case AppServerMethods.ItemStarted:
@@ -874,7 +882,7 @@ public sealed class AcpBridgeHandler(
                 }
 
                 var filePaths = AcpToolKindMapper.ExtractFilePaths(toolName, argsDict);
-                acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+                await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
                 {
                     SessionId = sessionId,
                     Update = new AcpSessionUpdate
@@ -917,7 +925,7 @@ public sealed class AcpBridgeHandler(
                 }
                 var content = BuildToolResultContent(toolName, resultObj, success);
 
-                acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+                await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
                 {
                     SessionId = sessionId,
                     Update = new AcpSessionUpdate
@@ -962,7 +970,7 @@ public sealed class AcpBridgeHandler(
                     });
                 }
 
-                acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+                await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
                 {
                     SessionId = sessionId,
                     Update = new AcpSessionUpdate
@@ -976,19 +984,19 @@ public sealed class AcpBridgeHandler(
         }
     }
 
-    private void SendMessageChunk(string sessionId, string text)
+    private async Task SendMessageChunk(string sessionId, string text)
     {
-        SendContentChunk(sessionId, AcpUpdateKind.AgentMessageChunk, text);
+        await SendContentChunk(sessionId, AcpUpdateKind.AgentMessageChunk, text);
     }
 
-    private void SendThoughtChunk(string sessionId, string text)
+    private async Task SendThoughtChunk(string sessionId, string text)
     {
-        SendContentChunk(sessionId, AcpUpdateKind.AgentThoughtChunk, text);
+        await SendContentChunk(sessionId, AcpUpdateKind.AgentThoughtChunk, text);
     }
 
-    private void SendContentChunk(string sessionId, string updateKind, string text)
+    private async Task SendContentChunk(string sessionId, string updateKind, string text)
     {
-        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
@@ -999,7 +1007,7 @@ public sealed class AcpBridgeHandler(
         });
     }
 
-    private void SendPlanUpdate(string sessionId, StructuredPlan plan)
+    private async Task SendPlanUpdate(string sessionId, StructuredPlan plan)
     {
         var entries = plan.Todos.Select(t => new AcpPlanEntry
         {
@@ -1018,7 +1026,7 @@ public sealed class AcpBridgeHandler(
             }
         }).ToList();
 
-        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
@@ -1062,12 +1070,12 @@ public sealed class AcpBridgeHandler(
 
     private async Task HandleSessionModeAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var p = Deserialize<SessionModeParams>(request.Params);
         if (p == null)
         {
-            acpTransport.SendError(request.Id, -32602, "Invalid params");
+            await acpTransport.SendErrorAsync(request.Id, -32602, "Invalid params");
             return;
         }
 
@@ -1076,19 +1084,19 @@ public sealed class AcpBridgeHandler(
             ct: ct);
 
         var resolvedMode = modeName == "plan" ? AgentMode.Plan : AgentMode.Agent;
-        acpTransport.SendResponse(request.Id, new { mode = resolvedMode.ToString().ToLower() });
-        SendModeUpdate(p.SessionId, resolvedMode);
+        await acpTransport.SendResponseAsync(request.Id, new { mode = resolvedMode.ToString().ToLower() });
+        await SendModeUpdate(p.SessionId, resolvedMode);
         logger?.LogEvent($"Mode changed [session={p.SessionId}]: {modeName}");
     }
 
     private async Task HandleSessionSetConfigOptionAsync(JsonRpcRequest request, CancellationToken ct)
     {
-        if (!EnsureInitialized(request)) return;
+        if (!await EnsureInitialized(request)) return;
 
         var p = Deserialize<SessionSetConfigOptionParams>(request.Params);
         if (p == null)
         {
-            acpTransport.SendError(request.Id, -32602, "Invalid params");
+            await acpTransport.SendErrorAsync(request.Id, -32602, "Invalid params");
             return;
         }
 
@@ -1100,9 +1108,9 @@ public sealed class AcpBridgeHandler(
 
             var current = await ReadThreadConfigurationAsync(p.SessionId, includeTurns: false, ct);
             var updatedOptions = await BuildConfigOptionsAsync(modeName, current.Model, ct);
-            acpTransport.SendResponse(request.Id, new SessionSetConfigOptionResult { ConfigOptions = updatedOptions });
+            await acpTransport.SendResponseAsync(request.Id, new SessionSetConfigOptionResult { ConfigOptions = updatedOptions });
 
-            SendConfigOptionsUpdate(p.SessionId, updatedOptions);
+            await SendConfigOptionsUpdate(p.SessionId, updatedOptions);
             return;
         }
 
@@ -1113,13 +1121,13 @@ public sealed class AcpBridgeHandler(
             var modelOption = availableOptions.FirstOrDefault(o => IsModelConfigOption(o));
             if (modelOption == null)
             {
-                acpTransport.SendError(request.Id, -32602, "Model switching is unavailable for this session.");
+                await acpTransport.SendErrorAsync(request.Id, -32602, "Model switching is unavailable for this session.");
                 return;
             }
 
             if (modelOption.Options.All(o => !string.Equals(o.Value, p.Value, StringComparison.Ordinal)))
             {
-                acpTransport.SendError(request.Id, -32602, $"Unknown model option: {p.Value}");
+                await acpTransport.SendErrorAsync(request.Id, -32602, $"Unknown model option: {p.Value}");
                 return;
             }
 
@@ -1137,18 +1145,18 @@ public sealed class AcpBridgeHandler(
             ThrowIfWireError(updateDoc, "thread/config/update");
 
             var updatedOptions = await BuildConfigOptionsAsync(current.Mode, nextModel, ct);
-            acpTransport.SendResponse(request.Id, new SessionSetConfigOptionResult { ConfigOptions = updatedOptions });
-            SendConfigOptionsUpdate(p.SessionId, updatedOptions);
+            await acpTransport.SendResponseAsync(request.Id, new SessionSetConfigOptionResult { ConfigOptions = updatedOptions });
+            await SendConfigOptionsUpdate(p.SessionId, updatedOptions);
             logger?.LogEvent($"Model changed [session={p.SessionId}]: {nextModel ?? "Default"}");
             return;
         }
 
-        acpTransport.SendError(request.Id, -32602, $"Unknown configId: {p.ConfigId}");
+        await acpTransport.SendErrorAsync(request.Id, -32602, $"Unknown configId: {p.ConfigId}");
     }
 
-    private void SendModeUpdate(string sessionId, AgentMode mode)
+    private async Task SendModeUpdate(string sessionId, AgentMode mode)
     {
-        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
@@ -1159,7 +1167,7 @@ public sealed class AcpBridgeHandler(
         });
     }
 
-    private void BroadcastSlashCommands(string sessionId)
+    private async Task BroadcastSlashCommands(string sessionId)
     {
         if (customCommandLoader == null) return;
 
@@ -1173,7 +1181,7 @@ public sealed class AcpBridgeHandler(
 
         if (commands.Count == 0) return;
 
-        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
@@ -1282,9 +1290,9 @@ public sealed class AcpBridgeHandler(
         return configs;
     }
 
-    private void SendConfigOptionsUpdate(string sessionId, List<ConfigOption> configOptions)
+    private async Task SendConfigOptionsUpdate(string sessionId, List<ConfigOption> configOptions)
     {
-        acpTransport.SendNotification(AcpMethods.SessionUpdate, new SessionUpdateParams
+        await acpTransport.SendNotificationAsync(AcpMethods.SessionUpdate, new SessionUpdateParams
         {
             SessionId = sessionId,
             Update = new AcpSessionUpdate
@@ -1453,10 +1461,10 @@ public sealed class AcpBridgeHandler(
 
     private sealed record ThreadConfigurationState(string Mode, string? Model, JsonObject? Configuration);
 
-    private bool EnsureInitialized(JsonRpcRequest request)
+    private async Task<bool> EnsureInitialized(JsonRpcRequest request)
     {
         if (_initialized) return true;
-        acpTransport.SendError(request.Id, -32002, "Agent not initialized. Call 'initialize' first.");
+        await acpTransport.SendErrorAsync(request.Id, -32002, "Agent not initialized. Call 'initialize' first.");
         return false;
     }
 

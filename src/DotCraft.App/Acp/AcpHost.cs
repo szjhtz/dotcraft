@@ -31,6 +31,7 @@ public sealed class AcpHost(
 
         await using var transport = AcpTransport.CreateStdio();
         transport.Logger = acpLogger;
+        transport.WriteTimeout = TimeSpan.FromSeconds(acpConfig.WriteTimeoutSeconds);
         transport.StartReaderLoop();
 
         AppServerWireClient wire;
@@ -88,10 +89,22 @@ public sealed class AcpHost(
             hookRunner,
             planStore,
             acpLogger,
-            _appServerProcess);
+            _appServerProcess,
+            extForwardTimeoutSeconds: acpConfig.ExtForwardTimeoutSeconds,
+            permissionRequestTimeoutSeconds: acpConfig.PermissionRequestTimeoutSeconds);
+
+        // When the transport detects client disconnection via heartbeat failures,
+        // signal cancellation so the bridge exits and the client can reconnect.
+        using var disconnectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        transport.OnDisconnected += () =>
+        {
+            AnsiConsole.MarkupLine("[red][[ACP]][/] Transport disconnected (heartbeat failure). Shutting down bridge.");
+            acpLogger?.LogEvent("Transport disconnected via heartbeat; cancelling bridge");
+            try { disconnectCts.Cancel(); } catch { /* disposed */ }
+        };
 
         AnsiConsole.MarkupLine("[green][[ACP]][/] DotCraft ACP bridge ready (stdio → AppServer)");
-        await bridge.RunAsync(cancellationToken);
+        await bridge.RunAsync(disconnectCts.Token);
         AnsiConsole.MarkupLine("[grey][[ACP]][/] ACP bridge stopped");
     }
 
